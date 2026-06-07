@@ -1,6 +1,7 @@
 # ERD — Agent Platform canonical data model
 
-- **Date:** 2026-06-06 · **Author:** Enterprise Architect · **Issue:** SAU-175
+- **Date:** 2026-06-06 (rev 2026-06-08, SAU-200 Slice-1 review) · **Author:** Enterprise Architect · **Issue:** SAU-175
+- **Rev 2026-06-08:** back-ported the Slice-1 `voice_usage` metering table into the canonical model; documented `session.transcript` inline-vs-`transcript_uri` expand-contract; reconciled `session_event.type` vocabulary to the dot-notation used by the `RealtimeVoiceProvider` contract (ADR-003/005). No changes to compiled-table semantics.
 - **Source design:** `docs/SAU-171-brandstorm-architecture.md` §3–§6
 - **Governing ADRs:** [ADR-001](../adr/ADR-001-scenario-as-core-primitive.md) (Scenario primitive), [ADR-002](../adr/ADR-002-content-as-code.md) (MD source-of-truth → `content_source`), [ADR-004](../adr/ADR-004-coach-memory-model.md) (`coach_memory`, `consent_record`), [ADR-005](../adr/ADR-005-multimodal-tool-protocol.md) (`session_event`)
 
@@ -8,7 +9,8 @@
 
 - **`scenario` is the atom.** `coach` and `course` are compositions over it; they do **not** duplicate persona/voice/rubric ([ADR-001](../adr/ADR-001-scenario-as-core-primitive.md)).
 - **`course_scenario`** is the ordered join (Course → Scenarios); `position` gives the "Play All" sequence.
-- **`session`** is the runtime artifact; **`analysis`** (Analyst) and **History** are projections over it. History is a **read-model/view** over `session`, not a base table (so it is shown below as a view, not an entity).
+- **`session`** is the runtime artifact; **`analysis`** (Analyst) and **History** are projections over it. History is a **read-model/view** over `session`, not a base table (so it is shown below as a view, not an entity). Slice 1 stores the compiled transcript **inline** (`session.transcript` jsonb) since object storage isn't stood up yet; per expand-contract this moves to `transcript_uri` (object store) when the bucket lands — large transcripts must not stay in a hot table at scale.
+- **`voice_usage`** is the per-session metering fact (one row per `session`, UNIQUE). Records metered `voice_minutes` plus the **measured** token breakdown (input/output/cached × text/audio) reported by the realtime vendor (`response.done.usage`), with `model` for rate attribution. Slice 1 only **records** usage; cap **enforcement** lands in Slice 2. This is the table the CFO unit-economics gate (SAU-196) and CRO margin verdict (SAU-198) read from.
 - **`content_source`** tracks the MD source-of-truth + `content_hash`/git `revision` per compiled row ([ADR-002](../adr/ADR-002-content-as-code.md)); the DB row is downstream of the file.
 - **`coach_memory`** is per-`(coach,user)`; stores derived summaries/facts, not raw transcripts ([ADR-004](../adr/ADR-004-coach-memory-model.md)). `embedding` = pgvector. **RLS mandated** (see Tenancy note).
 - **`consent_record`** is the append-only record-of-consent for memory features ([ADR-004](../adr/ADR-004-coach-memory-model.md) §User controls); a revocation is a new row, never an update. Retained for *processing duration + 6 years*, outliving the memory it authorises.
@@ -36,6 +38,7 @@ erDiagram
 
     SESSION ||--o{ SESSION_EVENT : emits
     SESSION ||--o| ANALYSIS : "scored into"
+    SESSION ||--o| VOICE_USAGE : "metered into"
     SESSION |o--o| COACH_MEMORY : "summarized into"
 
     CONTENT_SOURCE |o--o| SCENARIO : compiles
@@ -97,7 +100,8 @@ erDiagram
         text status "active | completed | failed"
         timestamptz started_at
         timestamptz ended_at
-        text transcript_uri "object store"
+        jsonb transcript "inline compiled transcript (Slice 1; moves to transcript_uri when object storage lands — expand-contract)"
+        text transcript_uri "object store (archival; future)"
         text recording_uri "object store"
     }
 
@@ -105,8 +109,27 @@ erDiagram
         uuid id PK
         uuid session_id FK
         timestamptz ts
-        text type "audio|user_transcript|agent_transcript|tool.call|tool.result|ui.effect|... (ADR-005)"
+        text type "audio.output|user.transcript|agent.transcript|tool.call|tool.result|ui.effect|... (ADR-005; dot-notation per the RealtimeVoiceProvider contract)"
         jsonb payload
+    }
+
+    VOICE_USAGE {
+        uuid id PK
+        uuid session_id FK UK "one row per session"
+        uuid user_id FK "nullable until user table lands"
+        uuid scenario_id FK
+        text vendor "realtime adapter (ADR-003)"
+        text model "server-reported model id (rate attribution)"
+        bigint duration_ms
+        numeric voice_minutes "duration_ms / 60000 — metered minutes (cap enforcement: Slice 2)"
+        bigint input_text_tokens
+        bigint input_audio_tokens
+        bigint cached_text_tokens
+        bigint cached_audio_tokens
+        bigint output_text_tokens
+        bigint output_audio_tokens
+        bigint total_tokens
+        timestamptz created_at
     }
 
     ANALYSIS {
@@ -176,7 +199,7 @@ LEFT JOIN analysis a ON a.session_id = s.id;
 
 ## Index & integrity notes
 
-- **Hot indexes:** `session(user_id, started_at)` (History), `session(scenario_id)` (creator analytics), `session_event(session_id, ts)` (replay/Analyst), `analysis(session_id)` UNIQUE, `coach_memory(coach_id, user_id, created_at)` + ANN index on `coach_memory.embedding`, `course_scenario(course_id, position)` PK.
+- **Hot indexes:** `session(user_id, started_at)` (History), `session(scenario_id)` (creator analytics), `session_event(session_id, ts)` (replay/Analyst), `analysis(session_id)` UNIQUE, `voice_usage(session_id)` UNIQUE + `voice_usage(user_id, created_at)` (per-user metering rollup) + `voice_usage(scenario_id)` (creator cost analytics), `scenario(metadata)` GIN (Library metadata filter), `coach_memory(coach_id, user_id, created_at)` + ANN index on `coach_memory.embedding`, `course_scenario(course_id, position)` PK.
 - **FKs indexed** on every relationship column (SOUL red flag: missing FK indexes).
 - **Tenancy ([ADR-004](../adr/ADR-004-coach-memory-model.md), CISO-mandated):** `coach_memory` access scoped by `(coach_id, user_id)` at the app layer, with **Postgres RLS mandated** as the defense-in-depth backstop — request-scoped `SET LOCAL app.user_id = <uuid>`; policy `USING (user_id = current_setting('app.user_id')::uuid)`; user-facing queries run under a non-bypass role. Waiving RLS requires CISO+CTO sign-off plus compensating controls (single data-access module, CI gate, prod cross-tenant canary). RLS *should* extend to `session`/`session_event`/`analysis`.
 - **Consent provenance:** `consent_record` is append-only (revocation = new row); `consent_record(user_id, scope, created_at)` index for state reconstruction. Retained processing-duration + 6y, independent of memory erasure.
