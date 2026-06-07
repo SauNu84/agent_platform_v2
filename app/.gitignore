@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+dist/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# Secrets — provisioned out-of-band, NEVER committed
+.env
+.env.*
+!.env.example
+*.pem
+*credential*
+*secret*
+
+# Logs / OS cruft
+*.log
+.DS_Store
