@@ -1,0 +1,44 @@
+{
+  "wav": "coach-driver.wav",
+  "sampleRate": 24000,
+  "frameMs": 20,
+  "audioKind": "speech",
+  "turns": [
+    {
+      "index": 0,
+      "kind": "normal",
+      "userMs": 3235,
+      "transcript": "Hi Coach. I want to reflect on how my week went.",
+      "audioStartMs": 0,
+      "audioDurationMs": 3235
+    },
+    {
+      "index": 1,
+      "kind": "tool",
+      "userMs": 4745,
+      "transcript": "I realized I keep saying yes to meetings I should decline, and it is burning me out.",
+      "audioStartMs": 3835,
+      "audioDurationMs": 4745
+    },
+    {
+      "index": 2,
+      "kind": "bargein",
+      "userMs": 3866,
+      "transcript": "Can you walk me through how I might set a boundary next week step by step?",
+      "audioStartMs": 9180,
+      "audioDurationMs": 3866,
+      "bargeTranscript": "Actually — wait, let me rethink that.",
+      "bargeStartMs": 13046,
+      "bargeDurationMs": 2609,
+      "bargeInAfterMs": 500
+    },
+    {
+      "index": 3,
+      "kind": "normal",
+      "userMs": 2510,
+      "transcript": "What did I say I wanted to focus on earlier?",
+      "audioStartMs": 16255,
+      "audioDurationMs": 2510
+    }
+  ]
+}

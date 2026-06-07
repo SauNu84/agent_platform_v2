@@ -1,0 +1,436 @@
+{
+  "wav": "driver.wav",
+  "sampleRate": 24000,
+  "frameMs": 20,
+  "audioKind": "speech",
+  "turns": [
+    {
+      "index": 0,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 0,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 1,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 2887,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 2,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 5098,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 3,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 7024,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 4,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 9911,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 5,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 12122,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 6,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 14489,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 7,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 17376,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 19950,
+      "bargeDurationMs": 1755
+    },
+    {
+      "index": 8,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 22305,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 9,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 24231,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 10,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 27118,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 11,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 29485,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 12,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 31411,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 13,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 34298,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 14,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 36509,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 39083,
+      "bargeDurationMs": 1755
+    },
+    {
+      "index": 15,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 41438,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 16,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 43805,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 17,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 46016,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 18,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 47942,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 19,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 50829,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 20,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 53040,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 21,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 55407,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 57981,
+      "bargeDurationMs": 1755
+    },
+    {
+      "index": 22,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 60336,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 23,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 62547,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 24,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 64473,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 25,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 67360,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 26,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 69727,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 27,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 71653,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 28,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 74540,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 77114,
+      "bargeDurationMs": 1755
+    },
+    {
+      "index": 29,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 79469,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 30,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 81395,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 31,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 83762,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 32,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 85973,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 33,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 87899,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 34,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 90786,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 35,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 92997,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 95571,
+      "bargeDurationMs": 1755
+    },
+    {
+      "index": 36,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 97926,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 37,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 100813,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 38,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 103024,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 39,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 104950,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 40,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 107837,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 41,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 110204,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 42,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 112130,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 114704,
+      "bargeDurationMs": 1755
+    },
+    {
+      "index": 43,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 117059,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 44,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 119270,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 45,
+      "kind": "tool",
+      "userMs": 1767,
+      "transcript": "What is the price for the PRO plan?",
+      "audioStartMs": 121196,
+      "audioDurationMs": 1767
+    },
+    {
+      "index": 46,
+      "kind": "normal",
+      "userMs": 1611,
+      "transcript": "How long until we see value?",
+      "audioStartMs": 123563,
+      "audioDurationMs": 1611
+    },
+    {
+      "index": 47,
+      "kind": "normal",
+      "userMs": 1326,
+      "transcript": "Walk me through onboarding.",
+      "audioStartMs": 125774,
+      "audioDurationMs": 1326
+    },
+    {
+      "index": 48,
+      "kind": "normal",
+      "userMs": 2287,
+      "transcript": "Tell me how teams adopt your platform.",
+      "audioStartMs": 127700,
+      "audioDurationMs": 2287
+    },
+    {
+      "index": 49,
+      "kind": "bargein",
+      "userMs": 2574,
+      "bargeInAfterMs": 500,
+      "transcript": "How does onboarding usually work for new teams?",
+      "audioStartMs": 130587,
+      "audioDurationMs": 2574,
+      "bargeTranscript": "Wait — how much per seat?",
+      "bargeStartMs": 133161,
+      "bargeDurationMs": 1755
+    }
+  ]
+}

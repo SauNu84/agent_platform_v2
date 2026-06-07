@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Secrets / credentials — provisioned out-of-band, NEVER committed
+.env
+.env.*
+!.env.example
+*.pem
+*credential*
+*secret*
+
+# Build / run output
+out/
+dist/
+build/
+*.log
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Generated demo/audio fixtures (regenerated locally; real audio supplied out-of-band)
+**/fixtures/driver.wav
+**/coach/coach-driver.wav
+**/coach/.sessions/

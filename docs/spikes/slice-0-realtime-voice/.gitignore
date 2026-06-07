@@ -1,0 +1,11 @@
+node_modules/
+out/
+*.log
+# Vendor API keys (SAU-181) — provisioned out-of-band, NEVER committed.
+.env
+.env.*
+# Generated placeholder audio; real speech fixture is supplied out-of-band for live runs.
+fixtures/driver.wav
+# Coach foundation (SAU-194): generated synthetic demo audio + the memory stub's store.
+coach/coach-driver.wav
+coach/.sessions/

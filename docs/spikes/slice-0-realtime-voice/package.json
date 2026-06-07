@@ -1,0 +1,28 @@
+{
+  "name": "slice-0-realtime-voice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Slice-0 realtime-voice benchmark harness (ADR-003). Vendor-neutral bench behind one interface.",
+  "scripts": {
+    "fixture": "tsx fixtures/make-fixture.ts",
+    "fixture:speech": "tsx fixtures/make-fixture.ts --speech",
+    "bench": "tsx bench.ts",
+    "bench:mock": "tsx bench.ts --vendor mock --turns 50",
+    "coach:fixture": "tsx coach/make-coach-fixture.ts",
+    "coach": "tsx coach/run.ts --vendor openai --realtime",
+    "coach:mock": "tsx coach/run.ts --vendor mock",
+    "test": "tsx harness.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  },
+  "//runner": "Node >=22.6 can also run these directly via `node --experimental-strip-types <file>.ts` if tsx is unavailable. tsx is preferred because it resolves extensionless local imports.",
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "ws": "^8.21.0"
+  }
+}
