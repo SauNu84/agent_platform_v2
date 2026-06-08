@@ -8,6 +8,7 @@ import type { Store } from './store';
 import { PgStore } from './pg-store';
 import { MemoryStore } from './memory-store';
 import { loadSeedRecords } from './seed';
+import { loadCoachSeedRecords, loadCourseSeedRecords } from './seed-compositions';
 
 let singleton: Store | null = null;
 
@@ -24,8 +25,11 @@ export function getStore(): Store {
     console.warn('[db] DATABASE_URL not set — using non-durable in-memory store (dev/demo only).');
     const mem = new MemoryStore();
     // Seed from content-as-code so the Library has data with zero infra.
+    // Order matters: scenarios → coaches → courses (compositions resolve refs forward).
     try {
       mem.seedSync(loadSeedRecords());
+      mem.seedCoachesSync(loadCoachSeedRecords());
+      mem.seedCoursesSync(loadCourseSeedRecords());
     } catch (e) {
       console.warn('[db] dev seed skipped:', (e as Error).message);
     }

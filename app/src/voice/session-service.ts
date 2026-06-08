@@ -98,6 +98,11 @@ export interface RunVoiceSessionOptions {
   scenario: ScenarioRecord;
   vendor: Vendor;
   userId?: string | null;
+  /** tag the session as coach-driven / in-course (Slice 3 compositions) */
+  coachId?: string | null;
+  courseId?: string | null;
+  /** override agent instructions (e.g. Coach memory injection); defaults to the scenario's */
+  instructions?: string;
   /** safety cap so a hung session can't block forever (default 30s) */
   maxMs?: number;
   /** optional driver to push mic audio into the session (used for the OpenAI path) */
@@ -116,10 +121,11 @@ export interface VoiceSessionResult {
  * Returns once the session ends (or `maxMs` elapses).
  */
 export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, userId = null, maxMs = 30000, drive } = opts;
+  const { store, scenario, vendor, userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
   const provider = await getProvider(vendor);
   const compiled = toCompiledScenario(scenario);
-  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor });
+  if (instructions) compiled.aiInstructions = instructions;
+  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
 
   const session = await provider.startSession(compiled);
   // Register no-op UI tool handlers so a tool call mid-session resolves + is logged.
@@ -175,10 +181,12 @@ export async function persistClientSession(opts: {
   scenario: ScenarioRecord;
   vendor: Vendor;
   userId?: string | null;
+  coachId?: string | null;
+  courseId?: string | null;
   transcript: Transcript;
 }): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, userId = null, transcript } = opts;
-  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor });
+  const { store, scenario, vendor, userId = null, coachId = null, courseId = null, transcript } = opts;
+  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
   const sessionTranscript = toSessionTranscript(transcript);
   // Persist transcript turns/tool-calls as events for the Sessions tab + Analyst.
   for (const turn of transcript.turns) {

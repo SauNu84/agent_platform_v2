@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '@/db/memory-store';
 import { compileScenarioContent } from '@/compiler/compile';
-import { compileCourseContent, validateCourseReferences, CourseCompileError } from '@/compiler/compile-course';
+import { compileCourseContent, validateCourseReferences, CourseCompileError } from '@/compiler/course-compile';
 import { toCompiledScenario } from '@/domain/scenario';
 import {
   Author, AuthoringBrief, AuthorOptions, GeneratedCourse, TemplateAuthor,
@@ -58,7 +58,7 @@ test('AC1: template author emits a course that compiles and produces working mem
   const draft = await generateCourseDraft({ ...BRIEF, scenarioCount: 3 }, { author: new TemplateAuthor() });
 
   assert.equal(draft.ok, true, draft.errors);
-  assert.equal(draft.course?.scenarioSlugs.length, 3);
+  assert.equal(draft.course?.scenarioRefs.length, 3);
   assert.equal(draft.scenarios.length, 3);
   // Course manifest compiles and every reference resolves to a generated member.
   const { record } = compileCourseContent(draft.courseMd);
@@ -66,7 +66,7 @@ test('AC1: template author emits a course that compiles and produces working mem
 
   const { course, scenarios } = await publishCourseDraft(store, draft, { approvedBy: 'coach@acme' });
   assert.equal(scenarios.length, 3);
-  assert.deepEqual(course.scenarioSlugs, scenarios.map((s) => s.slug));
+  assert.deepEqual(course.scenarioRefs, scenarios.map((s) => s.slug));
   // Each member is a real, retrievable scenario.
   for (const s of scenarios) {
     assert.equal(await getScenario(store, s.slug).then((x) => x?.id), s.id);

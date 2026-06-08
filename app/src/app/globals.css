@@ -108,3 +108,31 @@ th { color: var(--muted); font-weight: 500; }
 .analysis li { margin: 3px 0; }
 td.good { color: var(--good); font-weight: 600; }
 td.warn { color: #e0a23a; font-weight: 600; }
+/* ── Slice 3: Course + Coach compositions ── */
+.btn.small { padding: 5px 12px; font-size: 13px; }
+.btn.danger { background: #5e1f29; }
+.btn.danger:hover { background: #7a2735; }
+
+.card-section { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 8px; }
+
+/* Course player */
+.course-player { margin-top: 8px; }
+.progress { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.progress-bar { flex: 1; height: 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--good); transition: width 0.3s ease; }
+.progress-label { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.course-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+.course-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.course-item { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+.course-item.done { border-color: #1f5e3f; }
+.course-item .seq { color: var(--muted); width: 20px; }
+.course-item .status { color: var(--good); width: 16px; }
+.course-item .item-name { flex: 1; color: var(--text); font-weight: 500; }
+.course-item .item-name:hover { color: var(--accent); }
+
+/* Coach memory panel */
+.memory-panel .subtitle { font-size: 13px; }
+.consent-toggles { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.memory-actions { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
+.policy-version { color: var(--muted); font-size: 12px; margin-top: 12px; }

@@ -19,7 +19,7 @@
 import { compileScenarioContent, sha256, ScenarioCompileError } from '@/compiler/compile';
 import {
   compileCourseContent, validateCourseReferences, CourseCompileError,
-} from '@/compiler/compile-course';
+} from '@/compiler/course-compile';
 import type { CompiledScenarioRecord, ScenarioRecord } from '@/domain/scenario';
 import type { CompiledCourseRecord } from '@/domain/course';
 import type { Store } from '@/db/store';

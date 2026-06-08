@@ -10,12 +10,13 @@ export const metadata: Metadata = {
   description: 'Hyper-realistic AI roleplay to practice high-stakes conversations.',
 };
 
-// Fixed left nav from the verified reference UI (design §intro). Scenarios +
-// (Slice 2) Analytics & History are live; Course / Coach land in Slice 3.
+// Fixed left nav from the verified reference UI (design §intro). All sections
+// are live as of the Slice 1-4 integration (SAU-210): Scenarios (S1),
+// Courses + Coaches (S3), Analytics + History (S2).
 const NAV = [
   { href: '/library', label: 'Scenarios', live: true },
-  { href: '/course', label: 'Course', live: false },
-  { href: '/coach', label: 'Coach', live: false },
+  { href: '/courses', label: 'Course', live: true },
+  { href: '/coaches', label: 'Coach', live: true },
   { href: '/analytics', label: 'Analytics', live: true },
   { href: '/history', label: 'History', live: true },
 ];
