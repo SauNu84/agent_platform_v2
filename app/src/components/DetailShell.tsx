@@ -160,7 +160,11 @@ export default function DetailShell(props: DetailShellProps) {
         )}
 
         {tab === 'analytics' && (
-          <p className="empty">Rubric-scored analytics land in Slice 2 (Analyst). Sessions are already being captured and metered.</p>
+          <p className="empty">
+            Rubric-scored reports and per-creator KPIs are live. Analyze any session from{' '}
+            <a href="/history">History</a>, or see aggregate engagement in{' '}
+            <a href="/analytics">Creator Analytics</a>.
+          </p>
         )}
       </div>
     </div>

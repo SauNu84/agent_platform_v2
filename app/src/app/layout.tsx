@@ -1,23 +1,35 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
+import { getStore } from '@/db';
+import { getMeterState } from '@/services/meter';
+import { currentUserId } from '@/services/current-user';
 
 export const metadata: Metadata = {
   title: 'Agent Platform — Scenarios',
   description: 'Hyper-realistic AI roleplay to practice high-stakes conversations.',
 };
 
-// Fixed left nav from the verified reference UI (design §intro). Only Scenarios is
-// live in Slice 1; later slices fill in Course / Coach / Analytics / History.
+// Fixed left nav from the verified reference UI (design §intro). Scenarios +
+// (Slice 2) Analytics & History are live; Course / Coach land in Slice 3.
 const NAV = [
   { href: '/library', label: 'Scenarios', live: true },
   { href: '/course', label: 'Course', live: false },
   { href: '/coach', label: 'Coach', live: false },
-  { href: '/analytics', label: 'Analytics', live: false },
-  { href: '/history', label: 'History', live: false },
+  { href: '/analytics', label: 'Analytics', live: true },
+  { href: '/history', label: 'History', live: true },
 ];
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Live credit balance for the current user (Slice 2 meter). Fail-soft: a store
+  // hiccup must never break the chrome.
+  let balance = '—';
+  try {
+    const meter = await getMeterState(getStore(), currentUserId());
+    balance = `${meter.remainingMinutes.toFixed(1)} min left`;
+  } catch {
+    /* keep placeholder */
+  }
   return (
     <html lang="en">
       <body>
@@ -35,7 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </li>
               ))}
             </ul>
-            <div className="balance">Balance · —</div>
+            <div className="balance">Balance · {balance}</div>
           </nav>
           <main className="content">{children}</main>
         </div>

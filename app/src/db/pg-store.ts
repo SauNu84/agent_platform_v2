@@ -4,9 +4,11 @@
  */
 import { Pool } from 'pg';
 import type { CompiledScenarioRecord, RubricItem, ScenarioRecord } from '@/domain/scenario';
+import type { AnalysisRecord, Evaluation, Improvement } from '@/domain/analysis';
 import type { ToolDefinition } from '@/voice/realtime-interface';
 import type {
-  ContentSourceRecord, NewSession, ScenarioFilter, SessionEventRow, SessionRecord,
+  ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord, NewAnalysis, NewSession,
+  ScenarioFilter, SessionEventRow, SessionHistoryRow, SessionRecord,
   SessionTranscript, Store, VoiceUsageRecord,
 } from './store';
 
@@ -41,6 +43,27 @@ function rowToSession(r: Row): SessionRecord {
     startedAt: new Date(r.started_at).toISOString(),
     endedAt: r.ended_at ? new Date(r.ended_at).toISOString() : null,
     transcript: (r.transcript ?? null) as SessionTranscript | null,
+  };
+}
+
+function rowToAnalysis(r: Row): AnalysisRecord {
+  const reportCard = (r.report_card ?? []) as Evaluation['reportCard'];
+  const improvement = (r.improvement ?? {}) as Partial<Improvement>;
+  return {
+    sessionId: r.session_id,
+    scenarioId: r.scenario_id,
+    userId: r.user_id ?? null,
+    scorer: r.scorer,
+    overallScore: Number(r.overall_score),
+    evaluation: {
+      reportCard,
+      finalScore: Number(r.final_score),
+      strengths: (r.strengths ?? []) as string[],
+      weaknesses: (r.weaknesses ?? []) as string[],
+    },
+    improvement: { areas: improvement.areas ?? [], actionItems: improvement.actionItems ?? [] },
+    createdAt: new Date(r.created_at).toISOString(),
+    updatedAt: new Date(r.updated_at).toISOString(),
   };
 }
 
@@ -185,11 +208,15 @@ export class PgStore implements Store {
 
   async completeSession(
     sessionId: string,
-    update: { status: 'completed' | 'failed'; endedAt: number; transcript: SessionTranscript },
+    update: { status: 'completed' | 'failed'; startedAt?: number; endedAt: number; transcript: SessionTranscript },
   ): Promise<SessionRecord | null> {
+    // COALESCE keeps the existing started_at when the caller doesn't supply one.
     const { rows } = await this.pool.query(
-      `UPDATE session SET status = $2, ended_at = to_timestamp($3/1000.0), transcript = $4::jsonb WHERE id = $1 RETURNING *`,
-      [sessionId, update.status, update.endedAt, JSON.stringify(update.transcript)],
+      `UPDATE session SET status = $2,
+         started_at = COALESCE(to_timestamp($5/1000.0), started_at),
+         ended_at = to_timestamp($3/1000.0), transcript = $4::jsonb
+       WHERE id = $1 RETURNING *`,
+      [sessionId, update.status, update.endedAt, JSON.stringify(update.transcript), update.startedAt ?? null],
     );
     return rows[0] ? rowToSession(rows[0]) : null;
   }
@@ -234,5 +261,100 @@ export class PgStore implements Store {
       outputTextTokens: Number(r.output_text_tokens), outputAudioTokens: Number(r.output_audio_tokens),
       totalTokens: Number(r.total_tokens),
     };
+  }
+
+  // ── Slice 2: Analyst projection ───────────────────────────────────────────────
+  async upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord> {
+    const improvement = { areas: rec.improvement.areas, actionItems: rec.improvement.actionItems };
+    const { rows } = await this.pool.query(
+      `INSERT INTO analysis (session_id, scenario_id, user_id, scorer, overall_score, final_score,
+         report_card, strengths, weaknesses, improvement)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb)
+       ON CONFLICT (session_id) DO UPDATE SET
+         scenario_id = EXCLUDED.scenario_id, user_id = EXCLUDED.user_id, scorer = EXCLUDED.scorer,
+         overall_score = EXCLUDED.overall_score, final_score = EXCLUDED.final_score,
+         report_card = EXCLUDED.report_card, strengths = EXCLUDED.strengths,
+         weaknesses = EXCLUDED.weaknesses, improvement = EXCLUDED.improvement, updated_at = now()
+       RETURNING *`,
+      [rec.sessionId, rec.scenarioId, rec.userId, rec.scorer, rec.overallScore, rec.evaluation.finalScore,
+        JSON.stringify(rec.evaluation.reportCard), JSON.stringify(rec.evaluation.strengths),
+        JSON.stringify(rec.evaluation.weaknesses), JSON.stringify(improvement)],
+    );
+    return rowToAnalysis(rows[0]);
+  }
+
+  async getAnalysis(sessionId: string): Promise<AnalysisRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM analysis WHERE session_id = $1', [sessionId]);
+    return rows[0] ? rowToAnalysis(rows[0]) : null;
+  }
+
+  // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
+  async listSessionHistory(userId: string): Promise<SessionHistoryRow[]> {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM session_history WHERE user_id = $1 ORDER BY started_at DESC`,
+      [userId],
+    );
+    return rows.map((r: Row) => ({
+      sessionId: r.session_id,
+      scenarioId: r.scenario_id,
+      scenarioSlug: r.scenario_slug,
+      scenarioName: r.scenario_name,
+      startedAt: new Date(r.started_at).toISOString(),
+      endedAt: r.ended_at ? new Date(r.ended_at).toISOString() : null,
+      durationMs: r.duration_ms !== null ? Math.max(0, Math.round(Number(r.duration_ms))) : 0,
+      status: r.status,
+      analyzed: !!r.analyzed,
+      finalScore: r.final_score !== null && r.final_score !== undefined ? Number(r.final_score) : null,
+    }));
+  }
+
+  async getCreatorAnalytics(): Promise<CreatorAnalyticsRow[]> {
+    const { rows } = await this.pool.query(
+      `SELECT sc.id AS scenario_id, sc.slug, sc.name,
+              COUNT(s.id)::int AS sessions,
+              COALESCE(AVG(EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) * 1000), 0) AS avg_duration_ms,
+              COALESCE(SUM(vu.voice_minutes), 0) AS total_voice_minutes
+       FROM scenario sc
+       LEFT JOIN session s ON s.scenario_id = sc.id
+       LEFT JOIN voice_usage vu ON vu.session_id = s.id
+       GROUP BY sc.id, sc.slug, sc.name
+       ORDER BY sessions DESC`,
+    );
+    return rows.map((r: Row) => ({
+      scenarioId: r.scenario_id,
+      slug: r.slug,
+      name: r.name,
+      sessions: Number(r.sessions),
+      avgDurationMs: Math.round(Number(r.avg_duration_ms)),
+      totalVoiceMinutes: Number(Number(r.total_voice_minutes).toFixed(4)),
+    }));
+  }
+
+  // ── Slice 2: credit meter + entitlement ───────────────────────────────────────
+  async sumVoiceMinutesByUser(userId: string): Promise<number> {
+    const { rows } = await this.pool.query(
+      'SELECT COALESCE(SUM(voice_minutes), 0) AS total FROM voice_usage WHERE user_id = $1',
+      [userId],
+    );
+    return Number(Number(rows[0].total).toFixed(4));
+  }
+
+  async getEntitlement(userId: string): Promise<EntitlementRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM user_entitlement WHERE user_id = $1', [userId]);
+    if (!rows[0]) return null;
+    const r = rows[0];
+    return { userId: r.user_id, plan: r.plan, freeMinutes: Number(r.free_minutes), paidMinutes: Number(r.paid_minutes) };
+  }
+
+  async upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord> {
+    await this.pool.query(
+      `INSERT INTO user_entitlement (user_id, plan, free_minutes, paid_minutes)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (user_id) DO UPDATE SET
+         plan = EXCLUDED.plan, free_minutes = EXCLUDED.free_minutes,
+         paid_minutes = EXCLUDED.paid_minutes, updated_at = now()`,
+      [rec.userId, rec.plan, rec.freeMinutes, rec.paidMinutes],
+    );
+    return rec;
   }
 }

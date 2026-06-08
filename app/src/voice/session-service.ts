@@ -147,6 +147,7 @@ export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<Voi
   const sessionTranscript = toSessionTranscript(transcript);
   await store.completeSession(sessionRow.id, {
     status: 'completed',
+    startedAt: transcript.startedAt,
     endedAt: transcript.endedAt,
     transcript: sessionTranscript,
   });
@@ -186,7 +187,7 @@ export async function persistClientSession(opts: {
   for (const call of transcript.toolCalls) {
     await store.appendSessionEvent({ sessionId: sessionRow.id, ts: call.at, type: 'tool.call', payload: { name: call.name, args: call.args, result: call.result } });
   }
-  await store.completeSession(sessionRow.id, { status: 'completed', endedAt: transcript.endedAt, transcript: sessionTranscript });
+  await store.completeSession(sessionRow.id, { status: 'completed', startedAt: transcript.startedAt, endedAt: transcript.endedAt, transcript: sessionTranscript });
   const usage = usageToRecord({ sessionId: sessionRow.id, userId, scenarioId: scenario.id, vendor }, transcript);
   await store.recordVoiceUsage(usage);
   return { sessionId: sessionRow.id, transcript: sessionTranscript, usage, firstAudioMs: null };

@@ -7,6 +7,7 @@
  * Same pattern the realtime seam uses for vendors: one interface, swappable impls.
  */
 import type { CompiledScenarioRecord, RubricItem, ScenarioRecord } from '@/domain/scenario';
+import type { AnalysisRecord, Evaluation, Improvement } from '@/domain/analysis';
 import type { ToolDefinition, SessionUsage } from '@/voice/realtime-interface';
 
 export interface ContentSourceRecord {
@@ -70,6 +71,49 @@ export interface VoiceUsageRecord {
   totalTokens: number;
 }
 
+/** Input to upsertAnalysis — the record minus DB-assigned timestamps. */
+export interface NewAnalysis {
+  sessionId: string;
+  scenarioId: string;
+  userId: string | null;
+  scorer: string;
+  overallScore: number;
+  evaluation: Evaluation;
+  improvement: Improvement;
+}
+
+/** Per-user activity row (projection over session + analysis; ERD session_history). */
+export interface SessionHistoryRow {
+  sessionId: string;
+  scenarioId: string;
+  scenarioSlug: string;
+  scenarioName: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number;
+  status: 'active' | 'completed' | 'failed';
+  analyzed: boolean;
+  finalScore: number | null;
+}
+
+/** Per-scenario aggregate row for Creator Analytics. */
+export interface CreatorAnalyticsRow {
+  scenarioId: string;
+  slug: string;
+  name: string;
+  sessions: number;
+  avgDurationMs: number;
+  totalVoiceMinutes: number;
+}
+
+/** Per-user voice-minute entitlement (plan + caps). */
+export interface EntitlementRecord {
+  userId: string;
+  plan: 'free' | 'paid';
+  freeMinutes: number;
+  paidMinutes: number;
+}
+
 export interface Store {
   // ── Scenario CRUD ──────────────────────────────────────────────────────────
   listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]>;
@@ -91,7 +135,7 @@ export interface Store {
   appendSessionEvent(row: SessionEventRow): Promise<void>;
   completeSession(
     sessionId: string,
-    update: { status: 'completed' | 'failed'; endedAt: number; transcript: SessionTranscript },
+    update: { status: 'completed' | 'failed'; startedAt?: number; endedAt: number; transcript: SessionTranscript },
   ): Promise<SessionRecord | null>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessionsByScenario(scenarioId: string): Promise<SessionRecord[]>;
@@ -100,7 +144,21 @@ export interface Store {
   // ── Voice usage metering ──────────────────────────────────────────────────────
   recordVoiceUsage(usage: VoiceUsageRecord): Promise<void>;
   getVoiceUsage(sessionId: string): Promise<VoiceUsageRecord | null>;
+
+  // ── Slice 2: Analyst projection ───────────────────────────────────────────────
+  upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord>;
+  getAnalysis(sessionId: string): Promise<AnalysisRecord | null>;
+
+  // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
+  listSessionHistory(userId: string): Promise<SessionHistoryRow[]>;
+  getCreatorAnalytics(): Promise<CreatorAnalyticsRow[]>;
+
+  // ── Slice 2: credit meter + entitlement ───────────────────────────────────────
+  sumVoiceMinutesByUser(userId: string): Promise<number>;
+  getEntitlement(userId: string): Promise<EntitlementRecord | null>;
+  upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord>;
 }
 
 // Re-export commonly used domain types for store consumers.
 export type { ScenarioRecord, CompiledScenarioRecord, RubricItem, ToolDefinition, SessionUsage };
+export type { AnalysisRecord, Evaluation, Improvement };

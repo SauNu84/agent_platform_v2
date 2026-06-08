@@ -5,8 +5,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { CompiledScenarioRecord, ScenarioRecord } from '@/domain/scenario';
+import type { AnalysisRecord } from '@/domain/analysis';
 import type {
-  ContentSourceRecord, NewSession, ScenarioFilter, SessionEventRow, SessionRecord,
+  ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord, NewAnalysis, NewSession,
+  ScenarioFilter, SessionEventRow, SessionHistoryRow, SessionRecord,
   SessionTranscript, Store, VoiceUsageRecord,
 } from './store';
 
@@ -26,6 +28,8 @@ export class MemoryStore implements Store {
   private sessions = new Map<string, SessionRecord>();        // by id
   private events: SessionEventRow[] = [];
   private usage = new Map<string, VoiceUsageRecord>();        // by sessionId
+  private analyses = new Map<string, AnalysisRecord>();       // by sessionId
+  private entitlements = new Map<string, EntitlementRecord>(); // by userId
 
   async listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]> {
     let out = [...this.scenarios.values()];
@@ -137,11 +141,14 @@ export class MemoryStore implements Store {
 
   async completeSession(
     sessionId: string,
-    update: { status: 'completed' | 'failed'; endedAt: number; transcript: SessionTranscript },
+    update: { status: 'completed' | 'failed'; startedAt?: number; endedAt: number; transcript: SessionTranscript },
   ): Promise<SessionRecord | null> {
     const s = this.sessions.get(sessionId);
     if (!s) return null;
     s.status = update.status;
+    // Record the true session window: the client path posts a transcript whose
+    // startedAt predates the row's creation, so align started_at to it.
+    if (update.startedAt !== undefined) s.startedAt = new Date(update.startedAt).toISOString();
     s.endedAt = new Date(update.endedAt).toISOString();
     s.transcript = update.transcript;
     return s;
@@ -167,5 +174,84 @@ export class MemoryStore implements Store {
 
   async getVoiceUsage(sessionId: string): Promise<VoiceUsageRecord | null> {
     return this.usage.get(sessionId) ?? null;
+  }
+
+  // ── Slice 2: Analyst projection ───────────────────────────────────────────────
+  async upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord> {
+    const existing = this.analyses.get(rec.sessionId);
+    const ts = nowIso();
+    const full: AnalysisRecord = {
+      ...rec,
+      createdAt: existing?.createdAt ?? ts,
+      updatedAt: ts,
+    };
+    this.analyses.set(rec.sessionId, full);
+    return full;
+  }
+
+  async getAnalysis(sessionId: string): Promise<AnalysisRecord | null> {
+    return this.analyses.get(sessionId) ?? null;
+  }
+
+  // ── Slice 2: History + Creator analytics ──────────────────────────────────────
+  async listSessionHistory(userId: string): Promise<SessionHistoryRow[]> {
+    const rows: SessionHistoryRow[] = [];
+    for (const s of this.sessions.values()) {
+      if (s.userId !== userId) continue;
+      const scenario = this.scenarios.get(this.idToSlug.get(s.scenarioId) ?? '');
+      const analysis = this.analyses.get(s.id);
+      const durationMs = s.endedAt ? new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime() : 0;
+      rows.push({
+        sessionId: s.id,
+        scenarioId: s.scenarioId,
+        scenarioSlug: scenario?.slug ?? '',
+        scenarioName: scenario?.name ?? '(deleted scenario)',
+        startedAt: s.startedAt,
+        endedAt: s.endedAt,
+        durationMs: Math.max(0, durationMs),
+        status: s.status,
+        analyzed: !!analysis,
+        finalScore: analysis ? analysis.evaluation.finalScore : null,
+      });
+    }
+    return rows.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+  }
+
+  async getCreatorAnalytics(): Promise<CreatorAnalyticsRow[]> {
+    const rows: CreatorAnalyticsRow[] = [];
+    for (const scenario of this.scenarios.values()) {
+      const sessions = [...this.sessions.values()].filter((s) => s.scenarioId === scenario.id);
+      const durations = sessions.map((s) =>
+        s.endedAt ? Math.max(0, new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime()) : 0,
+      );
+      const voiceMinutes = sessions.reduce((sum, s) => sum + (this.usage.get(s.id)?.voiceMinutes ?? 0), 0);
+      rows.push({
+        scenarioId: scenario.id,
+        slug: scenario.slug,
+        name: scenario.name,
+        sessions: sessions.length,
+        avgDurationMs: sessions.length ? Math.round(durations.reduce((a, b) => a + b, 0) / sessions.length) : 0,
+        totalVoiceMinutes: Number(voiceMinutes.toFixed(4)),
+      });
+    }
+    return rows.sort((a, b) => b.sessions - a.sessions);
+  }
+
+  // ── Slice 2: credit meter + entitlement ───────────────────────────────────────
+  async sumVoiceMinutesByUser(userId: string): Promise<number> {
+    let sum = 0;
+    for (const u of this.usage.values()) {
+      if (u.userId === userId) sum += u.voiceMinutes;
+    }
+    return Number(sum.toFixed(4));
+  }
+
+  async getEntitlement(userId: string): Promise<EntitlementRecord | null> {
+    return this.entitlements.get(userId) ?? null;
+  }
+
+  async upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord> {
+    this.entitlements.set(rec.userId, rec);
+    return rec;
   }
 }
