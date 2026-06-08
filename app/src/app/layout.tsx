@@ -11,8 +11,8 @@ export const metadata: Metadata = {
 // live in Slice 1; later slices fill in Course / Coach / Analytics / History.
 const NAV = [
   { href: '/library', label: 'Scenarios', live: true },
-  { href: '/course', label: 'Course', live: false },
-  { href: '/coach', label: 'Coach', live: false },
+  { href: '/courses', label: 'Course', live: true },
+  { href: '/coaches', label: 'Coach', live: true },
   { href: '/analytics', label: 'Analytics', live: false },
   { href: '/history', label: 'History', live: false },
 ];
