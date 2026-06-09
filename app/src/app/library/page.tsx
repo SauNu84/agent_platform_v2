@@ -19,6 +19,19 @@ function facetValues(scenarios: ScenarioRecord[], key: string): string[] {
   return [...set].sort();
 }
 
+// Presentation-only: map a category/role facet to one of the visual-system
+// palette classes (Sales=orange, Productivity=blue, Training=green, Hiring=purple).
+// Known category names map directly; any other facet (PM, SWE, …) gets a stable
+// palette colour so every category badge reads as colour-coded.
+const CATEGORY_PALETTE = ['sales', 'productivity', 'training', 'hiring'] as const;
+function categoryClass(value: string): string {
+  const v = value.toLowerCase();
+  if ((CATEGORY_PALETTE as readonly string[]).includes(v)) return v;
+  let h = 0;
+  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) >>> 0;
+  return CATEGORY_PALETTE[h % CATEGORY_PALETTE.length];
+}
+
 export default async function LibraryPage({
   searchParams,
 }: {
@@ -69,7 +82,9 @@ export default async function LibraryPage({
               {s.description && <p>{s.description}</p>}
               <div className="badges">
                 <span className={`badge ${s.isPublic ? 'public' : ''}`}>{s.isPublic ? 'Public' : 'Private'}</span>
-                {typeof s.metadata.role === 'string' && <span className="badge">{s.metadata.role}</span>}
+                {typeof s.metadata.role === 'string' && (
+                  <span className={`badge ${categoryClass(s.metadata.role)}`}>{s.metadata.role}</span>
+                )}
                 {typeof s.metadata.difficulty === 'string' && <span className="badge">{s.metadata.difficulty}</span>}
               </div>
             </Link>
