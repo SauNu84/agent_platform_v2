@@ -38,9 +38,16 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     /* empty body is fine */
   }
 
-  // In dev (no live key configured) default to the deterministic mock so Join works.
+  // Vendor selection:
+  // - Server-driven path (no transcript body): always mock. Real OpenAI Realtime needs
+  //   browser audio (WebRTC mic → client-driven path, SAU-208). Server-side there is
+  //   no audio input, so a real adapter returns 0 turns even with a valid key.
+  // - Client-driven path (browser ran the session, posting transcript): use the
+  //   configured vendor since the browser already produced a real transcript.
   const configured = defaultVendor();
-  const vendor: Vendor = (body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock');
+  const vendor: Vendor = body.transcript
+    ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
+    : 'mock';
   const userId = body.userId ?? currentUserId(req);
 
   // Monetization guardrail (Slice 2): block Join when the user's voice-minute cap

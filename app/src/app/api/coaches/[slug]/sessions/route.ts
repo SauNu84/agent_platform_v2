@@ -38,7 +38,10 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   }
 
   const configured = defaultVendor();
-  const vendor: Vendor = (body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock');
+  // Server-driven path always uses mock — real OpenAI Realtime needs browser audio (SAU-208).
+  const vendor: Vendor = body.transcript
+    ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
+    : 'mock';
   const userId = body.userId ?? DEMO_USER_ID;
 
   try {
