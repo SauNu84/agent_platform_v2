@@ -245,3 +245,22 @@ td.warn { color: #d97706; font-weight: 600; }
 .toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .memory-actions { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
 .policy-version { color: var(--muted); font-size: 12px; margin-top: 12px; font-family: var(--mono); }
+
+/* ── Session chat view (/sessions/[id]) ── */
+.session-view { max-width: 720px; }
+.session-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.back-link { color: var(--accent-2); text-decoration: none; font-size: 14px; font-family: var(--mono); }
+.back-link:hover { text-decoration: underline; }
+.session-meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.session-title { margin: 0 0 4px; }
+.session-empty { margin-top: 32px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.conversation { display: flex; flex-direction: column; gap: 12px; margin: 24px 0 32px; }
+.turn-agent { align-self: flex-start; max-width: 85%; }
+.turn-user  { align-self: flex-end;   max-width: 85%; }
+.turn-role  { font-size: 11px; font-family: var(--mono); font-weight: 600; color: var(--muted); text-transform: uppercase; margin-bottom: 3px; }
+.turn-agent .turn-role { color: var(--accent-2); }
+.turn-text  { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 15px; line-height: 1.5; }
+.turn-user .turn-text   { background: var(--accent-soft); border-color: var(--accent); }
+.session-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
+.btn-ghost { color: var(--accent-2); text-decoration: none; font-size: 14px; font-family: var(--mono); }
+.btn-ghost:hover { text-decoration: underline; }

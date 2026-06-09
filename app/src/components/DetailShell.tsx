@@ -34,11 +34,15 @@ export interface DetailShellProps {
 
 type Tab = 'details' | 'sessions' | 'analytics';
 
+interface LiveSession { sessionId: string; turns: SessionSummary['turns']; startedAt: string; vendor: string; }
+
 export default function DetailShell(props: DetailShellProps) {
   const [tab, setTab] = useState<Tab>('details');
   const [sessions, setSessions] = useState<SessionSummary[]>(props.initialSessions);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // After join: show transcript inline so the board sees the interview/discussion result.
+  const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
 
   async function join() {
     setJoining(true);
@@ -51,20 +55,69 @@ export default function DetailShell(props: DetailShellProps) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
-      const summary: SessionSummary = {
+      const turns: SessionSummary['turns'] = data.transcript?.turns ?? [];
+      setLiveSession({
+        sessionId: data.sessionId,
+        turns,
+        startedAt: new Date().toISOString(),
+        vendor: data.usage?.vendor ?? 'mock',
+      });
+      setSessions((s) => [{
         id: data.sessionId,
         status: 'completed',
         startedAt: new Date().toISOString(),
         endedAt: new Date().toISOString(),
-        turns: data.transcript?.turns ?? [],
-      };
-      setSessions((s) => [summary, ...s]);
-      setTab('sessions');
+        turns,
+      }, ...s]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setJoining(false);
     }
+  }
+
+  // Show the inline conversation view after a session completes.
+  if (liveSession) {
+    return (
+      <div className="session-view">
+        <nav className="session-nav">
+          <button className="back-link" onClick={() => setLiveSession(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+            ← {props.name}
+          </button>
+          <span className="session-meta">
+            {new Date(liveSession.startedAt).toLocaleString()} · {liveSession.turns.length} turn{liveSession.turns.length === 1 ? '' : 's'}
+            {liveSession.vendor === 'mock' ? ' · mock mode' : ` · ${liveSession.vendor}`}
+          </span>
+        </nav>
+        <h1 className="session-title">{props.name}</h1>
+        <p className="subtitle">Practice session</p>
+        {liveSession.turns.length === 0 ? (
+          <div className="session-empty">
+            <p>Session ran but produced no transcript turns. Try again or check the voice adapter.</p>
+            <button className="btn" onClick={() => setLiveSession(null)}>Back to details</button>
+          </div>
+        ) : (
+          <div className="conversation">
+            {liveSession.turns.map((turn, i) => (
+              <div key={i} className={`turn turn-${turn.role}`}>
+                <div className="turn-role">{turn.role === 'agent' ? 'AI' : 'You'}</div>
+                <div className="turn-text">{turn.text}</div>
+              </div>
+
+            ))}
+          </div>
+        )}
+        <div className="session-actions">
+          <button className="btn" onClick={join} disabled={joining}>
+            {joining ? 'Connecting…' : 'Practice again'}
+          </button>
+          <button className="btn-ghost" onClick={() => { setLiveSession(null); setTab('sessions'); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+            View all sessions
+          </button>
+        </div>
+        {error && <div className="notice" role="alert">Join failed: {error}</div>}
+      </div>
+    );
   }
 
   return (
