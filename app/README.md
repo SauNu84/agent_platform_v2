@@ -29,13 +29,65 @@ links into Scenarios, Courses, Coaches, Analytics, and History.
 
 With no `DATABASE_URL`, the app uses a non-durable **in-memory store** seeded from
 `content/` (3 scenarios, 1 course, 1 coach) so every section has data with zero
-infra. For Postgres:
+infra.
+
+## Run it for real (Postgres + OpenAI)
+
+Two independent switches. Turn on either, both, or neither — the app degrades
+to mock/in-memory when a credential is absent, so partial setups still boot.
+
+### 1. Real Postgres (durable store)
+
+A `docker-compose.yml` ships a ready Postgres. It uses the **pgvector** image
+(not plain `postgres`) because migration 0003 needs the `vector` extension, and
+maps host port **5433** (not 5432) so it won't collide with any Postgres you
+already run locally. Run each line on its own:
 
 ```bash
-export DATABASE_URL=postgres://localhost:5432/agent_platform
-npm run migrate        # apply db/migrations/*.sql (expand-contract)
-npm run seed           # compile content/scenarios/*.md into the DB
+cd app
+docker compose up -d
+export DATABASE_URL=postgres://agent:agent@localhost:5433/agent_platform
+npm run migrate
+npm run seed
+npm run dev
 ```
+
+Now the app serves from Postgres. Sessions, transcripts, voice-usage, analysis,
+and coach memory persist across restarts. Verify the DB directly:
+
+```bash
+docker exec agent_platform_db psql -U agent -d agent_platform -c "select count(*) from scenario;"
+```
+
+Tear down (drops all data): `docker compose down -v`.
+
+> Already have Postgres? Skip compose and point `DATABASE_URL` at it — but it
+> must have the `vector` extension available (migration 0003 runs
+> `CREATE EXTENSION vector`).
+
+### 2. Real OpenAI voice
+
+Provision a key out-of-band (never commit it), then:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export REALTIME_VENDOR=openai
+npm run dev
+```
+
+`Join` now runs live OpenAI Realtime through the seam instead of the deterministic
+mock; `/api/realtime/token` mints the ephemeral browser secret (returns **501**
+when no key is set, which is the correct "not configured" signal). `OPENAI_REALTIME_MODEL`
+(default `gpt-realtime`) and `OPENAI_VOICE` (default `alloy`) are optional overrides.
+
+> **Scope note (governance):** this is an *internal / local* smoke with your own
+> key — the same posture as the Slice-0 live benchmarking (SAU-176). It is **not**
+> a production commitment. Routing **real end-user audio** to OpenAI at scale
+> remains gated by the production gates in SAU-193 (unit-economics + DPA/PII),
+> which are binding before any launch.
+
+Both together = the full real stack. Combine the exports from §1 and §2 before
+`npm run dev`.
 
 Checks: `npm run typecheck` · `npm run lint` · `npm test` (compiler round-trip, CRUD,
 voice-session persistence + metering — all run hermetically, no infra).

@@ -1,0 +1,36 @@
+# Local Postgres for "test real" mode (SAU-214).
+#
+# Uses the pgvector image — NOT plain `postgres` — because migration 0003
+# (Slice 3 coach_memory) does `CREATE EXTENSION vector` and a plain postgres
+# image fails that step. pgcrypto + vector both ship in this image.
+#
+# Host port 5433 (not 5432) on purpose, so this never collides with a
+# Postgres you may already run locally on the default 5432.
+#
+# Usage:
+#   docker compose up -d
+#   export DATABASE_URL=postgres://agent:agent@localhost:5433/agent_platform
+#   npm run migrate
+#   npm run seed
+#
+# Tear down (drops all data):  docker compose down -v
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: agent_platform_db
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent_platform
+    ports:
+      - "5433:5432"
+    volumes:
+      - agent_platform_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_platform"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  agent_platform_pgdata:
