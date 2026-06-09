@@ -1,21 +1,35 @@
-# Agent Platform — Slice 1: the Scenario atom
+# Agent Platform — MVP POC
 
-The Scenario is the core primitive ([ADR-001](../docs/adr/ADR-001-scenario-as-core-primitive.md)); every other
-feature (Coach, Course, Analyst, History) composes or projects over it. This slice
-stands up the atom end-to-end: **MD compiler → CRUD → Library → shared detail shell → live voice**.
+Hyper-realistic AI voice roleplay to practice high-stakes conversations. The
+Scenario is the core primitive ([ADR-001](../docs/adr/ADR-001-scenario-as-core-primitive.md));
+every other feature (Coach, Course, Analyst, History) composes or projects over
+it. The POC stands up the full MVP UI end-to-end — **Scenarios, Courses, Coaches,
+Analytics, History** + live voice behind a seam — over a **MD compiler → CRUD →
+Library → shared detail shell → live voice** spine.
 
 Parent design: [`docs/SAU-171-brandstorm-architecture.md`](../docs/SAU-171-brandstorm-architecture.md) ·
 Schema: [`docs/architecture/ERD.md`](../docs/architecture/ERD.md) (SAU-175) · Issue: SAU-200.
 
-## Run it
+## Run it (zero infra)
+
+Run each line on its own. **Do not paste a trailing `# comment`** after the
+command — the shell passes the `#` and the rest to `next` as bogus arguments and
+the dev server aborts with `Invalid project directory ... /app/#`.
 
 ```bash
+cd app
 npm install
-npm run dev            # http://localhost:3000 → /library
+npm run dev
 ```
 
+Then open the URL the server prints. Default is <http://localhost:3000>; if 3000
+is busy Next picks the next free port (e.g. 3001) — watch the console line
+`- Local: http://localhost:PORT`. The home page (`/`) is the POC overview; it
+links into Scenarios, Courses, Coaches, Analytics, and History.
+
 With no `DATABASE_URL`, the app uses a non-durable **in-memory store** seeded from
-`content/scenarios/*.md` so the Library has data with zero infra. For Postgres:
+`content/` (3 scenarios, 1 course, 1 coach) so every section has data with zero
+infra. For Postgres:
 
 ```bash
 export DATABASE_URL=postgres://localhost:5432/agent_platform
