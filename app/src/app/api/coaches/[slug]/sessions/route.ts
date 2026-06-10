@@ -11,26 +11,30 @@ import { getCoach, resolveCoachScenario } from '@/services/coaches';
 import { runCoachSession } from '@/voice/coach-session';
 import { defaultVendor, type Vendor } from '@/voice/session-service';
 import type { Transcript } from '@/voice/realtime-interface';
-import { DEMO_USER_ID } from '@/coach/demo-user';
+import { getActor } from '@/services/current-user';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: NextRequest, { params }: { params: { slug: string } }) {
   const store = getStore();
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const coach = await getCoach(store, params.slug);
   if (!coach) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  const sessions = await store.listSessionsByCoachUser(coach.id, DEMO_USER_ID);
+  const sessions = await store.listSessionsByCoachUser(coach.id, actor.userId);
   return NextResponse.json({ sessions });
 }
 
 export async function POST(req: NextRequest, { params }: { params: { slug: string } }) {
   const store = getStore();
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const coach = await getCoach(store, params.slug);
   if (!coach) return NextResponse.json({ error: 'not found' }, { status: 404 });
   const scenario = await resolveCoachScenario(store, coach);
   if (!scenario) return NextResponse.json({ error: `coach "${coach.slug}" has no composed scenario` }, { status: 409 });
 
-  let body: { vendor?: string; transcript?: Transcript; userId?: string } = {};
+  let body: { vendor?: string; transcript?: Transcript } = {};
   try {
     body = await req.json();
   } catch {
@@ -42,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   const vendor: Vendor = body.transcript
     ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
     : 'mock';
-  const userId = body.userId ?? DEMO_USER_ID;
+  const userId = actor.userId;
 
   try {
     const result = await runCoachSession({ store, coach, scenario, vendor, userId, transcript: body.transcript });

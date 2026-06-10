@@ -1,20 +1,32 @@
 /**
- * Postgres Store implementation (production). Backed by db/migrations/0001.
+ * Postgres Store implementation (production). Backed by db/migrations/0001-0005.
  * Uses a single pooled connection; jsonb columns map to/from the TS shapes.
+ *
+ * RLS (Slice 5, SAU-229): scenario/coach/course/session enforce ownership via
+ * Postgres Row-Level Security (migration 0005), the same backstop coach_memory
+ * has used since 0003. The policies read two GUCs — `app.user_id` and
+ * `app.is_admin`. Rather than thread a user through every method, the auth layer
+ * binds the acting user into a request-scoped AsyncLocalStorage (src/auth/actor),
+ * and every query here runs through `q()`/`withActorTx()`, which open a
+ * transaction and `SET LOCAL` those GUCs from the bound actor. No actor bound
+ * (anonymous request, share-link path) → queries run on the pool with no GUC, so
+ * the policies expose public/null-owner rows only.
  */
-import { Pool, PoolClient } from 'pg';
+import { Pool, PoolClient, QueryResult } from 'pg';
 import type { CompiledScenarioRecord, RubricItem, ScenarioRecord } from '@/domain/scenario';
 import type { AnalysisRecord, Evaluation, Improvement } from '@/domain/analysis';
 import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  AuditEvent, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  AuditEvent, AuthSessionRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
-  NewAnalysis, NewCoachMemory, NewConsent, NewSession, ScenarioFilter, SessionEventRow,
-  SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store, VoiceUsageRecord,
+  NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
+  SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
+  UserRecord, VoiceUsageRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
+import { getActorContext } from '@/auth/actor';
 
 // pg returns untyped rows; `Row` documents that we map them explicitly below.
 type Row = Record<string, any>;
@@ -32,6 +44,7 @@ function rowToScenario(r: Row): ScenarioRecord {
     languageCode: r.language_code,
     tools: (r.tools ?? []) as ToolDefinition[],
     metadata: (r.metadata ?? {}) as Record<string, unknown>,
+    ownerUserId: r.owner_user_id ?? null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -83,6 +96,18 @@ function rowToCoach(r: Row): CoachRecord {
     memoryScope: r.memory_scope,
     retention: r.retention,
     schedule: (r.schedule ?? {}) as CoachSchedule,
+    ownerUserId: r.owner_user_id ?? null,
+    createdAt: new Date(r.created_at).toISOString(),
+    updatedAt: new Date(r.updated_at).toISOString(),
+  };
+}
+
+function rowToUser(r: Row): UserRecord {
+  return {
+    id: r.id,
+    email: r.email,
+    passwordHash: r.password_hash,
+    displayName: r.display_name,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -125,6 +150,43 @@ function rowToShareLink(r: Row): ShareLinkRecord {
 export class PgStore implements Store {
   constructor(private pool: Pool) {}
 
+  // ── RLS plumbing ─────────────────────────────────────────────────────────
+  /** Apply the request-scoped actor's GUCs (transaction-local) for RLS. */
+  private async applyActor(client: PoolClient): Promise<void> {
+    const ctx = getActorContext();
+    await client.query('SELECT set_config($1,$2,true), set_config($3,$4,true)', [
+      'app.user_id', ctx?.userId ?? '',
+      'app.is_admin', ctx?.isAdmin ? 'on' : 'off',
+    ]);
+  }
+
+  /** Run `fn` in a transaction with the actor GUCs set (for RLS-scoped work). */
+  private async withActorTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.applyActor(client);
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * RLS-aware query: if an actor is bound for this request, run inside a
+   * transaction with the GUCs set so policies see the user; otherwise hit the
+   * pool directly (anonymous → public-only reads, ownership writes rejected).
+   */
+  private q(text: string, params?: unknown[]): Promise<QueryResult> {
+    if (getActorContext()) return this.withActorTx((c) => c.query(text, params));
+    return this.pool.query(text, params);
+  }
+
   async listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]> {
     const clauses: string[] = [];
     const params: unknown[] = [];
@@ -137,26 +199,27 @@ export class PgStore implements Store {
       clauses.push(`metadata @> $${params.length}::jsonb`);
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const { rows } = await this.pool.query(`SELECT * FROM scenario ${where} ORDER BY created_at DESC`, params);
+    const { rows } = await this.q(`SELECT * FROM scenario ${where} ORDER BY created_at DESC`, params);
     return rows.map(rowToScenario);
   }
 
   async getScenarioBySlug(slug: string): Promise<ScenarioRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM scenario WHERE slug = $1', [slug]);
+    const { rows } = await this.q('SELECT * FROM scenario WHERE slug = $1', [slug]);
     return rows[0] ? rowToScenario(rows[0]) : null;
   }
 
   async getScenarioById(id: string): Promise<ScenarioRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM scenario WHERE id = $1', [id]);
+    const { rows } = await this.q('SELECT * FROM scenario WHERE id = $1', [id]);
     return rows[0] ? rowToScenario(rows[0]) : null;
   }
 
-  async createScenario(rec: CompiledScenarioRecord): Promise<ScenarioRecord> {
-    const { rows } = await this.pool.query(
-      `INSERT INTO scenario (slug, name, description, ai_instructions, rubric, is_public, voice_name, language_code, tools, metadata)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10::jsonb) RETURNING *`,
+  async createScenario(rec: CompiledScenarioRecord, owner?: OwnerOpts): Promise<ScenarioRecord> {
+    const { rows } = await this.q(
+      `INSERT INTO scenario (slug, name, description, ai_instructions, rubric, is_public, voice_name, language_code, tools, metadata, owner_user_id)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10::jsonb,$11) RETURNING *`,
       [rec.slug, rec.name, rec.description, rec.aiInstructions, JSON.stringify(rec.rubric), rec.isPublic,
-        rec.voiceName, rec.languageCode, JSON.stringify(rec.tools), JSON.stringify(rec.metadata)],
+        rec.voiceName, rec.languageCode, JSON.stringify(rec.tools), JSON.stringify(rec.metadata),
+        owner?.ownerUserId ?? null],
     );
     return rowToScenario(rows[0]);
   }
@@ -176,27 +239,29 @@ export class PgStore implements Store {
     if (!sets.length) return this.getScenarioBySlug(slug);
     sets.push('updated_at = now()');
     params.push(slug);
-    const { rows } = await this.pool.query(`UPDATE scenario SET ${sets.join(', ')} WHERE slug = $${params.length} RETURNING *`, params);
+    const { rows } = await this.q(`UPDATE scenario SET ${sets.join(', ')} WHERE slug = $${params.length} RETURNING *`, params);
     return rows[0] ? rowToScenario(rows[0]) : null;
   }
 
   async deleteScenario(slug: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query('DELETE FROM scenario WHERE slug = $1', [slug]);
+    const { rowCount } = await this.q('DELETE FROM scenario WHERE slug = $1', [slug]);
     return (rowCount ?? 0) > 0;
   }
 
   async upsertScenarioFromCompile(
     rec: CompiledScenarioRecord,
     source: { repoPath: string; contentHash: string; revision: string | null },
+    owner?: OwnerOpts,
   ): Promise<{ scenario: ScenarioRecord; source: ContentSourceRecord; created: boolean }> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.applyActor(client);
       const before = await client.query('SELECT id FROM scenario WHERE slug = $1', [rec.slug]);
       const created = before.rowCount === 0;
       const { rows } = await client.query(
-        `INSERT INTO scenario (slug, name, description, ai_instructions, rubric, is_public, voice_name, language_code, tools, metadata)
-         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10::jsonb)
+        `INSERT INTO scenario (slug, name, description, ai_instructions, rubric, is_public, voice_name, language_code, tools, metadata, owner_user_id)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10::jsonb,$11)
          ON CONFLICT (slug) DO UPDATE SET
            name = EXCLUDED.name, description = EXCLUDED.description, ai_instructions = EXCLUDED.ai_instructions,
            rubric = EXCLUDED.rubric, is_public = EXCLUDED.is_public, voice_name = EXCLUDED.voice_name,
@@ -204,7 +269,8 @@ export class PgStore implements Store {
            updated_at = now()
          RETURNING *`,
         [rec.slug, rec.name, rec.description, rec.aiInstructions, JSON.stringify(rec.rubric), rec.isPublic,
-          rec.voiceName, rec.languageCode, JSON.stringify(rec.tools), JSON.stringify(rec.metadata)],
+          rec.voiceName, rec.languageCode, JSON.stringify(rec.tools), JSON.stringify(rec.metadata),
+          owner?.ownerUserId ?? null],
       );
       const scenario = rowToScenario(rows[0]);
       const sres = await client.query(
@@ -236,7 +302,7 @@ export class PgStore implements Store {
   }
 
   async getContentSource(entityType: ContentEntityType, entityId: string): Promise<ContentSourceRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM content_source WHERE entity_type = $1 AND entity_id = $2', [entityType, entityId]);
+    const { rows } = await this.q('SELECT * FROM content_source WHERE entity_type = $1 AND entity_id = $2', [entityType, entityId]);
     if (!rows[0]) return null;
     const r = rows[0];
     return {
@@ -252,24 +318,24 @@ export class PgStore implements Store {
     // INSERT a no-op on re-share; we then read back the existing (or just-created)
     // row, so the same scenario always yields the same code.
     const code = genShareCode();
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `INSERT INTO share_link (code, scenario_id) VALUES ($1, $2)
        ON CONFLICT (scenario_id) DO NOTHING
        RETURNING *`,
       [code, scenarioId],
     );
     if (rows[0]) return rowToShareLink(rows[0]);
-    const existing = await this.pool.query('SELECT * FROM share_link WHERE scenario_id = $1', [scenarioId]);
+    const existing = await this.q('SELECT * FROM share_link WHERE scenario_id = $1', [scenarioId]);
     return rowToShareLink(existing.rows[0]);
   }
 
   async getShareLinkByCode(code: string): Promise<ShareLinkRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM share_link WHERE code = $1', [code]);
+    const { rows } = await this.q('SELECT * FROM share_link WHERE code = $1', [code]);
     return rows[0] ? rowToShareLink(rows[0]) : null;
   }
 
   async createSession(input: NewSession): Promise<SessionRecord> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `INSERT INTO session (scenario_id, user_id, coach_id, course_id, vendor, status)
        VALUES ($1,$2,$3,$4,$5,'active') RETURNING *`,
       [input.scenarioId, input.userId ?? null, input.coachId ?? null, input.courseId ?? null, input.vendor],
@@ -278,7 +344,7 @@ export class PgStore implements Store {
   }
 
   async appendSessionEvent(row: SessionEventRow): Promise<void> {
-    await this.pool.query(
+    await this.q(
       `INSERT INTO session_event (session_id, ts, type, payload) VALUES ($1, to_timestamp($2/1000.0), $3, $4::jsonb)`,
       [row.sessionId, row.ts, row.type, JSON.stringify(row.payload)],
     );
@@ -289,7 +355,7 @@ export class PgStore implements Store {
     update: { status: 'completed' | 'failed'; startedAt?: number; endedAt: number; transcript: SessionTranscript },
   ): Promise<SessionRecord | null> {
     // COALESCE keeps the existing started_at when the caller doesn't supply one.
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `UPDATE session SET status = $2,
          started_at = COALESCE(to_timestamp($5/1000.0), started_at),
          ended_at = to_timestamp($3/1000.0), transcript = $4::jsonb
@@ -300,22 +366,22 @@ export class PgStore implements Store {
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM session WHERE id = $1', [id]);
+    const { rows } = await this.q('SELECT * FROM session WHERE id = $1', [id]);
     return rows[0] ? rowToSession(rows[0]) : null;
   }
 
   async listSessionsByScenario(scenarioId: string): Promise<SessionRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM session WHERE scenario_id = $1 ORDER BY started_at DESC', [scenarioId]);
+    const { rows } = await this.q('SELECT * FROM session WHERE scenario_id = $1 ORDER BY started_at DESC', [scenarioId]);
     return rows.map(rowToSession);
   }
 
   async listSessionsByCourse(courseId: string): Promise<SessionRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM session WHERE course_id = $1 ORDER BY started_at DESC', [courseId]);
+    const { rows } = await this.q('SELECT * FROM session WHERE course_id = $1 ORDER BY started_at DESC', [courseId]);
     return rows.map(rowToSession);
   }
 
   async listSessionsByCoachUser(coachId: string, userId: string): Promise<SessionRecord[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       'SELECT * FROM session WHERE coach_id = $1 AND user_id = $2 ORDER BY started_at DESC',
       [coachId, userId],
     );
@@ -323,12 +389,12 @@ export class PgStore implements Store {
   }
 
   async listSessionEvents(sessionId: string): Promise<SessionEventRow[]> {
-    const { rows } = await this.pool.query('SELECT * FROM session_event WHERE session_id = $1 ORDER BY ts', [sessionId]);
+    const { rows } = await this.q('SELECT * FROM session_event WHERE session_id = $1 ORDER BY ts', [sessionId]);
     return rows.map((r: Row) => ({ sessionId: r.session_id, ts: new Date(r.ts).getTime(), type: r.type, payload: r.payload ?? {} }));
   }
 
   async recordVoiceUsage(u: VoiceUsageRecord): Promise<void> {
-    await this.pool.query(
+    await this.q(
       `INSERT INTO voice_usage (session_id, user_id, scenario_id, vendor, model, duration_ms, voice_minutes,
         input_text_tokens, input_audio_tokens, cached_text_tokens, cached_audio_tokens,
         output_text_tokens, output_audio_tokens, total_tokens)
@@ -341,7 +407,7 @@ export class PgStore implements Store {
   }
 
   async getVoiceUsage(sessionId: string): Promise<VoiceUsageRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM voice_usage WHERE session_id = $1', [sessionId]);
+    const { rows } = await this.q('SELECT * FROM voice_usage WHERE session_id = $1', [sessionId]);
     if (!rows[0]) return null;
     const r = rows[0];
     return {
@@ -357,7 +423,7 @@ export class PgStore implements Store {
   // ── Slice 2: Analyst projection ───────────────────────────────────────────────
   async upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord> {
     const improvement = { areas: rec.improvement.areas, actionItems: rec.improvement.actionItems };
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `INSERT INTO analysis (session_id, scenario_id, user_id, scorer, overall_score, final_score,
          report_card, strengths, weaknesses, improvement)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb)
@@ -375,13 +441,13 @@ export class PgStore implements Store {
   }
 
   async getAnalysis(sessionId: string): Promise<AnalysisRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM analysis WHERE session_id = $1', [sessionId]);
+    const { rows } = await this.q('SELECT * FROM analysis WHERE session_id = $1', [sessionId]);
     return rows[0] ? rowToAnalysis(rows[0]) : null;
   }
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
   async listSessionHistory(userId: string): Promise<SessionHistoryRow[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `SELECT * FROM session_history WHERE user_id = $1 ORDER BY started_at DESC`,
       [userId],
     );
@@ -400,7 +466,7 @@ export class PgStore implements Store {
   }
 
   async getCreatorAnalytics(): Promise<CreatorAnalyticsRow[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `SELECT sc.id AS scenario_id, sc.slug, sc.name,
               COUNT(s.id)::int AS sessions,
               COALESCE(AVG(EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) * 1000), 0) AS avg_duration_ms,
@@ -423,7 +489,7 @@ export class PgStore implements Store {
 
   // ── Slice 2: credit meter + entitlement ───────────────────────────────────────
   async sumVoiceMinutesByUser(userId: string): Promise<number> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       'SELECT COALESCE(SUM(voice_minutes), 0) AS total FROM voice_usage WHERE user_id = $1',
       [userId],
     );
@@ -431,14 +497,14 @@ export class PgStore implements Store {
   }
 
   async getEntitlement(userId: string): Promise<EntitlementRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM user_entitlement WHERE user_id = $1', [userId]);
+    const { rows } = await this.q('SELECT * FROM user_entitlement WHERE user_id = $1', [userId]);
     if (!rows[0]) return null;
     const r = rows[0];
     return { userId: r.user_id, plan: r.plan, freeMinutes: Number(r.free_minutes), paidMinutes: Number(r.paid_minutes) };
   }
 
   async upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord> {
-    await this.pool.query(
+    await this.q(
       `INSERT INTO user_entitlement (user_id, plan, free_minutes, paid_minutes)
        VALUES ($1,$2,$3,$4)
        ON CONFLICT (user_id) DO UPDATE SET
@@ -450,32 +516,34 @@ export class PgStore implements Store {
   }
   // ── Coach CRUD ──────────────────────────────────────────────────────────────
   async listCoaches(): Promise<CoachRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM coach ORDER BY created_at DESC');
+    const { rows } = await this.q('SELECT * FROM coach ORDER BY created_at DESC');
     return rows.map(rowToCoach);
   }
 
   async getCoachBySlug(slug: string): Promise<CoachRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM coach WHERE slug = $1', [slug]);
+    const { rows } = await this.q('SELECT * FROM coach WHERE slug = $1', [slug]);
     return rows[0] ? rowToCoach(rows[0]) : null;
   }
 
   async getCoachById(id: string): Promise<CoachRecord | null> {
-    const { rows } = await this.pool.query('SELECT * FROM coach WHERE id = $1', [id]);
+    const { rows } = await this.q('SELECT * FROM coach WHERE id = $1', [id]);
     return rows[0] ? rowToCoach(rows[0]) : null;
   }
 
   async deleteCoach(slug: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query('DELETE FROM coach WHERE slug = $1', [slug]);
+    const { rowCount } = await this.q('DELETE FROM coach WHERE slug = $1', [slug]);
     return (rowCount ?? 0) > 0;
   }
 
   async upsertCoachFromCompile(
     rec: CompiledCoachRecord,
     source: ContentSourceInput,
+    owner?: OwnerOpts,
   ): Promise<{ coach: CoachRecord; source: ContentSourceRecord; created: boolean }> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.applyActor(client);
       let scenarioId: string | null = null;
       if (rec.scenarioRef) {
         const sc = await client.query('SELECT id FROM scenario WHERE slug = $1', [rec.scenarioRef]);
@@ -485,8 +553,8 @@ export class PgStore implements Store {
       const before = await client.query('SELECT id FROM coach WHERE slug = $1', [rec.slug]);
       const created = before.rowCount === 0;
       const { rows } = await client.query(
-        `INSERT INTO coach (slug, name, scenario_id, inline_ai_instructions, memory_scope, retention, schedule)
-         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+        `INSERT INTO coach (slug, name, scenario_id, inline_ai_instructions, memory_scope, retention, schedule, owner_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
          ON CONFLICT (slug) DO UPDATE SET
            name = EXCLUDED.name, scenario_id = EXCLUDED.scenario_id,
            inline_ai_instructions = EXCLUDED.inline_ai_instructions,
@@ -494,7 +562,7 @@ export class PgStore implements Store {
            schedule = EXCLUDED.schedule, updated_at = now()
          RETURNING *`,
         [rec.slug, rec.name, scenarioId, rec.inlineAiInstructions, rec.memoryScope, rec.retention,
-          JSON.stringify(rec.schedule)],
+          JSON.stringify(rec.schedule), owner?.ownerUserId ?? null],
       );
       const coach = rowToCoach(rows[0]);
       const src = await upsertContentSource(client, 'coach', coach.id, source);
@@ -510,32 +578,34 @@ export class PgStore implements Store {
 
   // ── Course CRUD ───────────────────────────────────────────────────────────────
   async listCourses(): Promise<CourseRecord[]> {
-    const { rows } = await this.pool.query(`${COURSE_SELECT} ORDER BY c.created_at DESC`);
+    const { rows } = await this.q(`${COURSE_SELECT} ORDER BY c.created_at DESC`);
     return rows.map(rowToCourse);
   }
 
   async getCourseBySlug(slug: string): Promise<CourseRecord | null> {
-    const { rows } = await this.pool.query(`${COURSE_SELECT} WHERE c.slug = $1`, [slug]);
+    const { rows } = await this.q(`${COURSE_SELECT} WHERE c.slug = $1`, [slug]);
     return rows[0] ? rowToCourse(rows[0]) : null;
   }
 
   async getCourseById(id: string): Promise<CourseRecord | null> {
-    const { rows } = await this.pool.query(`${COURSE_SELECT} WHERE c.id = $1`, [id]);
+    const { rows } = await this.q(`${COURSE_SELECT} WHERE c.id = $1`, [id]);
     return rows[0] ? rowToCourse(rows[0]) : null;
   }
 
   async deleteCourse(slug: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query('DELETE FROM course WHERE slug = $1', [slug]);
+    const { rowCount } = await this.q('DELETE FROM course WHERE slug = $1', [slug]);
     return (rowCount ?? 0) > 0;
   }
 
   async upsertCourseFromCompile(
     rec: CompiledCourseRecord,
     source: ContentSourceInput,
+    owner?: OwnerOpts,
   ): Promise<{ course: CourseRecord; source: ContentSourceRecord; created: boolean }> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.applyActor(client);
       const scenarioIds: string[] = [];
       for (const ref of rec.scenarioRefs) {
         const sc = await client.query('SELECT id FROM scenario WHERE slug = $1', [ref]);
@@ -551,13 +621,13 @@ export class PgStore implements Store {
       const before = await client.query('SELECT id FROM course WHERE slug = $1', [rec.slug]);
       const created = before.rowCount === 0;
       const { rows } = await client.query(
-        `INSERT INTO course (slug, name, visibility, coach_id)
-         VALUES ($1,$2,$3,$4)
+        `INSERT INTO course (slug, name, visibility, coach_id, owner_user_id)
+         VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT (slug) DO UPDATE SET
            name = EXCLUDED.name, visibility = EXCLUDED.visibility, coach_id = EXCLUDED.coach_id,
            updated_at = now()
          RETURNING id`,
-        [rec.slug, rec.name, rec.isPublic ? 'public' : 'private', coachId],
+        [rec.slug, rec.name, rec.isPublic ? 'public' : 'private', coachId, owner?.ownerUserId ?? null],
       );
       const courseId = rows[0].id as string;
       // Replace the ordered join wholesale (positions are authoritative from the file).
@@ -654,7 +724,7 @@ export class PgStore implements Store {
 
   // ── Consent + audit (ADR-004) ───────────────────────────────────────────────
   async recordConsent(rec: NewConsent): Promise<ConsentRecord> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `INSERT INTO consent_record (user_id, scope, consent_type, action, policy_version, policy_text_hash, locale, ui_surface)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [rec.userId, rec.scope, rec.consentType, rec.action, rec.policyVersion ?? null,
@@ -664,7 +734,7 @@ export class PgStore implements Store {
   }
 
   async getConsentState(userId: string, scope: string): Promise<ConsentState> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       `SELECT DISTINCT ON (consent_type) consent_type, action
        FROM consent_record WHERE user_id = $1 AND scope = $2
        ORDER BY consent_type, created_at DESC`,
@@ -680,7 +750,7 @@ export class PgStore implements Store {
   }
 
   async listConsent(userId: string, scope: string): Promise<ConsentRecord[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       'SELECT * FROM consent_record WHERE user_id = $1 AND scope = $2 ORDER BY created_at DESC',
       [userId, scope],
     );
@@ -688,14 +758,14 @@ export class PgStore implements Store {
   }
 
   async recordAuditEvent(ev: AuditEvent): Promise<void> {
-    await this.pool.query(
+    await this.q(
       `INSERT INTO audit_log (actor, event, subject_user_id, coach_id, refs) VALUES ($1,$2,$3,$4,$5::jsonb)`,
       [ev.actor, ev.event, ev.subjectUserId, ev.coachId, JSON.stringify(ev.refs)],
     );
   }
 
   async listAuditEvents(subjectUserId: string): Promise<(AuditEvent & { ts: string })[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.q(
       'SELECT * FROM audit_log WHERE subject_user_id = $1 ORDER BY ts DESC',
       [subjectUserId],
     );
@@ -704,6 +774,75 @@ export class PgStore implements Store {
       coachId: r.coach_id ?? null, refs: (r.refs ?? {}) as Record<string, unknown>,
       ts: new Date(r.ts).toISOString(),
     }));
+  }
+
+  // ── AuthN + RBAC (Slice 5, SAU-229) — no RLS on these tables; pool-direct ───
+  async createUser(input: NewUser): Promise<UserRecord> {
+    const email = input.email.trim().toLowerCase();
+    const cols = input.id ? '(id, email, password_hash, display_name)' : '(email, password_hash, display_name)';
+    const vals = input.id ? '($1,$2,$3,$4)' : '($1,$2,$3)';
+    const params = input.id
+      ? [input.id, email, input.passwordHash, input.displayName]
+      : [email, input.passwordHash, input.displayName];
+    const { rows } = await this.pool.query(`INSERT INTO app_user ${cols} VALUES ${vals} RETURNING *`, params);
+    return rowToUser(rows[0]);
+  }
+
+  async getUserByEmail(email: string): Promise<UserRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM app_user WHERE email = $1', [email.trim().toLowerCase()]);
+    return rows[0] ? rowToUser(rows[0]) : null;
+  }
+
+  async getUserById(id: string): Promise<UserRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM app_user WHERE id = $1', [id]);
+    return rows[0] ? rowToUser(rows[0]) : null;
+  }
+
+  async listUsers(): Promise<UserRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM app_user ORDER BY created_at');
+    return rows.map(rowToUser);
+  }
+
+  async createAuthSession(token: string, userId: string, expiresAt: string): Promise<void> {
+    await this.pool.query(
+      'INSERT INTO auth_session (token, user_id, expires_at) VALUES ($1,$2,$3)',
+      [token, userId, expiresAt],
+    );
+  }
+
+  async getAuthSession(token: string): Promise<AuthSessionRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM auth_session WHERE token = $1', [token]);
+    if (!rows[0]) return null;
+    return { token: rows[0].token, userId: rows[0].user_id, expiresAt: new Date(rows[0].expires_at).toISOString() };
+  }
+
+  async deleteAuthSession(token: string): Promise<void> {
+    await this.pool.query('DELETE FROM auth_session WHERE token = $1', [token]);
+  }
+
+  async setUserRole(userId: string, role: string): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM user_role WHERE user_id = $1', [userId]);
+      await client.query('INSERT INTO user_role (user_id, role) VALUES ($1,$2)', [userId, role]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getUserRole(userId: string): Promise<string | null> {
+    const { rows } = await this.pool.query('SELECT role FROM user_role WHERE user_id = $1 ORDER BY role LIMIT 1', [userId]);
+    return rows[0]?.role ?? null;
+  }
+
+  async getRoleCapabilities(role: string): Promise<string[]> {
+    const { rows } = await this.pool.query('SELECT capability FROM role_capability WHERE role = $1', [role]);
+    return rows.map((r: Row) => r.capability as string);
   }
 }
 
@@ -722,6 +861,7 @@ function rowToCourse(r: Row): CourseRecord {
     isPublic: r.visibility === 'public',
     coachId: r.coach_id ?? null,
     scenarioIds: (r.scenario_ids ?? []) as string[],
+    ownerUserId: r.owner_user_id ?? null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   };

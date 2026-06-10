@@ -12,10 +12,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateScenarioDraft, generateCourseDraft } from '@/authoring/pipeline';
 import type { AuthoringBrief } from '@/authoring/author';
+import { actorWithCapability } from '@/auth/api-guard';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const gate = await actorWithCapability('author_content');
+  if ('response' in gate) return gate.response;
   let body: Record<string, unknown>;
   try {
     body = await req.json();

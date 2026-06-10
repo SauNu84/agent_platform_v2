@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "migrate": "tsx src/db/migrate.ts",
-    "seed": "tsx src/db/seed-cli.ts"
+    "seed": "tsx src/db/seed-cli.ts",
+    "seed:users": "tsx src/db/seed-users-cli.ts"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",

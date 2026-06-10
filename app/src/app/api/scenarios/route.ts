@@ -12,6 +12,7 @@ import { getStore } from '@/db';
 import {
   listScenarios, createScenarioFromJson, createScenarioFromMarkdown, ScenarioCompileError,
 } from '@/services/scenarios';
+import { actorWithCapability } from '@/auth/api-guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,19 +34,22 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const store = getStore();
+  const gate = await actorWithCapability('author_content');
+  if ('response' in gate) return gate.response;
+  const owner = { ownerUserId: gate.actor.userId };
   const contentType = req.headers.get('content-type') ?? '';
   try {
     if (contentType.includes('markdown') || contentType.includes('text/plain')) {
       const raw = await req.text();
-      const { scenario, created } = await createScenarioFromMarkdown(store, raw);
+      const { scenario, created } = await createScenarioFromMarkdown(store, raw, {}, owner);
       return NextResponse.json({ scenario }, { status: created ? 201 : 200 });
     }
     const body = await req.json();
     if (typeof body?.markdown === 'string') {
-      const { scenario, created } = await createScenarioFromMarkdown(store, body.markdown, { repoPath: body.repoPath });
+      const { scenario, created } = await createScenarioFromMarkdown(store, body.markdown, { repoPath: body.repoPath }, owner);
       return NextResponse.json({ scenario }, { status: created ? 201 : 200 });
     }
-    const scenario = await createScenarioFromJson(store, body);
+    const scenario = await createScenarioFromJson(store, body, owner);
     return NextResponse.json({ scenario }, { status: 201 });
   } catch (e) {
     if (e instanceof ScenarioCompileError) {

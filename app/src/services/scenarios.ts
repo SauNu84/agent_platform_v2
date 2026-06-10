@@ -9,7 +9,7 @@ import {
   scenarioFrontmatterSchema, normalizeFrontmatter, type CompiledScenarioRecord,
 } from '@/domain/scenario';
 import { compileScenarioContent, sha256, ScenarioCompileError } from '@/compiler/compile';
-import type { ScenarioFilter, ScenarioRecord, Store } from '@/db/store';
+import type { OwnerOpts, ScenarioFilter, ScenarioRecord, Store } from '@/db/store';
 
 export { ScenarioCompileError };
 
@@ -26,18 +26,19 @@ export async function createScenarioFromMarkdown(
   store: Store,
   raw: string,
   opts: { repoPath?: string; revision?: string | null } = {},
+  owner?: OwnerOpts,
 ): Promise<{ scenario: ScenarioRecord; created: boolean }> {
   const { record, contentHash } = compileScenarioContent(raw);
   const res = await store.upsertScenarioFromCompile(record, {
     repoPath: opts.repoPath ?? `inline:${record.slug}.md`,
     contentHash,
     revision: opts.revision ?? null,
-  });
+  }, owner);
   return { scenario: res.scenario, created: res.created };
 }
 
 /** JSON CRUD create — validated against the same schema as the compiler. */
-export async function createScenarioFromJson(store: Store, body: unknown): Promise<ScenarioRecord> {
+export async function createScenarioFromJson(store: Store, body: unknown, owner?: OwnerOpts): Promise<ScenarioRecord> {
   const parsed = scenarioFrontmatterSchema.safeParse(body);
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
@@ -51,7 +52,7 @@ export async function createScenarioFromJson(store: Store, body: unknown): Promi
     repoPath: `api:${record.slug}`,
     contentHash: sha256(JSON.stringify(body)),
     revision: null,
-  });
+  }, owner);
   return res.scenario;
 }
 

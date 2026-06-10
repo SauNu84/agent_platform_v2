@@ -153,6 +153,8 @@ export interface PublishOptions {
   /** Where the source lives, for content_source/drift bookkeeping. */
   repoPath?: string;
   revision?: string | null;
+  /** Owning user for the published content (RLS, SAU-229); null = platform. */
+  ownerUserId?: string | null;
 }
 
 /**
@@ -220,7 +222,7 @@ async function persistScenarioMd(
     repoPath: opts.repoPath ?? `ai:${record.slug}.md`,
     contentHash: sha256(md),
     revision: opts.revision ?? null,
-  });
+  }, { ownerUserId: opts.ownerUserId ?? null });
   return { scenario: res.scenario };
 }
 

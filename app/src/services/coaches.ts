@@ -8,7 +8,7 @@ import {
 } from '@/domain/coach';
 import { compileCoachContent, CoachCompileError } from '@/compiler/coach-compile';
 import { sha256 } from '@/compiler/compile';
-import type { CoachRecord, ScenarioRecord, Store } from '@/db/store';
+import type { CoachRecord, OwnerOpts, ScenarioRecord, Store } from '@/db/store';
 
 export { CoachCompileError };
 
@@ -29,17 +29,18 @@ export async function createCoachFromMarkdown(
   store: Store,
   raw: string,
   opts: { repoPath?: string; revision?: string | null } = {},
+  owner?: OwnerOpts,
 ): Promise<{ coach: CoachRecord; created: boolean }> {
   const { record, contentHash } = compileCoachContent(raw);
   const res = await store.upsertCoachFromCompile(record, {
     repoPath: opts.repoPath ?? `inline:${record.slug}.coach.md`,
     contentHash,
     revision: opts.revision ?? null,
-  });
+  }, owner);
   return { coach: res.coach, created: res.created };
 }
 
-export async function createCoachFromJson(store: Store, body: unknown): Promise<CoachRecord> {
+export async function createCoachFromJson(store: Store, body: unknown, owner?: OwnerOpts): Promise<CoachRecord> {
   const parsed = coachFrontmatterSchema.safeParse(body);
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
@@ -52,7 +53,7 @@ export async function createCoachFromJson(store: Store, body: unknown): Promise<
     repoPath: `api:${record.slug}`,
     contentHash: sha256(JSON.stringify(body)),
     revision: null,
-  });
+  }, owner);
   return res.coach;
 }
 

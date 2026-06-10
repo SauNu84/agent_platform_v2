@@ -93,6 +93,8 @@ export interface ScenarioRecord {
   languageCode: string;
   tools: ToolDefinition[];
   metadata: Record<string, unknown>;
+  /** owning user (null = platform/seeded content); enforced by RLS (SAU-229) */
+  ownerUserId: string | null;
   createdAt: string;   // ISO
   updatedAt: string;   // ISO
 }

@@ -9,6 +9,8 @@ import { PgStore } from './pg-store';
 import { MemoryStore } from './memory-store';
 import { loadSeedRecords } from './seed';
 import { loadCoachSeedRecords, loadCourseSeedRecords } from './seed-compositions';
+import { TEST_USERS, TEST_USER_PASSWORD } from './seed-users';
+import { hashPasswordSync } from '@/auth/password';
 
 let singleton: Store | null = null;
 
@@ -30,6 +32,8 @@ export function getStore(): Store {
       mem.seedSync(loadSeedRecords());
       mem.seedCoachesSync(loadCoachSeedRecords());
       mem.seedCoursesSync(loadCourseSeedRecords());
+      // Seed the test users so login works with zero infra (dev/demo only).
+      mem.seedUsersSync(TEST_USERS.map((u) => ({ ...u, passwordHash: hashPasswordSync(TEST_USER_PASSWORD) })));
     } catch (e) {
       console.warn('[db] dev seed skipped:', (e as Error).message);
     }

@@ -85,12 +85,25 @@ function ThemeToggle() {
 export interface TopBarProps {
   userName: string;
   userEmail: string;
+  /** role label shown in the dropdown (Slice 5) */
+  role?: string;
+  /** whether a real user is authenticated (controls the Log out action) */
+  loggedIn?: boolean;
   streakDays?: number;
 }
 
-export default function TopBar({ userName, userEmail, streakDays = 1 }: TopBarProps) {
+export default function TopBar({ userName, userEmail, role, loggedIn = false, streakDays = 1 }: TopBarProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      /* best-effort; redirect regardless */
+    }
+    window.location.href = '/login';
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -156,6 +169,11 @@ export default function TopBar({ userName, userEmail, streakDays = 1 }: TopBarPr
                 <div className="usermenu-email">
                   <span aria-hidden="true">👤</span> {userEmail}
                 </div>
+                {role && (
+                  <div className="usermenu-role" aria-label="Role">
+                    <span aria-hidden="true">🛡</span> {role}
+                  </div>
+                )}
                 {streakDays > 0 && (
                   <div className="usermenu-streak">
                     🔥 {streakDays} day{streakDays === 1 ? '' : 's'} streak!
@@ -171,9 +189,15 @@ export default function TopBar({ userName, userEmail, streakDays = 1 }: TopBarPr
               <a href="#" className="usermenu-link" role="menuitem">
                 <span aria-hidden="true">🌐</span> Main Website
               </a>
-              <button type="button" className="usermenu-link" role="menuitem">
-                <span aria-hidden="true">⎋</span> Log out
-              </button>
+              {loggedIn ? (
+                <button type="button" className="usermenu-link" role="menuitem" onClick={logout}>
+                  <span aria-hidden="true">⎋</span> Log out
+                </button>
+              ) : (
+                <a href="/login" className="usermenu-link" role="menuitem">
+                  <span aria-hidden="true">⎋</span> Log in
+                </a>
+              )}
             </div>
           )}
         </div>

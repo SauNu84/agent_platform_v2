@@ -13,7 +13,7 @@ import { getStore } from '@/db';
 import { getScenario } from '@/services/scenarios';
 import { runVoiceSession, persistClientSession, defaultVendor, type Vendor } from '@/voice/session-service';
 import { assertWithinCap, CapExceededError } from '@/services/meter';
-import { currentUserId } from '@/services/current-user';
+import { getActor } from '@/services/current-user';
 import type { Transcript } from '@/voice/realtime-interface';
 
 export const dynamic = 'force-dynamic';
@@ -28,10 +28,12 @@ export async function GET(_req: NextRequest, { params }: { params: { slug: strin
 
 export async function POST(req: NextRequest, { params }: { params: { slug: string } }) {
   const store = getStore();
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const scenario = await getScenario(store, params.slug);
   if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
-  let body: { vendor?: string; transcript?: Transcript; userId?: string } = {};
+  let body: { vendor?: string; transcript?: Transcript } = {};
   try {
     body = await req.json();
   } catch {
@@ -48,7 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   const vendor: Vendor = body.transcript
     ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
     : 'mock';
-  const userId = body.userId ?? currentUserId(req);
+  const userId = actor.userId;
 
   // Monetization guardrail (Slice 2): block Join when the user's voice-minute cap
   // is exhausted. Pre-flight check — mid-session hard-stop is a tracked follow-up.

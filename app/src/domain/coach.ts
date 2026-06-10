@@ -66,6 +66,8 @@ export interface CoachRecord {
   memoryScope: 'per_user';
   retention: 'persistent' | 'window';
   schedule: CoachSchedule;
+  /** owning user (null = platform/seeded content); enforced by RLS (SAU-229) */
+  ownerUserId: string | null;
   createdAt: string;
   updatedAt: string;
 }

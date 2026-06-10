@@ -1,22 +1,36 @@
 /**
- * Current-user resolution (interim, pre-auth).
+ * Current-user resolution (Slice 5 — real auth, replaces the DEMO_USER_ID stub).
  *
- * Slice 1 left `session.user_id` a nullable uuid with no user table / auth yet.
- * Slice 2 needs a *subject* so History and the credit meter are per-user. Until
- * the identity model lands we resolve a user from the `x-user-id` header (so the
- * API can be exercised as different users) and fall back to a stable demo uuid so
- * the UI works out of the box. This is the single seam to replace with real auth.
+ * Reads the session cookie, resolves it to a full Actor (identity + role +
+ * capabilities) via the store, and binds the actor into the request-scoped ALS
+ * context so PgStore applies the RLS GUCs (app.user_id / app.is_admin) to every
+ * subsequent query in this request. Server components and route handlers both
+ * call getActor(); protected pages use requirePageActor() to redirect to /login.
  */
-import type { NextRequest } from 'next/server';
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { getStore } from '@/db';
+import { resolveActor, type Actor } from '@/auth/session';
+import { SESSION_COOKIE } from '@/auth/constants';
+import { enterActor } from '@/auth/actor';
 
-/** Stable demo subject so History/metering have data before auth lands. */
-export const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
+export type { Actor };
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Resolve the authenticated actor for the current request (or null). Side effect:
+ * on success, binds the actor into ALS so the DB layer enforces RLS for the rest
+ * of this request.
+ */
+export async function getActor(): Promise<Actor | null> {
+  const token = cookies().get(SESSION_COOKIE)?.value ?? null;
+  const actor = await resolveActor(getStore(), token);
+  if (actor) enterActor({ userId: actor.userId, isAdmin: actor.isAdmin });
+  return actor;
+}
 
-/** Resolve the acting user id from a request header, else the demo subject. */
-export function currentUserId(req?: NextRequest): string {
-  const hdr = req?.headers.get('x-user-id');
-  if (hdr && UUID_RE.test(hdr)) return hdr;
-  return DEMO_USER_ID;
+/** Page guard: resolve the actor or redirect to the login screen. */
+export async function requirePageActor(): Promise<Actor> {
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  return actor;
 }

@@ -9,12 +9,14 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  AuditEvent, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  AuditEvent, AuthSessionRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
-  NewAnalysis, NewCoachMemory, NewConsent, NewSession, ScenarioFilter, SessionEventRow,
-  SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store, VoiceUsageRecord,
+  NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
+  SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
+  UserRecord, VoiceUsageRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
+import { ROLE_CAPABILITIES } from '@/auth/rbac';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -44,6 +46,15 @@ export class MemoryStore implements Store {
   private audit: (AuditEvent & { ts: string })[] = [];        // append-only
   private shareLinks = new Map<string, ShareLinkRecord>();    // by code
   private scenarioToShareCode = new Map<string, string>();    // scenarioId → code (idempotency)
+  // ── Slice 5: auth + RBAC ──
+  private users = new Map<string, UserRecord>();              // by id
+  private usersByEmail = new Map<string, string>();           // email → id
+  private authSessions = new Map<string, AuthSessionRecord>();// by token
+  private userRoles = new Map<string, string>();              // userId → role
+  // role → capabilities; seeded to mirror migration 0005 (editable config).
+  private roleCaps = new Map<string, Set<string>>(
+    Object.entries(ROLE_CAPABILITIES).map(([r, caps]) => [r, new Set(caps)]),
+  );
 
   async listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]> {
     let out = [...this.scenarios.values()];
@@ -61,13 +72,13 @@ export class MemoryStore implements Store {
     return slug ? this.scenarios.get(slug) ?? null : null;
   }
 
-  async createScenario(rec: CompiledScenarioRecord): Promise<ScenarioRecord> {
+  async createScenario(rec: CompiledScenarioRecord, owner?: OwnerOpts): Promise<ScenarioRecord> {
     if (this.scenarios.has(rec.slug)) {
       throw new Error(`scenario with slug "${rec.slug}" already exists`);
     }
     const id = randomUUID();
     const ts = nowIso();
-    const full: ScenarioRecord = { id, createdAt: ts, updatedAt: ts, ...rec };
+    const full: ScenarioRecord = { id, createdAt: ts, updatedAt: ts, ownerUserId: owner?.ownerUserId ?? null, ...rec };
     this.scenarios.set(rec.slug, full);
     this.idToSlug.set(id, rec.slug);
     return full;
@@ -95,16 +106,17 @@ export class MemoryStore implements Store {
   async upsertScenarioFromCompile(
     rec: CompiledScenarioRecord,
     source: { repoPath: string; contentHash: string; revision: string | null },
+    owner?: OwnerOpts,
   ): Promise<{ scenario: ScenarioRecord; source: ContentSourceRecord; created: boolean }> {
     const existing = this.scenarios.get(rec.slug);
     let scenario: ScenarioRecord;
     let created: boolean;
     if (existing) {
-      scenario = { ...existing, ...rec, id: existing.id, slug: existing.slug, createdAt: existing.createdAt, updatedAt: nowIso() };
+      scenario = { ...existing, ...rec, id: existing.id, slug: existing.slug, ownerUserId: existing.ownerUserId, createdAt: existing.createdAt, updatedAt: nowIso() };
       this.scenarios.set(rec.slug, scenario);
       created = false;
     } else {
-      scenario = await this.createScenario(rec);
+      scenario = await this.createScenario(rec, owner);
       created = true;
     }
     const src: ContentSourceRecord = {
@@ -165,6 +177,7 @@ export class MemoryStore implements Store {
   async upsertCoachFromCompile(
     rec: CompiledCoachRecord,
     source: ContentSourceInput,
+    owner?: OwnerOpts,
   ): Promise<{ coach: CoachRecord; source: ContentSourceRecord; created: boolean }> {
     let scenarioId: string | null = null;
     if (rec.scenarioRef) {
@@ -186,7 +199,8 @@ export class MemoryStore implements Store {
       coach = {
         id: randomUUID(), slug: rec.slug, name: rec.name, scenarioId,
         inlineAiInstructions: rec.inlineAiInstructions, memoryScope: rec.memoryScope,
-        retention: rec.retention, schedule: rec.schedule, createdAt: ts, updatedAt: ts,
+        retention: rec.retention, schedule: rec.schedule, ownerUserId: owner?.ownerUserId ?? null,
+        createdAt: ts, updatedAt: ts,
       };
       created = true;
     }
@@ -226,6 +240,7 @@ export class MemoryStore implements Store {
   async upsertCourseFromCompile(
     rec: CompiledCourseRecord,
     source: ContentSourceInput,
+    owner?: OwnerOpts,
   ): Promise<{ course: CourseRecord; source: ContentSourceRecord; created: boolean }> {
     // Resolve refs (fail loudly on a dangling ref — a course must compose real atoms).
     const scenarioIds: string[] = [];
@@ -250,7 +265,7 @@ export class MemoryStore implements Store {
       const ts = nowIso();
       course = {
         id: randomUUID(), slug: rec.slug, name: rec.name, isPublic: rec.isPublic,
-        coachId, scenarioIds, createdAt: ts, updatedAt: ts,
+        coachId, scenarioIds, ownerUserId: owner?.ownerUserId ?? null, createdAt: ts, updatedAt: ts,
       };
       created = true;
     }
@@ -270,7 +285,7 @@ export class MemoryStore implements Store {
       if (this.scenarios.has(record.slug)) continue;
       const id = randomUUID();
       const ts = nowIso();
-      this.scenarios.set(record.slug, { id, createdAt: ts, updatedAt: ts, ...record });
+      this.scenarios.set(record.slug, { id, createdAt: ts, updatedAt: ts, ownerUserId: null, ...record });
       this.idToSlug.set(id, record.slug);
       this.sources.set(`scenario:${id}`, { entityType: 'scenario', entityId: id, repoPath, contentHash, revision: null, compiledAt: ts });
     }
@@ -291,7 +306,7 @@ export class MemoryStore implements Store {
       this.coaches.set(record.slug, {
         id, slug: record.slug, name: record.name, scenarioId,
         inlineAiInstructions: record.inlineAiInstructions, memoryScope: record.memoryScope,
-        retention: record.retention, schedule: record.schedule, createdAt: ts, updatedAt: ts,
+        retention: record.retention, schedule: record.schedule, ownerUserId: null, createdAt: ts, updatedAt: ts,
       });
       this.coachIdToSlug.set(id, record.slug);
       this.sources.set(`coach:${id}`, { entityType: 'coach', entityId: id, repoPath, contentHash, revision: null, compiledAt: ts });
@@ -315,7 +330,7 @@ export class MemoryStore implements Store {
       const ts = nowIso();
       this.courses.set(record.slug, {
         id, slug: record.slug, name: record.name, isPublic: record.isPublic,
-        coachId, scenarioIds, createdAt: ts, updatedAt: ts,
+        coachId, scenarioIds, ownerUserId: null, createdAt: ts, updatedAt: ts,
       });
       this.courseIdToSlug.set(id, record.slug);
       this.sources.set(`course:${id}`, { entityType: 'course', entityId: id, repoPath, contentHash, revision: null, compiledAt: ts });
@@ -541,5 +556,67 @@ export class MemoryStore implements Store {
     return this.audit
       .filter((e) => e.subjectUserId === subjectUserId)
       .sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  }
+
+  // ── Slice 5: auth + RBAC ─────────────────────────────────────────────────
+  /** Synchronous user seed (dev only) — populate identity maps without awaiting. */
+  seedUsersSync(items: Array<{ email: string; passwordHash: string; displayName: string; role: string }>): void {
+    for (const u of items) {
+      const email = u.email.trim().toLowerCase();
+      if (this.usersByEmail.has(email)) continue;
+      const id = randomUUID();
+      const ts = nowIso();
+      this.users.set(id, { id, email, passwordHash: u.passwordHash, displayName: u.displayName, createdAt: ts, updatedAt: ts });
+      this.usersByEmail.set(email, id);
+      this.userRoles.set(id, u.role);
+    }
+  }
+
+  async createUser(input: NewUser): Promise<UserRecord> {
+    const email = input.email.trim().toLowerCase();
+    if (this.usersByEmail.has(email)) throw new Error(`user with email "${email}" already exists`);
+    const id = input.id ?? randomUUID();
+    const ts = nowIso();
+    const rec: UserRecord = { id, email, passwordHash: input.passwordHash, displayName: input.displayName, createdAt: ts, updatedAt: ts };
+    this.users.set(id, rec);
+    this.usersByEmail.set(email, id);
+    return rec;
+  }
+
+  async getUserByEmail(email: string): Promise<UserRecord | null> {
+    const id = this.usersByEmail.get(email.trim().toLowerCase());
+    return id ? this.users.get(id) ?? null : null;
+  }
+
+  async getUserById(id: string): Promise<UserRecord | null> {
+    return this.users.get(id) ?? null;
+  }
+
+  async listUsers(): Promise<UserRecord[]> {
+    return [...this.users.values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  }
+
+  async createAuthSession(token: string, userId: string, expiresAt: string): Promise<void> {
+    this.authSessions.set(token, { token, userId, expiresAt });
+  }
+
+  async getAuthSession(token: string): Promise<AuthSessionRecord | null> {
+    return this.authSessions.get(token) ?? null;
+  }
+
+  async deleteAuthSession(token: string): Promise<void> {
+    this.authSessions.delete(token);
+  }
+
+  async setUserRole(userId: string, role: string): Promise<void> {
+    this.userRoles.set(userId, role);
+  }
+
+  async getUserRole(userId: string): Promise<string | null> {
+    return this.userRoles.get(userId) ?? null;
+  }
+
+  async getRoleCapabilities(role: string): Promise<string[]> {
+    return [...(this.roleCaps.get(role) ?? new Set<string>())];
   }
 }

@@ -8,15 +8,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getCoach } from '@/services/coaches';
-import { DEMO_USER_ID } from '@/coach/demo-user';
+import { getActor } from '@/services/current-user';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest, { params }: { params: { slug: string } }) {
   const store = getStore();
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const coach = await getCoach(store, params.slug);
   if (!coach) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  const userId = req.nextUrl.searchParams.get('userId') ?? DEMO_USER_ID;
+  const userId = actor.userId;
   const memories = await store.listCoachMemory(coach.id, userId);
   await store.recordAuditEvent({
     actor: `user:${userId}`, event: 'export', subjectUserId: userId, coachId: coach.id,
@@ -29,9 +31,11 @@ export async function GET(req: NextRequest, { params }: { params: { slug: string
 
 export async function DELETE(req: NextRequest, { params }: { params: { slug: string } }) {
   const store = getStore();
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const coach = await getCoach(store, params.slug);
   if (!coach) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  const userId = req.nextUrl.searchParams.get('userId') ?? DEMO_USER_ID;
+  const userId = actor.userId;
   const id = req.nextUrl.searchParams.get('id');
 
   if (id) {

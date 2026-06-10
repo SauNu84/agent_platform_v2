@@ -7,16 +7,17 @@ import { notFound } from 'next/navigation';
 import { getStore } from '@/db';
 import { getCourse, getCourseProgress } from '@/services/courses';
 import CoursePlayer from '@/components/CoursePlayer';
-import { DEMO_USER_ID } from '@/coach/demo-user';
+import { requirePageActor } from '@/services/current-user';
 
 export const dynamic = 'force-dynamic';
 
 export default async function CourseDetailPage({ params }: { params: { slug: string } }) {
   const store = getStore();
+  const { userId } = await requirePageActor();
   const course = await getCourse(store, params.slug);
   if (!course) notFound();
 
-  const progress = await getCourseProgress(store, course, DEMO_USER_ID);
+  const progress = await getCourseProgress(store, course, userId);
   const coach = course.coachId ? await store.getCoachById(course.coachId) : null;
 
   return (

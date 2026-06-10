@@ -14,6 +14,37 @@ import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 
 export type ContentEntityType = 'scenario' | 'coach' | 'course';
 
+// ── AuthN + RBAC (Slice 5, SAU-229 / ADR-007) ──────────────────────────────
+/** A local-identity user (email + password hash). */
+export interface UserRecord {
+  id: string;
+  email: string;
+  passwordHash: string;
+  displayName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewUser {
+  email: string;
+  passwordHash: string;
+  displayName: string;
+  /** optional explicit id (seed reproducibility); else DB-assigned */
+  id?: string;
+}
+
+/** A resolved server-side session token. */
+export interface AuthSessionRecord {
+  token: string;
+  userId: string;
+  expiresAt: string;
+}
+
+/** Owner attribution for content writes (null = platform/seeded content). */
+export interface OwnerOpts {
+  ownerUserId?: string | null;
+}
+
 export interface ContentSourceRecord {
   entityType: ContentEntityType;
   entityId: string;
@@ -196,7 +227,7 @@ export interface Store {
   listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]>;
   getScenarioBySlug(slug: string): Promise<ScenarioRecord | null>;
   getScenarioById(id: string): Promise<ScenarioRecord | null>;
-  createScenario(rec: CompiledScenarioRecord): Promise<ScenarioRecord>;
+  createScenario(rec: CompiledScenarioRecord, owner?: OwnerOpts): Promise<ScenarioRecord>;
   updateScenario(slug: string, patch: Partial<CompiledScenarioRecord>): Promise<ScenarioRecord | null>;
   deleteScenario(slug: string): Promise<boolean>;
 
@@ -204,6 +235,7 @@ export interface Store {
   upsertScenarioFromCompile(
     rec: CompiledScenarioRecord,
     source: { repoPath: string; contentHash: string; revision: string | null },
+    owner?: OwnerOpts,
   ): Promise<{ scenario: ScenarioRecord; source: ContentSourceRecord; created: boolean }>;
   getContentSource(entityType: ContentEntityType, entityId: string): Promise<ContentSourceRecord | null>;
 
@@ -216,6 +248,7 @@ export interface Store {
   upsertCoachFromCompile(
     rec: CompiledCoachRecord,
     source: ContentSourceInput,
+    owner?: OwnerOpts,
   ): Promise<{ coach: CoachRecord; source: ContentSourceRecord; created: boolean }>;
 
   // ── Course CRUD (Slice 3 — ordered Scenario refs + optional coach) ──────────
@@ -227,6 +260,7 @@ export interface Store {
   upsertCourseFromCompile(
     rec: CompiledCourseRecord,
     source: ContentSourceInput,
+    owner?: OwnerOpts,
   ): Promise<{ course: CourseRecord; source: ContentSourceRecord; created: boolean }>;
 
   // ── Share links (SAU-225) — short code ↔ scenario, idempotent per scenario ───
@@ -281,6 +315,22 @@ export interface Store {
   listConsent(userId: string, scope: string): Promise<ConsentRecord[]>;
   recordAuditEvent(ev: AuditEvent): Promise<void>;
   listAuditEvents(subjectUserId: string): Promise<(AuditEvent & { ts: string })[]>;
+
+  // ── AuthN + RBAC (Slice 5, SAU-229) ─────────────────────────────────────────
+  createUser(input: NewUser): Promise<UserRecord>;
+  getUserByEmail(email: string): Promise<UserRecord | null>;
+  getUserById(id: string): Promise<UserRecord | null>;
+  listUsers(): Promise<UserRecord[]>;
+
+  createAuthSession(token: string, userId: string, expiresAt: string): Promise<void>;
+  getAuthSession(token: string): Promise<AuthSessionRecord | null>;
+  deleteAuthSession(token: string): Promise<void>;
+
+  /** Assign a role to a user (replaces any existing role — MVP is single-role). */
+  setUserRole(userId: string, role: string): Promise<void>;
+  getUserRole(userId: string): Promise<string | null>;
+  /** Resolve a role to its capability list (from role_capability config). */
+  getRoleCapabilities(role: string): Promise<string[]>;
 }
 
 // Re-export commonly used domain types for store consumers.

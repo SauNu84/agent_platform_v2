@@ -90,7 +90,49 @@ Both together = the full real stack. Combine the exports from §1 and §2 before
 `npm run dev`.
 
 Checks: `npm run typecheck` · `npm run lint` · `npm test` (compiler round-trip, CRUD,
-voice-session persistence + metering — all run hermetically, no infra).
+voice-session persistence + metering, **auth + RBAC permission tests** — all run
+hermetically, no infra; the Postgres RLS test self-skips without `DATABASE_URL`).
+
+## Authentication & RBAC (Slice 5, SAU-229 · [ADR-007](../docs/adr/ADR-007-rbac-roles-and-permissions.md))
+
+Login is required — unauthenticated requests are redirected to `/login` (pages)
+or get `401` (API). Auth is email+password behind a provider seam
+(`src/auth/provider.ts`) so an org SSO/OIDC provider can replace it without
+touching the session/RBAC layers. Sessions are server-side tokens in an httpOnly
+cookie (`auth_session`), so logout/expiry are server-enforced.
+
+**Roles are capability bundles, stored as config** (`role_capability`), not
+hard-coded. MVP ships two roles the UI gates on (`user`, `admin`); `operator` is
+also defined so role differentiation is testable now (B2B surfaces it later).
+
+| Capability | user | operator | admin |
+|---|:--:|:--:|:--:|
+| `practice`, `author_content` (own) | ✅ | ✅ | ✅ |
+| `assign_to_users`, `view_identified_results` | ❌ | ✅ | ✅ |
+| `manage_org_members`, `manage_billing`, `platform_admin` | ❌ | ❌ | ✅ |
+
+**Two-layer enforcement:** a capability/ownership guard at the API/route layer
+(`src/auth/guard.ts`, `src/auth/api-guard.ts`) **and** Postgres Row-Level Security
+(`FORCE`, migration 0005) on `scenario`/`coach`/`course`/`session`, mirroring the
+proven `coach_memory` pattern. The app binds the acting user into a request-scoped
+context (`src/auth/actor.ts`); `PgStore` sets `app.user_id` / `app.is_admin` per
+transaction so the policies scope every row. Public reads (`is_public` /
+`course.visibility` / null-owner platform content) keep working for anyone.
+
+### Seeded test users (for QA)
+
+One account per role exists out of the box. **Dev/QA only** — never seed these in
+production.
+
+| Email | Password | Role |
+|---|---|---|
+| `user@demo.test` | `password123` | user |
+| `admin@demo.test` | `password123` | admin |
+| `operator@demo.test` | `password123` | operator |
+
+- **Zero-infra (in-memory):** these users are auto-seeded on boot — just open the
+  app and sign in.
+- **Postgres:** `npm run seed` (or `npm run seed:users`) creates them durably.
 
 ## How it fits together
 

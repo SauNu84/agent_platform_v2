@@ -14,17 +14,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getScenario } from '@/services/scenarios';
 import { runChatTurn } from '@/chat/chat-session';
-import { currentUserId } from '@/services/current-user';
+import { getActor } from '@/services/current-user';
 import type { ChatTurn } from '@/chat/responder';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest, { params }: { params: { slug: string } }) {
   const store = getStore();
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const scenario = await getScenario(store, params.slug);
   if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
-  let body: { message?: string; history?: ChatTurn[]; sessionId?: string; userId?: string } = {};
+  let body: { message?: string; history?: ChatTurn[]; sessionId?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
         .map((t) => ({ role: t.role, text: t.text }))
     : [];
 
-  const userId = body.userId ?? currentUserId(req);
+  const userId = actor.userId;
 
   try {
     const result = await runChatTurn({ store, scenario, message, history, sessionId: body.sessionId, userId });

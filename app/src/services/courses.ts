@@ -8,7 +8,7 @@ import {
 } from '@/domain/course';
 import { compileCourseContent, CourseCompileError } from '@/compiler/course-compile';
 import { sha256 } from '@/compiler/compile';
-import type { CourseRecord, ScenarioRecord, Store } from '@/db/store';
+import type { CourseRecord, OwnerOpts, ScenarioRecord, Store } from '@/db/store';
 
 export { CourseCompileError };
 
@@ -34,17 +34,18 @@ export async function createCourseFromMarkdown(
   store: Store,
   raw: string,
   opts: { repoPath?: string; revision?: string | null } = {},
+  owner?: OwnerOpts,
 ): Promise<{ course: CourseRecord; created: boolean }> {
   const { record, contentHash } = compileCourseContent(raw);
   const res = await store.upsertCourseFromCompile(record, {
     repoPath: opts.repoPath ?? `inline:${record.slug}.course.md`,
     contentHash,
     revision: opts.revision ?? null,
-  });
+  }, owner);
   return { course: res.course, created: res.created };
 }
 
-export async function createCourseFromJson(store: Store, body: unknown): Promise<CourseRecord> {
+export async function createCourseFromJson(store: Store, body: unknown, owner?: OwnerOpts): Promise<CourseRecord> {
   const parsed = courseFrontmatterSchema.safeParse(body);
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
@@ -57,7 +58,7 @@ export async function createCourseFromJson(store: Store, body: unknown): Promise
     repoPath: `api:${record.slug}`,
     contentHash: sha256(JSON.stringify(body)),
     revision: null,
-  });
+  }, owner);
   return res.course;
 }
 

@@ -10,12 +10,13 @@ import CoachMemoryPanel from '@/components/CoachMemoryPanel';
 import { getCoach, resolveCoachScenario } from '@/services/coaches';
 import { getCoachConsent, CONSENT_POLICY_TEXT, CONSENT_POLICY_VERSION } from '@/coach/consent';
 import { describeSchedule, nextOccurrence } from '@/coach/schedule';
-import { DEMO_USER_ID } from '@/coach/demo-user';
+import { requirePageActor } from '@/services/current-user';
 
 export const dynamic = 'force-dynamic';
 
 export default async function CoachDetailPage({ params }: { params: { slug: string } }) {
   const store = getStore();
+  const { userId } = await requirePageActor();
   const coach = await getCoach(store, params.slug);
   if (!coach) notFound();
   const scenario = await resolveCoachScenario(store, coach);
@@ -28,13 +29,13 @@ export default async function CoachDetailPage({ params }: { params: { slug: stri
     );
   }
 
-  const sessions = await store.listSessionsByCoachUser(coach.id, DEMO_USER_ID);
+  const sessions = await store.listSessionsByCoachUser(coach.id, userId);
   const initialSessions: SessionSummary[] = sessions.map((s) => ({
     id: s.id, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt, turns: s.transcript?.turns ?? [],
   }));
 
-  const consent = await getCoachConsent(store, DEMO_USER_ID, coach.id);
-  const memories = await store.listCoachMemory(coach.id, DEMO_USER_ID);
+  const consent = await getCoachConsent(store, userId, coach.id);
+  const memories = await store.listCoachMemory(coach.id, userId);
   const next = nextOccurrence(coach.schedule, Date.now());
 
   return (

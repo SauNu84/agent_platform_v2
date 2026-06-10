@@ -5,13 +5,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { listSessionHistory, historyToCsv, type HistoryFilter } from '@/services/history';
-import { currentUserId } from '@/services/current-user';
+import { getActor } from '@/services/current-user';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const store = getStore();
-  const userId = currentUserId(req);
+  const actor = await getActor();
+  if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+  const userId = actor.userId;
   const sp = req.nextUrl.searchParams;
   const filter: HistoryFilter = {};
   if (sp.get('scenario')) filter.scenarioSlug = sp.get('scenario')!;

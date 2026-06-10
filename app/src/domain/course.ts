@@ -80,6 +80,8 @@ export interface CourseRecord {
   coachId: string | null;
   /** ordered scenario ids, resolved from the join (position-sorted) */
   scenarioIds: string[];
+  /** owning user (null = platform/seeded content); enforced by RLS (SAU-229) */
+  ownerUserId: string | null;
   createdAt: string;
   updatedAt: string;
 }

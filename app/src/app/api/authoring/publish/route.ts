@@ -16,10 +16,15 @@ import {
   ScenarioCompileError, CourseCompileError,
   type ScenarioDraft, type CourseDraft,
 } from '@/authoring/pipeline';
+import { actorWithCapability } from '@/auth/api-guard';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const gate = await actorWithCapability('author_content');
+  if ('response' in gate) return gate.response;
+  const ownerUserId = gate.actor.userId;
+
   let body: Record<string, unknown>;
   try {
     body = await req.json();
@@ -39,10 +44,10 @@ export async function POST(req: NextRequest) {
   const store = getStore();
   try {
     if (draft.kind === 'course') {
-      const { course, scenarios } = await publishCourseDraft(store, draft as CourseDraft, { approvedBy });
+      const { course, scenarios } = await publishCourseDraft(store, draft as CourseDraft, { approvedBy, ownerUserId });
       return NextResponse.json({ course, scenarios }, { status: 201 });
     }
-    const scenario = await publishScenarioDraft(store, draft as ScenarioDraft, { approvedBy });
+    const scenario = await publishScenarioDraft(store, draft as ScenarioDraft, { approvedBy, ownerUserId });
     return NextResponse.json({ scenario }, { status: 201 });
   } catch (e) {
     if (e instanceof ScenarioCompileError || e instanceof CourseCompileError) {
