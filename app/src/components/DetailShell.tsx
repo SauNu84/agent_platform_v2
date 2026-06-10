@@ -43,6 +43,12 @@ export interface DetailShellProps {
    * this; the endpoint answers 403 for private ones and we surface that note.
    */
   shareEndpoint?: string;
+  /**
+   * When set, a **Remix** button clones this scenario's config into a new editable
+   * draft owned by the current user (SAU-226). It links to the Scenario Studio
+   * create form pre-filled from the source (`/scenarios/create?remix={slug}`).
+   */
+  remixHref?: string;
 }
 
 type Tab = 'details' | 'sessions' | 'analytics';
@@ -200,6 +206,11 @@ export default function DetailShell(props: DetailShellProps) {
           <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode})</p>
         </div>
         <div className="join-actions">
+          {props.remixHref && (
+            <a className="btn btn-secondary" href={props.remixHref} title="Clone this scenario into an editable copy you own">
+              ⎘ Remix
+            </a>
+          )}
           {props.shareEndpoint && (
             <button className="btn btn-secondary" onClick={share} disabled={sharing} title="Create a shareable link">
               {sharing ? 'Sharing…' : '🔗 Share'}

@@ -4,10 +4,15 @@
  * Scenario Studio — Classic create form (SAU-214 board request).
  * Fields: Name → auto-slug, Public Description, AI Instructions, Rubric (optional rows), Visibility.
  * Submits JSON to POST /api/scenarios; on success redirects to the new scenario detail page.
+ *
+ * Remix (SAU-226): opened with `?remix={slug}` it fetches that scenario and
+ * pre-fills the form from a cloned config (buildRemixConfig) so the user can edit
+ * and save it as their own private draft — the same create path, no separate API.
  */
-import { useState, useId } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState, useId } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { buildRemixConfig } from '@/services/remix';
 
 interface RubricRow { topic: string; weight: number; note: string; }
 
@@ -48,9 +53,10 @@ function toSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
 
-export default function CreateScenarioPage() {
+function CreateScenarioForm() {
   const router = useRouter();
   const uid = useId();
+  const remixFrom = useSearchParams().get('remix');
 
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
@@ -61,6 +67,38 @@ export default function CreateScenarioPage() {
   const [rubric, setRubric] = useState<RubricRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Remix provenance (SAU-226): when seeded from a source scenario we carry the
+  // cloned voice + metadata through submit so the draft is a faithful copy.
+  const [remixedName, setRemixedName] = useState<string | null>(null);
+  const [voice, setVoice] = useState<{ name: string; language: string } | null>(null);
+  const [carriedMetadata, setCarriedMetadata] = useState<Record<string, unknown> | null>(null);
+
+  // Pre-fill from the source scenario's config when opened as a remix.
+  useEffect(() => {
+    if (!remixFrom) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/scenarios/${remixFrom}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `Could not load "${remixFrom}" to remix`);
+        if (cancelled) return;
+        const draft = buildRemixConfig(data.scenario);
+        setName(draft.name);
+        setSlug(draft.slug);
+        setDescription(draft.description ?? '');
+        setPersona(draft.persona);
+        setVisibility(draft.visibility);
+        setRubric(draft.rubric.map((r) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' })));
+        setVoice(draft.voice);
+        setCarriedMetadata(draft.metadata);
+        setRemixedName(data.scenario.name);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [remixFrom]);
 
   function applyTemplate(t: Template) {
     setName(t.name);
@@ -110,7 +148,10 @@ export default function CreateScenarioPage() {
           persona,
           rubric: rubric.filter((r) => r.topic.trim()),
           visibility,
-          metadata: { _source: 'user' },
+          // Remix carries the cloned voice + source metadata (incl. _remixedFrom);
+          // a fresh scenario just marks itself user-authored.
+          voice: voice ?? undefined,
+          metadata: carriedMetadata ?? { _source: 'user' },
         }),
       });
       const data = await res.json();
@@ -135,9 +176,16 @@ export default function CreateScenarioPage() {
       <div className="studio-form">
         <nav className="studio-nav">
           <Link href="/library" className="back-link">← Scenarios</Link>
-          <span className="studio-mode-badge">Classic</span>
+          <span className="studio-mode-badge">{remixFrom ? 'Remix' : 'Classic'}</span>
         </nav>
-        <h1 className="studio-title">Scenario Studio</h1>
+        <h1 className="studio-title">{remixFrom ? 'Remix Scenario' : 'Scenario Studio'}</h1>
+
+        {remixedName && (
+          <div className="notice" role="status">
+            Remixing <strong>{remixedName}</strong> — edit anything below and save it as your own
+            private draft. It won&apos;t touch the original.
+          </div>
+        )}
 
         {/* Templates */}
         <section className="studio-section">
@@ -266,7 +314,7 @@ export default function CreateScenarioPage() {
 
           <div className="form-actions">
             <button type="submit" className="btn" disabled={submitting || !slug || !persona}>
-              {submitting ? 'Creating…' : 'Create Scenario'}
+              {submitting ? 'Creating…' : remixFrom ? 'Save Remix' : 'Create Scenario'}
             </button>
             <Link href="/library" className="btn-ghost">Cancel</Link>
           </div>
@@ -295,5 +343,14 @@ export default function CreateScenarioPage() {
         )}
       </aside>
     </div>
+  );
+}
+
+// useSearchParams (remix) requires a Suspense boundary at the route level.
+export default function CreateScenarioPage() {
+  return (
+    <Suspense fallback={null}>
+      <CreateScenarioForm />
+    </Suspense>
   );
 }

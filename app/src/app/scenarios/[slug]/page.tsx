@@ -41,6 +41,8 @@ export default async function ScenarioDetailPage({ params }: { params: { slug: s
       // SAU-225: public scenarios get a Share button → stable /s/{code} short link.
       // Private scenarios omit it (the endpoint would 403 anyway).
       shareEndpoint={scenario.isPublic ? `/api/scenarios/${scenario.slug}/share` : undefined}
+      // SAU-226: Remix → clone this config into a new editable draft I own.
+      remixHref={`/scenarios/create?remix=${scenario.slug}`}
     />
   );
 }
