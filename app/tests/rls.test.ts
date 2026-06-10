@@ -104,3 +104,97 @@ test('scenario RLS isolates private rows by owner and lets admin bypass', { skip
     await pool.end();
   }
 });
+
+test('session projections (analysis / voice_usage / session_event) isolate by owner; admin bypasses', { skip }, async () => {
+  // The exact leak SAU-230 required closing: these projections are queried
+  // directly by session_id, so the `session` policy does not cascade. Verify
+  // each one denies a non-owner read and lets the owner + admin through.
+  const pool = new Pool({ connectionString: DB });
+  const client = await pool.connect();
+  const stamp = Date.now();
+  const slug = `rls-proj-${stamp}`;
+  let userA = '';
+  let userB = '';
+  let sessionId = '';
+  try {
+    const ra = await client.query(
+      `INSERT INTO app_user (email, password_hash, display_name) VALUES ($1,'x','A') RETURNING id`,
+      [`rls-proj-a-${stamp}@demo.test`],
+    );
+    userA = ra.rows[0].id;
+    const rb = await client.query(
+      `INSERT INTO app_user (email, password_hash, display_name) VALUES ($1,'x','B') RETURNING id`,
+      [`rls-proj-b-${stamp}@demo.test`],
+    );
+    userB = rb.rows[0].id;
+
+    // A owns a scenario, runs a session, and produces all three projections.
+    await asActor(client, { userId: userA }, async () => {
+      const sc = await client.query(
+        `INSERT INTO scenario (slug, name, ai_instructions, is_public, owner_user_id)
+         VALUES ($1,'P','x',false,$2) RETURNING id`,
+        [slug, userA],
+      );
+      const scenarioId = sc.rows[0].id;
+      const se = await client.query(
+        `INSERT INTO session (user_id, scenario_id, vendor, status) VALUES ($1,$2,'mock','completed') RETURNING id`,
+        [userA, scenarioId],
+      );
+      sessionId = se.rows[0].id;
+      await client.query(
+        `INSERT INTO analysis (session_id, scenario_id, user_id, scorer, overall_score, final_score)
+         VALUES ($1,$2,$3,'heuristic',80,80)`,
+        [sessionId, scenarioId, userA],
+      );
+      await client.query(
+        `INSERT INTO voice_usage (session_id, user_id, scenario_id, vendor) VALUES ($1,$2,$3,'mock')`,
+        [sessionId, userA, scenarioId],
+      );
+      await client.query(
+        `INSERT INTO session_event (session_id, type, payload)
+         VALUES ($1,'user.transcript','{"text":"secret"}'::jsonb)`,
+        [sessionId],
+      );
+    });
+
+    // B (a different authenticated user) must read NONE of A's projections —
+    // even though B knows the session UUID.
+    await asActor(client, { userId: userB }, async () => {
+      const an = await client.query('SELECT 1 FROM analysis WHERE session_id = $1', [sessionId]);
+      assert.equal(an.rowCount, 0, "B must not read A's analysis (report card) by session_id");
+      const vu = await client.query('SELECT 1 FROM voice_usage WHERE session_id = $1', [sessionId]);
+      assert.equal(vu.rowCount, 0, "B must not read A's voice_usage by session_id");
+      const ev = await client.query('SELECT 1 FROM session_event WHERE session_id = $1', [sessionId]);
+      assert.equal(ev.rowCount, 0, "B must not read A's transcript turns by session_id");
+    });
+
+    // Anonymous (no GUC set) also reads nothing.
+    const anon = await client.query('SELECT 1 FROM analysis WHERE session_id = $1', [sessionId]);
+    assert.equal(anon.rowCount, 0, 'anonymous must not read any analysis row');
+
+    // The owner reads all three back.
+    await asActor(client, { userId: userA }, async () => {
+      const an = await client.query('SELECT final_score FROM analysis WHERE session_id = $1', [sessionId]);
+      assert.equal(an.rowCount, 1, 'owner reads their own analysis');
+      const ev = await client.query('SELECT 1 FROM session_event WHERE session_id = $1', [sessionId]);
+      assert.equal(ev.rowCount, 1, 'owner reads their own transcript turns');
+    });
+
+    // Admin bypasses (DSAR/support).
+    await asActor(client, { isAdmin: true }, async () => {
+      const an = await client.query('SELECT 1 FROM analysis WHERE session_id = $1', [sessionId]);
+      assert.equal(an.rowCount, 1, 'admin reads any analysis row');
+      const ev = await client.query('SELECT 1 FROM session_event WHERE session_id = $1', [sessionId]);
+      assert.equal(ev.rowCount, 1, 'admin reads any transcript turns');
+    });
+  } finally {
+    // Cleanup as admin (session cascade removes events/usage/analysis FKs).
+    await asActor(client, { isAdmin: true }, async () => {
+      if (sessionId) await client.query('DELETE FROM session WHERE id = $1', [sessionId]);
+      await client.query('DELETE FROM scenario WHERE slug = $1', [slug]);
+    });
+    if (userA) await client.query('DELETE FROM app_user WHERE id = ANY($1)', [[userA, userB]]);
+    client.release();
+    await pool.end();
+  }
+});

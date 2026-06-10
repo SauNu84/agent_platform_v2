@@ -208,3 +208,69 @@ CREATE POLICY session_owner ON session FOR ALL
         current_setting('app.is_admin', true) = 'on'
         OR user_id = nullif(current_setting('app.user_id', true), '')::uuid
     );
+
+-- ── Session projections (analysis / voice_usage / session_event) ─────────────
+-- These carry *identified* per-user results (report cards/scores, metering, raw
+-- transcript turns) and are queried DIRECTLY by session_id, so the `session`
+-- policy above does NOT cascade to them. Without their own policies a caller
+-- with a session UUID could read another user's analysis/transcript via the
+-- projection (e.g. GET /api/sessions/[id]/analyze → SELECT … WHERE session_id=$1).
+-- This is the `view_identified_results` boundary (ADR-007) and the canonical ERD
+-- already states RLS should extend to session/session_event/analysis. (SAU-230)
+--
+-- analysis + voice_usage carry a denormalized user_id → scope by it directly,
+-- mirroring session_owner. session_event has no user_id → scope via its parent
+-- session's user_id (the parent is itself RLS-protected, so the subquery is
+-- doubly safe).
+
+-- analysis ----------------------------------------------------------------------
+ALTER TABLE analysis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE analysis FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS analysis_owner ON analysis;
+CREATE POLICY analysis_owner ON analysis FOR ALL
+    USING (
+        current_setting('app.is_admin', true) = 'on'
+        OR user_id = nullif(current_setting('app.user_id', true), '')::uuid
+    )
+    WITH CHECK (
+        current_setting('app.is_admin', true) = 'on'
+        OR user_id = nullif(current_setting('app.user_id', true), '')::uuid
+    );
+
+-- voice_usage -------------------------------------------------------------------
+ALTER TABLE voice_usage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE voice_usage FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS voice_usage_owner ON voice_usage;
+CREATE POLICY voice_usage_owner ON voice_usage FOR ALL
+    USING (
+        current_setting('app.is_admin', true) = 'on'
+        OR user_id = nullif(current_setting('app.user_id', true), '')::uuid
+    )
+    WITH CHECK (
+        current_setting('app.is_admin', true) = 'on'
+        OR user_id = nullif(current_setting('app.user_id', true), '')::uuid
+    );
+
+-- session_event -----------------------------------------------------------------
+-- No user_id column; scope to the parent session's owner. The EXISTS subquery is
+-- itself filtered by session's RLS, so a non-owner sees no parent → no events.
+ALTER TABLE session_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE session_event FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS session_event_owner ON session_event;
+CREATE POLICY session_event_owner ON session_event FOR ALL
+    USING (
+        current_setting('app.is_admin', true) = 'on'
+        OR EXISTS (
+            SELECT 1 FROM session s
+            WHERE s.id = session_event.session_id
+              AND s.user_id = nullif(current_setting('app.user_id', true), '')::uuid
+        )
+    )
+    WITH CHECK (
+        current_setting('app.is_admin', true) = 'on'
+        OR EXISTS (
+            SELECT 1 FROM session s
+            WHERE s.id = session_event.session_id
+              AND s.user_id = nullif(current_setting('app.user_id', true), '')::uuid
+        )
+    );
