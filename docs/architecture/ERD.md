@@ -1,6 +1,7 @@
 # ERD — Agent Platform canonical data model
 
-- **Date:** 2026-06-06 (rev 2026-06-08, SAU-200 Slice-1 review) · **Author:** Enterprise Architect · **Issue:** SAU-175
+- **Date:** 2026-06-06 (rev 2026-06-10, SAU-229 Slice-5 review) · **Author:** Enterprise Architect · **Issue:** SAU-175
+- **Rev 2026-06-10 (SAU-229/SAU-230):** back-ported the Slice-5 identity + capability-RBAC model — concrete `app_user` (was the abstract `USER` entity), `auth_session`, `user_role`, `role_capability` ([ADR-007](../adr/ADR-007-rbac-roles-and-permissions.md)) — plus `owner_user_id` on `scenario`/`coach`/`course` and the now-FK'd `session.user_id`. Recorded the FORCE-RLS ownership backstop and the **required extension of RLS to the session projections** (`analysis`/`session_event`/`voice_usage`) in the Tenancy note.
 - **Rev 2026-06-08:** back-ported the Slice-1 `voice_usage` metering table into the canonical model; documented `session.transcript` inline-vs-`transcript_uri` expand-contract; reconciled `session_event.type` vocabulary to the dot-notation used by the `RealtimeVoiceProvider` contract (ADR-003/005). No changes to compiled-table semantics.
 - **Source design:** `docs/SAU-171-brandstorm-architecture.md` §3–§6
 - **Governing ADRs:** [ADR-001](../adr/ADR-001-scenario-as-core-primitive.md) (Scenario primitive), [ADR-002](../adr/ADR-002-content-as-code.md) (MD source-of-truth → `content_source`), [ADR-004](../adr/ADR-004-coach-memory-model.md) (`coach_memory`, `consent_record`), [ADR-005](../adr/ADR-005-multimodal-tool-protocol.md) (`session_event`)
@@ -183,6 +184,46 @@ erDiagram
     }
 ```
 
+## Identity & RBAC (Slice 5 — ADR-007)
+
+The abstract `USER` entity above is realized by `app_user`. Identity is intentionally minimal (email + scrypt `password_hash`) behind an app-level auth seam — swappable for org SSO without a schema change. **Roles are config, not code:** `user_role` maps a user to a role; `role_capability` maps a role to atomic capabilities (the vocabulary is `CHECK`-fixed, the bundling is data). MVP ships 2 roles (`user`, `admin`); `operator` is seeded for B2B differentiation. The meaningful privacy boundary is the `view_identified_results` capability ([ADR-007](../adr/ADR-007-rbac-roles-and-permissions.md) §capabilities). `assignment` / `org_id` / `data_class` are deferred B2B seams, not built.
+
+```mermaid
+erDiagram
+    APP_USER ||--o{ AUTH_SESSION : "authenticates via"
+    APP_USER ||--o{ USER_ROLE : "assigned"
+    USER_ROLE }o--|| ROLE_CAPABILITY : "resolved against (by role name)"
+    APP_USER ||--o{ SCENARIO : "owns (owner_user_id)"
+    APP_USER ||--o{ COACH : "owns (owner_user_id)"
+    APP_USER ||--o{ COURSE : "owns (owner_user_id)"
+    APP_USER ||--o{ SESSION : "runs (user_id FK)"
+
+    APP_USER {
+        uuid id PK
+        text email UK "lower-cased by app"
+        text password_hash "self-describing scrypt; never reversible"
+        text display_name
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    AUTH_SESSION {
+        text token PK "opaque; httpOnly cookie value"
+        uuid user_id FK
+        timestamptz created_at
+        timestamptz expires_at "server-enforced expiry/logout"
+    }
+    USER_ROLE {
+        uuid user_id FK
+        text role "PK(user_id, role); MVP = exactly one"
+    }
+    ROLE_CAPABILITY {
+        text role "PK(role, capability)"
+        text capability "CHECK-fixed vocabulary (7 atomic caps)"
+    }
+```
+
+> **Ownership columns** (`scenario.owner_user_id`, `coach.owner_user_id`, `course.owner_user_id`) are **nullable** — `NULL` = platform/seeded content, world-readable. Added expand-contract; `session.user_id` gained its FK `NOT VALID` so pre-auth demo rows aren't retro-validated while new writes are enforced.
+
 ## History (projection — view, not a table)
 
 ```sql
@@ -201,7 +242,9 @@ LEFT JOIN analysis a ON a.session_id = s.id;
 
 - **Hot indexes:** `session(user_id, started_at)` (History), `session(scenario_id)` (creator analytics), `session_event(session_id, ts)` (replay/Analyst), `analysis(session_id)` UNIQUE, `voice_usage(session_id)` UNIQUE + `voice_usage(user_id, created_at)` (per-user metering rollup) + `voice_usage(scenario_id)` (creator cost analytics), `scenario(metadata)` GIN (Library metadata filter), `coach_memory(coach_id, user_id, created_at)` + ANN index on `coach_memory.embedding`, `course_scenario(course_id, position)` PK.
 - **FKs indexed** on every relationship column (SOUL red flag: missing FK indexes).
-- **Tenancy ([ADR-004](../adr/ADR-004-coach-memory-model.md), CISO-mandated):** `coach_memory` access scoped by `(coach_id, user_id)` at the app layer, with **Postgres RLS mandated** as the defense-in-depth backstop — request-scoped `SET LOCAL app.user_id = <uuid>`; policy `USING (user_id = current_setting('app.user_id')::uuid)`; user-facing queries run under a non-bypass role. Waiving RLS requires CISO+CTO sign-off plus compensating controls (single data-access module, CI gate, prod cross-tenant canary). RLS *should* extend to `session`/`session_event`/`analysis`.
+- **Tenancy ([ADR-004](../adr/ADR-004-coach-memory-model.md), CISO-mandated):** `coach_memory` access scoped by `(coach_id, user_id)` at the app layer, with **Postgres RLS mandated** as the defense-in-depth backstop — request-scoped `SET LOCAL app.user_id = <uuid>`; policy `USING (user_id = current_setting('app.user_id')::uuid)`; user-facing queries run under a non-bypass role. Waiving RLS requires CISO+CTO sign-off plus compensating controls (single data-access module, CI gate, prod cross-tenant canary).
+- **Ownership RLS (Slice 5, [ADR-007](../adr/ADR-007-rbac-roles-and-permissions.md), SAU-229):** `scenario`/`coach`/`course`/`session` enforce FORCE RLS on `owner_user_id` (sessions on `user_id`), with public reads via `is_public`/`course.visibility`/null-owner. The app sets `app.user_id` + `app.is_admin` GUCs per transaction from a request-scoped actor (`SET LOCAL` via `set_config(...,true)`), mirroring the coach_memory pattern. A holder of `platform_admin` sets `app.is_admin='on'` (full bypass for DSAR/support).
+- **RLS MUST extend to the session projections (`analysis`, `session_event`, `voice_usage`).** These carry *identified* per-user results (scores/report cards, raw transcript turns, metering) and are queried directly by `session_id`; `session`'s RLS does **not** cascade to them, so without their own policies a non-owner who supplies a session UUID reads another user's identified results — the exact `view_identified_results` boundary ADR-007 gates. Scope `analysis`/`voice_usage` by their denormalized `user_id`; scope `session_event` via an `EXISTS` against the owning `session`. (Tracked as the one required change on SAU-229.)
 - **Consent provenance:** `consent_record` is append-only (revocation = new row); `consent_record(user_id, scope, created_at)` index for state reconstruction. Retained processing-duration + 6y, independent of memory erasure.
 - **Audit logging:** memory write/retrieval/delete, consent change, export, DSAR action, and all staff access are logged append-only/tamper-evident, **no PII content**, ≥18-mo retention ([ADR-004](../adr/ADR-004-coach-memory-model.md) §DSAR + audit logging).
 - **Migrations:** all schema changes to compiled tables follow expand-contract (the compiler is downstream; never break it mid-deploy).
