@@ -38,9 +38,10 @@ export default async function ScenarioDetailPage({ params }: { params: { slug: s
       // the live/simulated voice demo. The sessions endpoint above is still used
       // to load the existing transcript history.
       chatEndpoint={`/api/scenarios/${scenario.slug}/chat`}
-      // SAU-225: public scenarios get a Share button → stable /s/{code} short link.
-      // Private scenarios omit it (the endpoint would 403 anyway).
-      shareEndpoint={scenario.isPublic ? `/api/scenarios/${scenario.slug}/share` : undefined}
+      // Board direction (2026-06-10): the scenario detail action bar surfaces
+      // "Chat + Remix only" — the Share button is intentionally not surfaced here.
+      // The SAU-225 short-link service + /s/{code} route + /share endpoint remain
+      // intact (still tested), so re-enabling is a one-line `shareEndpoint` change.
       // SAU-226: Remix → clone this config into a new editable draft I own.
       remixHref={`/scenarios/create?remix=${scenario.slug}`}
     />
