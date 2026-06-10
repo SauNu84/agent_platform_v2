@@ -34,6 +34,10 @@ export default async function ScenarioDetailPage({ params }: { params: { slug: s
       voice={{ name: scenario.voiceName, languageCode: scenario.languageCode }}
       initialSessions={initialSessions}
       sessionsEndpoint={`/api/scenarios/${scenario.slug}/sessions`}
+      // SAU-224: scenario detail offers a text Chat with the persona instead of
+      // the live/simulated voice demo. The sessions endpoint above is still used
+      // to load the existing transcript history.
+      chatEndpoint={`/api/scenarios/${scenario.slug}/chat`}
     />
   );
 }

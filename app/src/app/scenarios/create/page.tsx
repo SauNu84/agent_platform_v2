@@ -213,7 +213,7 @@ export default function CreateScenarioPage() {
             <label htmlFor={`${uid}-persona`} className="form-label">
               AI Instructions <span className="form-required">*</span>
             </label>
-            <p className="form-hint-block">Define the AI's personality, tone, and conversation agenda. Include: 1) Role &amp; tone, 2) Questions to ask, 3) How to end the session.</p>
+            <p className="form-hint-block">Define the AI&apos;s personality, tone, and conversation agenda. Include: 1) Role &amp; tone, 2) Questions to ask, 3) How to end the session.</p>
             <textarea
               id={`${uid}-persona`}
               className="form-textarea form-textarea-tall"

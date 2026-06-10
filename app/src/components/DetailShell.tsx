@@ -10,6 +10,7 @@
  */
 import { useState } from 'react';
 import type { RubricItem } from '@/domain/scenario';
+import ChatPanel from './ChatPanel';
 
 export interface SessionSummary {
   id: string;
@@ -30,6 +31,12 @@ export interface DetailShellProps {
   voice: { name: string; languageCode: string };
   initialSessions: SessionSummary[];
   sessionsEndpoint: string;
+  /**
+   * When set, this surface offers a text **Chat** with the persona (SAU-224) and
+   * the live/simulated voice demo CTA is removed. The voice path (below) is left
+   * intact for surfaces that don't pass this (Coach/Course) — reversible.
+   */
+  chatEndpoint?: string;
 }
 
 type Tab = 'details' | 'sessions' | 'analytics';
@@ -43,6 +50,20 @@ export default function DetailShell(props: DetailShellProps) {
   const [error, setError] = useState<string | null>(null);
   // After join: show transcript inline so the board sees the interview/discussion result.
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
+  // Text chat overlay (SAU-224) — replaces the live/simulated demo on this surface.
+  const [chatOpen, setChatOpen] = useState(false);
+
+  // Upsert a session into the list so the Sessions tab + count stay live as a chat
+  // conversation grows (each turn re-persists the same session id).
+  function upsertSession(summary: SessionSummary) {
+    setSessions((s) => {
+      const idx = s.findIndex((x) => x.id === summary.id);
+      if (idx === -1) return [summary, ...s];
+      const next = [...s];
+      next[idx] = summary;
+      return next;
+    });
+  }
 
   async function join() {
     setJoining(true);
@@ -74,6 +95,20 @@ export default function DetailShell(props: DetailShellProps) {
     } finally {
       setJoining(false);
     }
+  }
+
+  // Text chat overlay (SAU-224) — discuss with the persona over text.
+  if (chatOpen && props.chatEndpoint) {
+    return (
+      <div className="session-view">
+        <ChatPanel
+          name={props.name}
+          chatEndpoint={props.chatEndpoint}
+          onClose={() => setChatOpen(false)}
+          onSession={upsertSession}
+        />
+      </div>
+    );
   }
 
   // Show the inline conversation view after a session completes.
@@ -128,9 +163,20 @@ export default function DetailShell(props: DetailShellProps) {
           <h1>{props.name}</h1>
           <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode})</p>
         </div>
-        <button className="btn join" onClick={join} disabled={joining}>
-          {joining ? 'Connecting…' : 'Join'}
-        </button>
+        <div className="join-actions">
+          {props.chatEndpoint ? (
+            // SAU-224: this surface chats over text with the persona; the
+            // simulated voice demo CTA is removed here (voice path retained
+            // for Coach/Course surfaces, gated by SAU-193/SAU-208).
+            <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>
+              💬 Chat
+            </button>
+          ) : (
+            <button className="btn join" onClick={join} disabled={joining}>
+              {joining ? 'Connecting…' : 'Join'}
+            </button>
+          )}
+        </div>
       </div>
       {error && <div className="notice" role="alert">Join failed: {error}</div>}
 
@@ -183,7 +229,11 @@ export default function DetailShell(props: DetailShellProps) {
 
         {tab === 'sessions' && (
           sessions.length === 0 ? (
-            <p className="empty">No sessions yet. Click Join to run a live voice session.</p>
+            <p className="empty">
+              {props.chatEndpoint
+                ? 'No sessions yet. Start a Chat to have a conversation — it saves here as a session.'
+                : 'No sessions yet. Click Join to run a live voice session.'}
+            </p>
           ) : (
             <table>
               <thead><tr><th>Started</th><th>Status</th><th>Turns</th><th>Transcript</th></tr></thead>

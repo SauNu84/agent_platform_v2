@@ -262,6 +262,13 @@ td.warn { color: #d97706; font-weight: 600; }
 .turn-text  { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 15px; line-height: 1.5; }
 .turn-user .turn-text   { background: var(--accent-soft); border-color: var(--accent); }
 .session-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
+
+/* ── Text chat (SAU-224) ── */
+.chat-input { display: flex; gap: 10px; align-items: flex-end; margin-top: 8px; }
+.chat-textarea { flex: 1; resize: vertical; min-height: 44px; font: inherit; font-size: 15px; line-height: 1.5; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: inherit; }
+.chat-textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.chat-input .btn { white-space: nowrap; }
+
 .btn-ghost { color: var(--accent-2); text-decoration: none; font-size: 14px; font-family: var(--mono); }
 .btn-ghost:hover { text-decoration: underline; }
 
