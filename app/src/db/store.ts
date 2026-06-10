@@ -131,6 +131,13 @@ export interface EntitlementRecord {
   paidMinutes: number;
 }
 
+/** A shareable short link mapping a URL-safe code → scenario (SAU-225). */
+export interface ShareLinkRecord {
+  code: string;
+  scenarioId: string;
+  createdAt: string;
+}
+
 // ── Coach memory (ADR-004) ─────────────────────────────────────────────────
 export type MemoryKind = 'summary' | 'fact' | 'preference' | 'goal';
 
@@ -221,6 +228,12 @@ export interface Store {
     rec: CompiledCourseRecord,
     source: ContentSourceInput,
   ): Promise<{ course: CourseRecord; source: ContentSourceRecord; created: boolean }>;
+
+  // ── Share links (SAU-225) — short code ↔ scenario, idempotent per scenario ───
+  /** Return the scenario's existing share link, or create one. Idempotent: re-calls
+   *  for the same scenario return the SAME code. */
+  createShareLink(scenarioId: string): Promise<ShareLinkRecord>;
+  getShareLinkByCode(code: string): Promise<ShareLinkRecord | null>;
 
   // ── Sessions ─────────────────────────────────────────────────────────────────
   createSession(input: NewSession): Promise<SessionRecord>;

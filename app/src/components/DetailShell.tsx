@@ -37,6 +37,12 @@ export interface DetailShellProps {
    * intact for surfaces that don't pass this (Coach/Course) — reversible.
    */
   chatEndpoint?: string;
+  /**
+   * When set, a **Share** button mints (or returns) a stable short link to this
+   * entity and copies it to the clipboard (SAU-225). Only public scenarios pass
+   * this; the endpoint answers 403 for private ones and we surface that note.
+   */
+  shareEndpoint?: string;
 }
 
 type Tab = 'details' | 'sessions' | 'analytics';
@@ -52,6 +58,10 @@ export default function DetailShell(props: DetailShellProps) {
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
   // Text chat overlay (SAU-224) — replaces the live/simulated demo on this surface.
   const [chatOpen, setChatOpen] = useState(false);
+  // Share short link (SAU-225) — confirmation (the copied URL) + busy/error state.
+  const [shareInfo, setShareInfo] = useState<{ url: string; copied: boolean } | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   // Upsert a session into the list so the Sessions tab + count stay live as a chat
   // conversation grows (each turn re-persists the same session id).
@@ -94,6 +104,32 @@ export default function DetailShell(props: DetailShellProps) {
       setError((e as Error).message);
     } finally {
       setJoining(false);
+    }
+  }
+
+  // Share (SAU-225): mint/return the stable short link and copy it to the clipboard.
+  async function share() {
+    if (!props.shareEndpoint) return;
+    setSharing(true);
+    setShareError(null);
+    setShareInfo(null);
+    try {
+      const res = await fetch(props.shareEndpoint, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
+      const url = `${window.location.origin}${data.path}`;
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch {
+        // Clipboard can be blocked (no focus / insecure context); still show the URL.
+      }
+      setShareInfo({ url, copied });
+    } catch (e) {
+      setShareError((e as Error).message);
+    } finally {
+      setSharing(false);
     }
   }
 
@@ -164,6 +200,11 @@ export default function DetailShell(props: DetailShellProps) {
           <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode})</p>
         </div>
         <div className="join-actions">
+          {props.shareEndpoint && (
+            <button className="btn btn-secondary" onClick={share} disabled={sharing} title="Create a shareable link">
+              {sharing ? 'Sharing…' : '🔗 Share'}
+            </button>
+          )}
           {props.chatEndpoint ? (
             // SAU-224: this surface chats over text with the persona; the
             // simulated voice demo CTA is removed here (voice path retained
@@ -179,6 +220,13 @@ export default function DetailShell(props: DetailShellProps) {
         </div>
       </div>
       {error && <div className="notice" role="alert">Join failed: {error}</div>}
+      {shareError && <div className="notice" role="alert">Share failed: {shareError}</div>}
+      {shareInfo && (
+        <div className="notice" role="status">
+          {shareInfo.copied ? 'Link copied — share it with a friend: ' : 'Share this link: '}
+          <a href={shareInfo.url}>{shareInfo.url}</a>
+        </div>
+      )}
 
       <div className="tabs" role="tablist">
         {(['details', 'sessions', 'analytics'] as Tab[]).map((t) => (

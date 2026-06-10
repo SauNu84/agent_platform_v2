@@ -12,8 +12,9 @@ import type {
   AuditEvent, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, ScenarioFilter, SessionEventRow,
-  SessionHistoryRow, SessionRecord, SessionTranscript, Store, VoiceUsageRecord,
+  SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store, VoiceUsageRecord,
 } from './store';
+import { genShareCode } from '@/lib/short-code';
 
 // pg returns untyped rows; `Row` documents that we map them explicitly below.
 type Row = Record<string, any>;
@@ -115,6 +116,10 @@ function rowToMemory(r: Row): CoachMemoryRecord {
     expiresAt: new Date(r.expires_at).toISOString(),
     createdAt: new Date(r.created_at).toISOString(),
   };
+}
+
+function rowToShareLink(r: Row): ShareLinkRecord {
+  return { code: r.code, scenarioId: r.scenario_id, createdAt: new Date(r.created_at).toISOString() };
 }
 
 export class PgStore implements Store {
@@ -239,6 +244,28 @@ export class PgStore implements Store {
       contentHash: r.content_hash, revision: r.revision ?? null,
       compiledAt: new Date(r.compiled_at).toISOString(),
     };
+  }
+
+  // ── Share links (SAU-225) ────────────────────────────────────────────────────
+  async createShareLink(scenarioId: string): Promise<ShareLinkRecord> {
+    // Idempotent per scenario: the UNIQUE (scenario_id) constraint makes the
+    // INSERT a no-op on re-share; we then read back the existing (or just-created)
+    // row, so the same scenario always yields the same code.
+    const code = genShareCode();
+    const { rows } = await this.pool.query(
+      `INSERT INTO share_link (code, scenario_id) VALUES ($1, $2)
+       ON CONFLICT (scenario_id) DO NOTHING
+       RETURNING *`,
+      [code, scenarioId],
+    );
+    if (rows[0]) return rowToShareLink(rows[0]);
+    const existing = await this.pool.query('SELECT * FROM share_link WHERE scenario_id = $1', [scenarioId]);
+    return rowToShareLink(existing.rows[0]);
+  }
+
+  async getShareLinkByCode(code: string): Promise<ShareLinkRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM share_link WHERE code = $1', [code]);
+    return rows[0] ? rowToShareLink(rows[0]) : null;
   }
 
   async createSession(input: NewSession): Promise<SessionRecord> {

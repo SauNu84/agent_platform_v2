@@ -12,8 +12,9 @@ import type {
   AuditEvent, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, ScenarioFilter, SessionEventRow,
-  SessionHistoryRow, SessionRecord, SessionTranscript, Store, VoiceUsageRecord,
+  SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store, VoiceUsageRecord,
 } from './store';
+import { genShareCode } from '@/lib/short-code';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -41,6 +42,8 @@ export class MemoryStore implements Store {
   private memories = new Map<string, CoachMemoryRecord>();    // by id
   private consents: ConsentRecord[] = [];                     // append-only
   private audit: (AuditEvent & { ts: string })[] = [];        // append-only
+  private shareLinks = new Map<string, ShareLinkRecord>();    // by code
+  private scenarioToShareCode = new Map<string, string>();    // scenarioId → code (idempotency)
 
   async listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]> {
     let out = [...this.scenarios.values()];
@@ -84,6 +87,8 @@ export class MemoryStore implements Store {
     this.scenarios.delete(slug);
     this.idToSlug.delete(existing.id);
     this.sources.delete(`scenario:${existing.id}`);
+    const code = this.scenarioToShareCode.get(existing.id);
+    if (code) { this.shareLinks.delete(code); this.scenarioToShareCode.delete(existing.id); }
     return true;
   }
 
@@ -116,6 +121,22 @@ export class MemoryStore implements Store {
 
   async getContentSource(entityType: ContentEntityType, entityId: string): Promise<ContentSourceRecord | null> {
     return this.sources.get(`${entityType}:${entityId}`) ?? null;
+  }
+
+  // ── Share links (SAU-225) ────────────────────────────────────────────────────
+  async createShareLink(scenarioId: string): Promise<ShareLinkRecord> {
+    const existingCode = this.scenarioToShareCode.get(scenarioId);
+    if (existingCode) return this.shareLinks.get(existingCode)!;
+    let code = genShareCode();
+    while (this.shareLinks.has(code)) code = genShareCode();   // collision-safe
+    const rec: ShareLinkRecord = { code, scenarioId, createdAt: nowIso() };
+    this.shareLinks.set(code, rec);
+    this.scenarioToShareCode.set(scenarioId, code);
+    return rec;
+  }
+
+  async getShareLinkByCode(code: string): Promise<ShareLinkRecord | null> {
+    return this.shareLinks.get(code) ?? null;
   }
 
   // ── Coach CRUD ──────────────────────────────────────────────────────────────
