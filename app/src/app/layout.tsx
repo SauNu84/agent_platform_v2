@@ -4,6 +4,14 @@ import './globals.css';
 import { getStore } from '@/db';
 import { getMeterState } from '@/services/meter';
 import { currentUserId } from '@/services/current-user';
+import TopBar from '@/components/TopBar';
+
+// Demo identity for the user menu (pre-auth — see current-user.ts). Replaced
+// when the real identity/auth model lands.
+const DEMO_USER = { name: 'Demo User', email: 'demo@agentplatform.local', streakDays: 1 };
+
+// Applied before first paint to avoid a light→dark flash on reload (SAU-228).
+const THEME_INIT = `(function(){try{var t=localStorage.getItem('theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=d?'dark':'light';e.dataset.themePref=t;}catch(e){}})();`;
 
 export const metadata: Metadata = {
   title: 'Agent Platform — Scenarios',
@@ -33,6 +41,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   }
   return (
     <html lang="en">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+      </head>
       <body>
         <div className="app-shell">
           <nav className="side-nav">
@@ -50,7 +61,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             </ul>
             <div className="balance">Balance · {balance}</div>
           </nav>
-          <main className="content">{children}</main>
+          <main className="content">
+            <TopBar
+              userName={DEMO_USER.name}
+              userEmail={DEMO_USER.email}
+              streakDays={DEMO_USER.streakDays}
+            />
+            <div className="content-body">{children}</div>
+          </main>
         </div>
       </body>
     </html>

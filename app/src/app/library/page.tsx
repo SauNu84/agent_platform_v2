@@ -74,12 +74,12 @@ export default async function LibraryPage({
 
   return (
     <div>
+      {/* Create-Scenario CTA removed per SAU-228 (reference parity). */}
       <div className="lib-header">
         <div>
           <h1>Scenario Library</h1>
           <p className="subtitle">Hyper-realistic AI roleplay to practice high-stakes conversations.</p>
         </div>
-        <Link href="/scenarios/create" className="btn">+ Create Scenario</Link>
       </div>
 
       <LibrarySearch defaultValue={q} totalCount={all.length} />
@@ -101,10 +101,7 @@ export default async function LibraryPage({
       {scenarios.length === 0 ? (
         <div className="lib-empty">
           {activeTab === 'my' ? (
-            <>
-              <p>You haven&apos;t created any scenarios yet.</p>
-              <Link href="/scenarios/create" className="btn">Create your first scenario</Link>
-            </>
+            <p>You haven&apos;t created any scenarios yet.</p>
           ) : (
             <p>No scenarios match your search.</p>
           )}
