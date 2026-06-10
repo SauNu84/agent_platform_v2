@@ -32,9 +32,9 @@ export interface DetailShellProps {
   initialSessions: SessionSummary[];
   sessionsEndpoint: string;
   /**
-   * When set, this surface offers a text **Chat** with the persona (SAU-224) and
-   * the live/simulated voice demo CTA is removed. The voice path (below) is left
-   * intact for surfaces that don't pass this (Coach/Course) — reversible.
+   * When set, this surface offers a text **Chat** with the persona (SAU-224)
+   * alongside the live voice **demo** (board direction 2026-06-10: surface both).
+   * Surfaces that don't pass this (Coach/Course) keep the single Join CTA.
    */
   chatEndpoint?: string;
   /**
@@ -217,12 +217,19 @@ export default function DetailShell(props: DetailShellProps) {
             </button>
           )}
           {props.chatEndpoint ? (
-            // SAU-224: this surface chats over text with the persona; the
-            // simulated voice demo CTA is removed here (voice path retained
-            // for Coach/Course surfaces, gated by SAU-193/SAU-208).
-            <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>
-              💬 Chat
-            </button>
+            // Board direction (2026-06-10): the scenario detail surface offers BOTH
+            // a live voice roleplay demo AND a text Chat. `join()` runs the
+            // server-driven voice session through the seam — deterministic mock by
+            // default, live OpenAI Realtime when keyed (real end-user audio at scale
+            // stays gated by SAU-193/SAU-208).
+            <>
+              <button className="btn btn-secondary" onClick={join} disabled={joining} title="Run a live voice roleplay session">
+                {joining ? 'Connecting…' : '🎙 Live demo'}
+              </button>
+              <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>
+                💬 Chat
+              </button>
+            </>
           ) : (
             <button className="btn join" onClick={join} disabled={joining}>
               {joining ? 'Connecting…' : 'Join'}
