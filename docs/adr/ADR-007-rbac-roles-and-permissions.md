@@ -1,80 +1,71 @@
 # ADR-007 — RBAC: roles & per-feature permissions
 
-**Status:** Proposed (rev 2, 2026-06-10, CTO) — pending board approval on SAU-171
-**Context:** Board question (SAU-171): "how many roles, RBAC and permission access by feature." **Rev 2** incorporates the board's key correction: the platform will host *many target agents* (mentor-for-students, interview simulator, patient↔intake voice agent…) — so we must separate **user roles** from **agent personas**, and support the **operator-assigns-to-end-user** pattern those examples share.
+**Status:** Proposed (rev 3, 2026-06-10, CTO) — pending board approval on SAU-171
+**Context:** Board question (SAU-171): roles, RBAC, per-feature permissions.
+**Rev history:** rev 1 = 3 roles · rev 2 = separated *target agents* from *user roles*, added Operator + assignment · **rev 3** = board asked "do Creator / Operator / Org Manager need to be separate roles?" → **no, not up front.** Model **capabilities**, bundle them into the *fewest roles that satisfy separation-of-duties*. MVP = **2 roles.**
 
-## The distinction that drives everything (board's insight)
-There are **two different things**, and only one of them is "roles":
-
-1. **Target agents** (Mentor, Interviewer, Patient-intake, Doctor-appointment scheduler, …) = **Scenarios/Coaches**. These are the AI's *in-conversation persona*, authored as Markdown (`ai_instructions`). **They are unlimited** — anyone with the Creator/Operator capability can author infinitely many. They are *content*, **not** RBAC roles. The platform scales to thousands of target agents **without adding a single role.**
-2. **User roles** (who may do what in the app) = a **small, fixed RBAC set**. This is what RBAC governs.
-
-Conflating the two is the trap. The board's three examples are all *target agents* (Scenarios) used inside one relationship pattern → see §3.
+## Two distinctions that drive the whole design
+1. **Target agents ≠ user roles.** Mentor, Interviewer, Patient-intake … are **Scenarios/Coaches** (AI personas authored in Markdown) — *unlimited content*, never roles. Thousands of agents, zero new roles.
+2. **Roles are bundles of capabilities, not bespoke types.** Don't mint a role per job title. Define atomic capabilities; a role is a named bundle. Split a role out **only when a real separation-of-duties requires it** (someone must do X but must *not* do Y). This keeps the set small and avoids over-engineering.
 
 ## Current state (verified)
-- **No auth/RBAC built yet** — single `DEMO_USER_ID` stub (`app/src/services/current-user.ts`, pre-auth). Library "role" chips are a *content category*, not a user role.
-- Primitives present: `is_public`, `share_link`, `consent_record` + `audit_log` + RLS on `coach_memory` (ADR-004), `user_entitlement`. Org already shipped **Phase-2 auth (users/api_keys)** → **reuse it**.
+No auth/RBAC built — single `DEMO_USER_ID` stub (pre-auth). Present primitives: `is_public`, `share_link`, `consent_record`+`audit_log`+RLS on `coach_memory`, `user_entitlement`. Org has **Phase-2 auth** → reuse.
 
 ## Decision
 
-### 1. User roles — 4 core + 1 reserved
-| Role | Who | Purpose |
+### Capabilities (atomic)
+`practice` · `author_content` · `assign_to_users` · `view_identified_results` · `manage_org_members` · `manage_billing` · `platform_admin`
+
+> The meaningful privacy boundary is **`view_identified_results`**: seeing a *named* end-user's session transcripts/scores is a far bigger grant than seeing your own data or anonymized aggregates. That capability — not a job title — is what actually needs gating.
+
+### Roles = capability bundles. **MVP ships 2; B2B adds a 3rd.**
+| Role | Capabilities | When |
 |---|---|---|
-| **Learner / End-user** | the practitioner | Practices agents (self-serve **or** assigned). Owns their sessions/history/analysis/memory. |
-| **Creator** | content author | Authors target agents (Scenario/Coach/Course) as MD + AI-gen; publishes/shares; sees analytics for **their own** content. |
-| **Operator** | program owner (recruiter / educator / clinic intake / mentor-program lead) | Creator **+ assigns** agents to specific end-users or cohorts **+ reviews those assigned sessions/analytics**. This is the generalization that covers all 3 board examples. Scoped to its program/org. |
-| **Admin** | platform operator | Everything: all content, users, roles, billing, config. |
-| *Org Manager* (reserved) | B2B tenant admin | Multi-team management within a tenant. Build when multi-tenant B2B is greenlit; `org_id` seam below. |
+| **User** | `practice` + `author_content` (own) + own data/analytics | **MVP** — covers both "I practice" and "I create/remix my own agents" (consumer model). |
+| **Admin** | all | **MVP** — platform operation. |
+| **Operator / Manager** | `author_content` + `assign_to_users` + `view_identified_results` (+ optionally `manage_org_members`, `manage_billing`) | **B2B** — when orgs/assignment arrive. |
 
-> **Why "Operator" is the answer to the board's question.** Mentor-for-students, interview simulator, and patient↔intake are not 3 new roles — they're 3 *Scenarios* (target agents) operated under the **same** pattern: someone sets up the agent, assigns it to end-users, and reviews results. One role (**Operator**) + the **assignment** concept (§3) covers all current and future verticals. New verticals = new *content*, not new roles.
+### Do Creator / Operator / Org Manager need to be *separate* roles? — **No, not up front.**
+They are **points on a capability spectrum**, not three things you need on day one:
+- **Creator** = `author_content` only (sees *anonymized aggregate* analytics on own content).
+- **Operator** = Creator **+ `assign_to_users` + `view_identified_results`** (sees *named* learners' results — the privacy step-up).
+- **Org Manager** = **+ `manage_org_members` + `manage_billing`** (administers *people, seats, the tenant* — not content).
 
-### 2. Permission matrix by feature
-✅ full · ▢ own-only · ▣ assigned-scope (operator sees end-users assigned to them) · 🌐 public-only · ❌ none
+**Collapse rule:**
+- **MVP (consumer-first, what we're building):** fold all authoring into **User**. No Operator, no Org Manager — there are no orgs or assignments yet. → **2 roles.**
+- **B2B v1:** introduce **one** "Operator/Manager" role holding the program + org-admin capabilities. Don't pre-split.
+- **Split Operator vs Org Manager only** when a real customer needs separation of duties — e.g. the person who *assigns training & reviews results* must NOT also *manage seats/billing* (large org, compliance). Until then, one role.
+- **Split Creator vs Operator only** when an author must NOT see identified end-user data (e.g. a marketplace/3rd-party content author). Until then, `view_identified_results` is just a capability toggle.
 
-| Feature / action | Learner | Creator | Operator | Admin |
-|---|---|---|---|---|
-| Browse library | 🌐 | 🌐+▢ | 🌐+▢ | ✅ |
-| Run / Join session (metered) | ✅ | ✅ | ✅ | ✅ |
-| Author agents (Scenario/Coach/Course, MD) | ❌ | ▢ | ▢ | ✅ |
-| Edit / publish / delete content | ❌ | ▢ | ▢ | ✅ |
-| AI authoring + publish gate | ❌ | ▢ | ▢ | ✅ |
-| **Assign** agent to end-user / cohort | ❌ | ❌ | ▣ | ✅ |
-| Coach memory view/delete | ▢ (consent) | ▢ | ▣ (consent) | ✅ (DSAR) |
-| History (sessions) | ▢ | ▢ | ▣ | ✅ |
-| Analyst — session analysis | ▢ | ▢ | ▣ | ✅ |
-| Analyst — aggregate analytics | ❌ | ▢ (own content) | ▣ (assigned cohort) | ✅ |
-| Billing / entitlement | ▢ view | ▢ | ▢/▣ | ✅ |
-| User & role management | ❌ | ❌ | ▣ (invite end-users) | ✅ |
-| Feature flags / config | ❌ | ❌ | ❌ | ✅ |
+Net: **2 roles now, 3 at B2B, 4 only if a customer's separation-of-duties forces it.** Roles are config over capabilities, so adding/splitting later is a data change, not a migration.
 
-### 3. The relationship model (this is the new part)
-Two patterns the platform must support:
-- **Self-practice** (MVP today): a Learner picks a public agent and practices solo. Sessions private to the Learner.
-- **Assigned / observed** (the board's examples): an **Operator** authors/owns a target agent, **assigns** it to an end-user or cohort, the end-user practices, and the Operator **reviews** their sessions/analytics. Examples → all map cleanly:
+### Permission matrix by feature (MVP roles)
+✅ full · ▢ own-only · ▣ assigned-scope (B2B Operator) · 🌐 public-only · ❌ none
 
-  | Board example | Target agent (Scenario) | Operator | End-user (Learner) |
-  |---|---|---|---|
-  | Mentor to help a student find a scholarship | "Scholarship Mentor" coach | school / program lead | student |
-  | Interview simulation | "Interviewer" scenario | recruiter / career center | candidate |
-  | Patient ↔ voice agent to set up a doctor visit | "Intake scheduler" scenario | clinic | patient |
+| Feature / action | User | (B2B) Operator | Admin |
+|---|---|---|---|
+| Browse library | 🌐 + ▢ | 🌐 + ▢ | ✅ |
+| Run / Join session (metered) | ✅ | ✅ | ✅ |
+| Author agents (MD) + publish | ▢ | ▢ | ✅ |
+| AI authoring + publish gate | ▢ | ▢ | ✅ |
+| **Assign** agent to end-user / cohort | ❌ | ▣ | ✅ |
+| View **identified** learner sessions/analytics | ❌ (own only) | ▣ (assigned, consent) | ✅ |
+| Coach memory view/delete | ▢ (consent) | ▣ (consent) | ✅ (DSAR) |
+| History / own analysis | ▢ | ▢/▣ | ✅ |
+| User & role management, billing | ❌ | optional | ✅ |
+| Platform config / feature flags | ❌ | ❌ | ✅ |
 
-- New first-class concept: **`assignment`** (operator_user_id → target scenario/coach → assignee user or cohort). Visibility of a Learner's sessions/analytics to an Operator is **granted only via an assignment** (consent-gated), never global.
+### Relationship model & enforcement (from rev 2, unchanged)
+- **Self-practice** (MVP) vs **assigned/observed** (B2B): operator authors agent → `assign`s to end-user/cohort → reviews results. `assignment` (operator → target → assignee, consent-gated) is the only path to cross-user visibility.
+- **Two layers:** role/capability guard (what action) + Postgres RLS on `owner_user_id`/`assignment` (which rows). Public via `is_public`/share-link.
+- **PHI/HIPAA:** healthcare vertical gated by per-agent `data_class`; no PHI ship without CISO pass.
 
-### 4. Enforcement (two layers, unchanged + assignment)
-1. **Role/capability guard** at the API/route layer — *what kind* of action.
-2. **Postgres RLS (FORCE)** on `owner_user_id` — *which rows*. Operator cross-user reads are allowed **only** through an `assignment` row (and consent). Extends the proven `coach_memory` RLS.
-
-### 5. Data model deltas
-- `user_role` (user_id → role; join table → multi-role later).
-- `owner_user_id` on `scenario`/`coach`/`course`/`session` + FORCE RLS.
-- `assignment` (operator_user_id, target_ref, assignee_user_id|cohort_id, consent, timestamps).
-- **B2B seam (later):** `org_id` on users+content; tenant RLS; Org Manager.
-- **Vertical compliance:** healthcare (the patient example) carries **PHI/HIPAA** weight — gate via a per-agent `data_class` (e.g. `phi`) that tightens retention/RLS/audit (ties to ADR-004 + CISO). Do **not** ship a healthcare/PHI vertical without a CISO compliance pass.
+### Data model deltas
+`user_role` (user→role) + a `role_capability` map (so roles are editable config) · `owner_user_id` + FORCE RLS · `assignment` (B2B) · `org_id` seam (B2B) · `data_class` (compliance).
 
 ## Consequences
-- Answers the board directly: **target agents are unlimited content (Scenarios), not roles**; **4 user roles** (+1 reserved) cover every vertical; the **Operator role + assignment** is what lets "many target agents for users" work.
-- Replaces the demo-user stub with Phase-2 auth — a bounded build (Slice 5).
-- Reversible/extensible: more roles or ABAC later; role→capability + assignment are the seams.
+- Answers the board: **don't separate Creator/Operator/Org Manager up front.** They're capability bundles; MVP needs **2 roles**; split only on real separation-of-duties. Avoids over-engineering while keeping the seam.
+- Replaces demo-user stub with Phase-2 auth (Slice 5).
 
-## Build (on approval) → "Slice 5 — AuthN + RBAC + assignment"
-Wire Phase-2 auth → `user_role` + `owner_user_id` + `assignment` + RLS → route/capability guards → tests → CISO review of the ownership/assignment/PHI policies.
+## Build (on approval) → "Slice 5 — AuthN + RBAC"
+Reuse Phase-2 auth → `user_role` + `role_capability` + `owner_user_id` + RLS → capability guards on routes → tests → CISO review. `assignment`/`org_id` deferred to the B2B milestone.
