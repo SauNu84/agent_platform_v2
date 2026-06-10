@@ -264,3 +264,100 @@ td.warn { color: #d97706; font-weight: 600; }
 .session-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
 .btn-ghost { color: var(--accent-2); text-decoration: none; font-size: 14px; font-family: var(--mono); }
 .btn-ghost:hover { text-decoration: underline; }
+
+/* ── Monogram avatar (deterministic gradient, SAU-217 design call #3) ── */
+.avatar-monogram {
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: #fff;
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.avatar-monogram span { font-size: 16px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }
+
+/* ── Card head (library cards + home carousel) ── */
+.card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.card-head h3 { margin: 0; font-size: 15px; }
+
+/* ── Library v2: search + tabs + create CTA (SAU-214) ── */
+.lib-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; gap: 16px; }
+.lib-header > div h1 { margin-bottom: 4px; }
+.lib-header .btn { white-space: nowrap; flex-shrink: 0; margin-top: 4px; }
+
+.search-wrap { position: relative; margin-bottom: 16px; max-width: 520px; }
+.search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 18px; pointer-events: none; }
+.search-input { width: 100%; padding: 10px 36px 10px 36px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--panel); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; }
+.search-input:focus { border-color: var(--accent); }
+.search-clear { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; padding: 0 4px; }
+.search-clear:hover { color: var(--text); }
+
+.lib-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.lib-tab { display: flex; align-items: center; gap: 6px; padding: 10px 18px; border: none; background: none; color: var(--muted); font-size: 14px; font-family: var(--mono); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.lib-tab:hover { color: var(--text); text-decoration: none; }
+.lib-tab.active { color: var(--accent-2); border-bottom-color: var(--accent); }
+.lib-tab-count { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; font-size: 11px; color: var(--muted); }
+.lib-tab.active .lib-tab-count { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
+.lib-empty { margin: 32px 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+
+/* ── Scenario Studio — Classic create form (SAU-214) ── */
+.studio-layout { display: grid; grid-template-columns: 1fr 320px; gap: 32px; align-items: start; }
+@media (max-width: 900px) { .studio-layout { grid-template-columns: 1fr; } .studio-preview { display: none; } }
+
+.studio-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.studio-mode-badge { background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent-2); border-radius: 6px; padding: 2px 10px; font-size: 12px; font-family: var(--mono); }
+.studio-title { margin: 0 0 24px; }
+
+.studio-section { margin-bottom: 20px; }
+.studio-section-label { font-family: var(--mono); font-size: 12px; color: var(--muted); margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+.studio-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 14px; font-size: 13px; font-family: var(--mono); color: var(--text); cursor: pointer; }
+.chip:hover { border-color: var(--accent); color: var(--accent-2); }
+
+.form-group { margin-bottom: 20px; }
+.form-label { display: block; font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.form-hint { color: var(--muted); font-size: 12px; font-family: var(--sans); font-weight: normal; margin-left: 6px; }
+.form-hint-block { color: var(--muted); font-size: 13px; margin: 0 0 6px; }
+.form-required { color: #ef4444; }
+.form-optional { color: var(--muted); font-weight: normal; }
+.form-input { width: 100%; padding: 9px 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; }
+.form-input:focus { border-color: var(--accent); }
+.form-input-mono { font-family: var(--mono); }
+.form-textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; resize: vertical; }
+.form-textarea:focus { border-color: var(--accent); }
+.form-textarea-tall { min-height: 120px; }
+.form-inline { display: flex; align-items: center; gap: 16px; }
+.form-inline .form-label { margin: 0; }
+.radio-group { display: flex; gap: 16px; }
+.radio-label { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+.form-row-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.form-row-head .form-label { margin: 0; }
+
+.rubric-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.rubric-topic { flex: 1; }
+.rubric-weight { width: 90px; }
+.btn-remove { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 8px; height: 36px; line-height: 1; }
+.btn-remove:hover { border-color: #ef4444; color: #ef4444; }
+.rubric-total { margin-top: 4px; }
+.btn-ghost-sm { background: none; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--accent-2); font-size: 12px; font-family: var(--mono); cursor: pointer; padding: 4px 10px; }
+.btn-ghost-sm:hover { background: var(--accent-soft); }
+
+.form-actions { display: flex; gap: 12px; align-items: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+
+/* Studio live preview panel */
+.studio-preview { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; position: sticky; top: 24px; }
+.preview-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.preview-dot { width: 10px; height: 10px; border-radius: 50%; }
+.preview-dot.red { background: #ef4444; }
+.preview-dot.amber { background: #f59e0b; }
+.preview-dot.green { background: #22c55e; }
+.preview-title { font-family: var(--mono); font-size: 13px; font-weight: 600; margin-left: 6px; }
+.preview-sub { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
+.preview-card { display: flex; flex-direction: column; gap: 8px; }
+.preview-avatar { width: 48px; height: 48px; border-radius: 10px; margin-bottom: 4px; }
+.preview-name { margin: 0; font-size: 15px; }
+.preview-desc { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.preview-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }

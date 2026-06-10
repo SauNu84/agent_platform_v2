@@ -1,12 +1,13 @@
 /**
- * Scenario Library — list + filter by metadata. Server component: reads straight
- * from the store. Filter facets are derived from the `role` metadata key (the
- * reference product filters by PM / SWE / Leadership / Sales / MBA). Any metadata
- * key works via the API; the UI surfaces `role` as the headline facet.
+ * Scenario Library — search + Featured/My Scenarios tabs + role filter chips.
+ * Featured = system/seeded scenarios; My Scenarios = user-created (metadata._source = 'user').
  */
 import Link from 'next/link';
 import { getStore } from '@/db';
 import type { ScenarioRecord } from '@/domain/scenario';
+import { categoryClass } from '@/lib/category';
+import { Avatar } from '@/components/Avatar';
+import LibrarySearch from './LibrarySearch';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,37 +20,50 @@ function facetValues(scenarios: ScenarioRecord[], key: string): string[] {
   return [...set].sort();
 }
 
-// Presentation-only: map a category/role facet to one of the visual-system
-// palette classes (Sales=orange, Productivity=blue, Training=green, Hiring=purple).
-// Known category names map directly; any other facet (PM, SWE, …) gets a stable
-// palette colour so every category badge reads as colour-coded.
-const CATEGORY_PALETTE = ['sales', 'productivity', 'training', 'hiring'] as const;
-function categoryClass(value: string): string {
-  const v = value.toLowerCase();
-  if ((CATEGORY_PALETTE as readonly string[]).includes(v)) return v;
-  let h = 0;
-  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) >>> 0;
-  return CATEGORY_PALETTE[h % CATEGORY_PALETTE.length];
+function matches(s: ScenarioRecord, q: string): boolean {
+  if (!q) return true;
+  const lower = q.toLowerCase();
+  return (
+    s.name.toLowerCase().includes(lower) ||
+    (s.description ?? '').toLowerCase().includes(lower) ||
+    Object.values(s.metadata).some((v) => typeof v === 'string' && v.toLowerCase().includes(lower))
+  );
 }
 
 export default async function LibraryPage({
   searchParams,
 }: {
-  searchParams: { role?: string; public?: string };
+  searchParams: { role?: string; q?: string; tab?: string };
 }) {
   const store = getStore();
   const all = await store.listScenarios();
-  const roles = facetValues(all, 'role');
 
+  const activeTab = searchParams.tab === 'my' ? 'my' : 'featured';
+  const q = searchParams.q ?? '';
   const activeRole = searchParams.role;
-  const onlyPublic = searchParams.public === 'true';
-  const scenarios = all.filter((s) => {
+
+  const featured = all.filter((s) => s.metadata._source !== 'user');
+  const mine = all.filter((s) => s.metadata._source === 'user');
+  const tabScenarios = activeTab === 'my' ? mine : featured;
+  const roles = facetValues(featured, 'role');
+
+  const scenarios = tabScenarios.filter((s) => {
     if (activeRole && s.metadata.role !== activeRole) return false;
-    if (onlyPublic && !s.isPublic) return false;
-    return true;
+    return matches(s, q);
   });
 
-  const chip = (label: string, params: Record<string, string>, active: boolean) => {
+  const tabLink = (label: string, key: string, count: number) => {
+    const isActive = activeTab === key;
+    const params = new URLSearchParams({ tab: key, ...(q ? { q } : {}) }).toString();
+    return (
+      <Link key={key} href={`/library?${params}`} className={`lib-tab ${isActive ? 'active' : ''}`}>
+        {label}
+        {count > 0 && <span className="lib-tab-count">{count}</span>}
+      </Link>
+    );
+  };
+
+  const roleChip = (label: string, params: Record<string, string>, active: boolean) => {
     const qs = new URLSearchParams(params).toString();
     return (
       <Link key={label} href={`/library${qs ? `?${qs}` : ''}`} className={active ? 'active' : ''}>
@@ -60,35 +74,61 @@ export default async function LibraryPage({
 
   return (
     <div>
-      <h1>Scenarios</h1>
-      <p className="subtitle">Hyper-realistic AI roleplay to practice high-stakes conversations.</p>
-
-      <div className="filters">
-        {chip('All', {}, !activeRole && !onlyPublic)}
-        {chip('Public', { public: 'true' }, onlyPublic && !activeRole)}
-        {roles.map((r) => chip(r, { role: r }, activeRole === r))}
+      <div className="lib-header">
+        <div>
+          <h1>Scenario Library</h1>
+          <p className="subtitle">Hyper-realistic AI roleplay to practice high-stakes conversations.</p>
+        </div>
+        <Link href="/scenarios/create" className="btn">+ Create Scenario</Link>
       </div>
 
+      <LibrarySearch defaultValue={q} totalCount={all.length} />
+
+      <div className="lib-tabs">
+        {tabLink('Featured', 'featured', featured.length)}
+        {tabLink('My Scenarios', 'my', mine.length)}
+      </div>
+
+      {activeTab === 'featured' && roles.length > 0 && (
+        <div className="filters">
+          {roleChip('All', activeRole ? { tab: 'featured', ...(q ? { q } : {}) } : {}, !activeRole)}
+          {roles.map((r) =>
+            roleChip(r, { tab: 'featured', role: r, ...(q ? { q } : {}) }, activeRole === r)
+          )}
+        </div>
+      )}
+
       {scenarios.length === 0 ? (
-        <p className="empty">
-          No scenarios yet. Author one as Markdown in <code>content/scenarios/</code> and run the compiler,
-          or POST to <code>/api/scenarios</code>.
-        </p>
+        <div className="lib-empty">
+          {activeTab === 'my' ? (
+            <>
+              <p>You haven&apos;t created any scenarios yet.</p>
+              <Link href="/scenarios/create" className="btn">Create your first scenario</Link>
+            </>
+          ) : (
+            <p>No scenarios match your search.</p>
+          )}
+        </div>
       ) : (
         <div className="grid">
-          {scenarios.map((s) => (
-            <Link key={s.slug} href={`/scenarios/${s.slug}`} className="card">
-              <h3>{s.name}</h3>
-              {s.description && <p>{s.description}</p>}
-              <div className="badges">
-                <span className={`badge ${s.isPublic ? 'public' : ''}`}>{s.isPublic ? 'Public' : 'Private'}</span>
-                {typeof s.metadata.role === 'string' && (
-                  <span className={`badge ${categoryClass(s.metadata.role)}`}>{s.metadata.role}</span>
-                )}
-                {typeof s.metadata.difficulty === 'string' && <span className="badge">{s.metadata.difficulty}</span>}
-              </div>
-            </Link>
-          ))}
+          {scenarios.map((s) => {
+            const role = typeof s.metadata.role === 'string' ? s.metadata.role : 'Practice';
+            const difficulty = typeof s.metadata.difficulty === 'string' ? s.metadata.difficulty : null;
+            return (
+              <Link key={s.slug} href={`/scenarios/${s.slug}`} className="card">
+                <div className="card-head">
+                  <Avatar name={s.name} category={role} slug={s.slug} />
+                  <div><h3>{s.name}</h3></div>
+                </div>
+                {s.description && <p>{s.description}</p>}
+                <div className="badges">
+                  {s.isPublic && <span className="badge public">Public</span>}
+                  <span className={`badge ${categoryClass(role)}`}>{role}</span>
+                  {difficulty && <span className="badge">{difficulty}</span>}
+                </div>
+              </Link>
+            );
+          })}
         </div>
       )}
     </div>
