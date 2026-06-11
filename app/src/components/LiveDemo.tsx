@@ -11,12 +11,15 @@
  *                expandable "Your Instructions", call controls, and the transcript
  *                streaming down the right-hand side.
  *
- * Honesty: the camera/mic verification is genuinely real (browser media APIs, no
- * vendor). The conversation itself is driven by the existing server session seam,
- * which is the deterministic **mock** provider by default — real end-user audio to
- * a realtime voice vendor stays gated on voice provisioning (SAU-221/SAU-208), so
- * the live window labels itself "Simulated" when the session vendor is mock. The
- * turns are revealed progressively to read like a live call.
+ * Voice: "Start" prefers REAL live voice — the browser opens a WebRTC session to
+ * OpenAI Realtime using a short-lived ephemeral client secret minted by
+ * /api/realtime/token (the platform API key never reaches the client). Mic audio
+ * streams up, the model's audio plays back, and finalized transcript turns stream
+ * into the right-hand panel; on End session the transcript is persisted + metered
+ * via the same client-driven path as the bench. When no vendor key is configured
+ * the token route answers 501 and we fall back to the deterministic **mock**
+ * provider (labeled "Simulated"), revealing turns progressively. The camera/mic
+ * verification is genuinely real in both modes (browser media APIs).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from './Avatar';
@@ -57,6 +60,7 @@ export default function LiveDemo({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [showInstructions, setShowInstructions] = useState(false);
   const [vendor, setVendor] = useState<string>('mock');
+  const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
 
@@ -66,11 +70,21 @@ export default function LiveDemo({
   const rafRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Real live voice (browser WebRTC → OpenAI Realtime) — set when a vendor key is present.
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const dcRef = useRef<RTCDataChannel | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const liveTurnsRef = useRef<Turn[]>([]);
+  const liveStartedAtRef = useRef<number>(0);
 
   // ── Media teardown (release the camera/mic light) ──────────────────────────
   const stopMedia = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
+    try { dcRef.current?.close(); } catch { /* noop */ }
+    dcRef.current = null;
+    try { pcRef.current?.close(); } catch { /* noop */ }
+    pcRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
@@ -132,53 +146,194 @@ export default function LiveDemo({
     timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
   }
 
-  function endSession() {
+  async function endSession() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (revealRef.current) clearTimeout(revealRef.current);
+    // Real live session: tear down WebRTC and persist the captured transcript so it
+    // shows under Sessions and gets metered (same client-driven path as the bench).
+    const livePc = pcRef.current;
+    if (livePc) {
+      const turnsToSave = liveTurnsRef.current;
+      try { dcRef.current?.close(); } catch { /* noop */ }
+      try { livePc.close(); } catch { /* noop */ }
+      dcRef.current = null;
+      pcRef.current = null;
+      if (turnsToSave.length) {
+        const startedAt = liveStartedAtRef.current || Date.now();
+        const endedAt = Date.now();
+        try {
+          const res = await fetch(sessionsEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              vendor: 'openai',
+              transcript: { sessionId: `live-${slug}-${startedAt}`, turns: turnsToSave, toolCalls: [], startedAt, endedAt },
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            onSession({
+              id: data.sessionId ?? `live-${slug}-${startedAt}`,
+              status: 'completed',
+              startedAt: new Date(startedAt).toISOString(),
+              endedAt: new Date(endedAt).toISOString(),
+              turns: turnsToSave,
+            });
+          }
+        } catch { /* best-effort persistence; the call already happened */ }
+      }
+    }
     stopMedia();
     onClose();
   }
 
-  // "Start" — run the server session (mock by default) and reveal the turns
+  // Append a finalized transcript turn to both the live view and the save buffer.
+  const appendLiveTurn = useCallback((turn: Turn) => {
+    liveTurnsRef.current = [...liveTurnsRef.current, turn];
+    setTurns((t) => [...t, turn]);
+  }, []);
+
+  // Real live voice: browser WebRTC ↔ OpenAI Realtime via an ephemeral client secret
+  // (the platform API key never reaches the browser). Mirrors the server adapter's GA
+  // session config + event names (src/voice/adapters/openai.ts).
+  async function startLive(tok: { clientSecret: string; model: string; scenario?: { instructions?: string; voice?: unknown } }) {
+    setVendor('openai');
+    liveTurnsRef.current = [];
+    liveStartedAtRef.current = Date.now();
+    // OpenAI's `voice` must be a plain string; coerce defensively (the route already
+    // sends a string, but a scenario voice object would otherwise be rejected).
+    const v = tok.scenario?.voice;
+    const voice = typeof v === 'string' ? v : (v && typeof v === 'object' && 'name' in v ? String((v as { name: unknown }).name) : 'alloy');
+
+    const stream = streamRef.current ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
+    streamRef.current = stream;
+
+    const pc = new RTCPeerConnection();
+    pcRef.current = pc;
+    // Play the model's audio.
+    pc.ontrack = (e) => {
+      if (audioRef.current) { audioRef.current.srcObject = e.streams[0]; audioRef.current.play().catch(() => {}); }
+    };
+    // Send the mic uplink.
+    stream.getAudioTracks().forEach((t) => pc.addTrack(t, stream));
+    pc.oniceconnectionstatechange = () => {
+      if (['failed', 'disconnected', 'closed'].includes(pc.iceConnectionState) && pcRef.current === pc) {
+        setError((prev) => prev ?? 'Live connection dropped — your transcript is saved on End session.');
+      }
+    };
+
+    // Data channel: configure the session and receive transcript events.
+    const dc = pc.createDataChannel('oai-events');
+    dcRef.current = dc;
+    dc.onopen = () => {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          instructions: tok.scenario?.instructions ?? instructions,
+          output_modalities: ['audio'],
+          audio: {
+            input: {
+              transcription: { model: 'whisper-1' },
+              turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: true, interrupt_response: true },
+            },
+            output: { voice },
+          },
+        },
+      }));
+    };
+    dc.onmessage = (e) => {
+      let ev: { type?: string; transcript?: string; error?: { message?: string } };
+      try { ev = JSON.parse(e.data); } catch { return; }
+      switch (ev.type) {
+        case 'conversation.item.input_audio_transcription.completed':
+          if (ev.transcript) appendLiveTurn({ role: 'user', text: ev.transcript, at: Date.now() });
+          break;
+        case 'response.output_audio_transcript.done':
+        case 'response.audio_transcript.done': // legacy beta name, kept defensively
+          if (ev.transcript) appendLiveTurn({ role: 'agent', text: ev.transcript, at: Date.now() });
+          break;
+        case 'error':
+          setError(ev.error?.message ?? 'Realtime session error');
+          break;
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpRes = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(tok.model)}`, {
+      method: 'POST',
+      body: offer.sdp,
+      headers: { Authorization: `Bearer ${tok.clientSecret}`, 'Content-Type': 'application/sdp' },
+    });
+    if (!sdpRes.ok) {
+      const detail = await sdpRes.text().catch(() => '');
+      throw new Error(`live connect failed (${sdpRes.status})${detail ? `: ${detail.slice(0, 120)}` : ''}`);
+    }
+    const answer = await sdpRes.text();
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+    setConnected(true); // open-ended call — user talks, ends with "End session"
+  }
+
+  // Simulated fallback: run the server session (mock vendor) and reveal turns
   // progressively so the right-hand transcript reads like a live conversation.
+  async function startSimulated() {
+    const res = await fetch(sessionsEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
+    const allTurns: Turn[] = (data.transcript?.turns ?? []).filter(Boolean);
+    setVendor(data.usage?.vendor ?? 'mock');
+    setConnected(true);
+
+    // Persist into the Sessions list immediately (full transcript).
+    onSession({
+      id: data.sessionId,
+      status: 'completed',
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      turns: allTurns,
+    });
+
+    // Reveal turn-by-turn for the live feel.
+    let i = 0;
+    const revealNext = () => {
+      if (i >= allTurns.length) { setRunning(false); setFinished(true); return; }
+      setTurns((t) => [...t, allTurns[i]]);
+      i += 1;
+      revealRef.current = setTimeout(revealNext, 900);
+    };
+    revealNext();
+  }
+
+  // "Start" — prefer real live voice; fall back to the simulated session when no
+  // vendor key is configured (the token route answers 501).
   async function start() {
     setRunning(true);
     setError(null);
     setTurns([]);
+    setConnected(false);
     setFinished(false);
     try {
-      const res = await fetch(sessionsEndpoint, {
+      const tokenRes = await fetch('/api/realtime/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ slug }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
-      const allTurns: Turn[] = data.transcript?.turns ?? [];
-      const v = data.usage?.vendor ?? 'mock';
-      setVendor(v);
-
-      // Persist into the Sessions list immediately (full transcript).
-      onSession({
-        id: data.sessionId,
-        status: 'completed',
-        startedAt: new Date().toISOString(),
-        endedAt: new Date().toISOString(),
-        turns: allTurns,
-      });
-
-      // Reveal turn-by-turn for the live feel.
-      let i = 0;
-      const revealNext = () => {
-        if (i >= allTurns.length) { setRunning(false); setFinished(true); return; }
-        setTurns((t) => [...t, allTurns[i]]);
-        i += 1;
-        revealRef.current = setTimeout(revealNext, 900);
-      };
-      revealNext();
+      if (tokenRes.status === 501) {
+        await startSimulated(); // no vendor key → simulated path
+        return;
+      }
+      const tok = await tokenRes.json();
+      if (!tokenRes.ok) throw new Error(tok.error ?? `token mint failed (${tokenRes.status})`);
+      await startLive(tok);
     } catch (e) {
       setError((e as Error).message);
       setRunning(false);
+      setConnected(false);
     }
   }
 
@@ -260,11 +415,18 @@ export default function LiveDemo({
             {!running && !finished && (
               <button className="btn join ld-start" onClick={start}>Start ▶</button>
             )}
-            {running && <span className="ld-listening">● Listening…</span>}
-            {finished && <button className="btn ld-end" onClick={endSession}>End session</button>}
+            {running && !connected && <span className="ld-listening">● Connecting…</span>}
+            {running && connected && (
+              <span className="ld-listening">{vendor === 'openai' ? '● Live — speak now' : '● Listening…'}</span>
+            )}
+            {(finished || (running && connected && vendor === 'openai')) && (
+              <button className="btn ld-end" onClick={endSession}>End session</button>
+            )}
           </div>
-          {vendor === 'mock' && (
-            <p className="ld-sim">Simulated session — live voice is pending voice-provider provisioning.</p>
+          {/* Hidden sink for the model's audio downlink (live path). */}
+          <audio ref={audioRef} autoPlay hidden />
+          {vendor === 'mock' && (running || finished) && (
+            <p className="ld-sim">Simulated session — no voice-vendor key is configured for this environment.</p>
           )}
           {error && <div className="notice" role="alert">{error}</div>}
         </div>
@@ -272,11 +434,11 @@ export default function LiveDemo({
         {/* Transcript — right-hand side */}
         <aside className="ld-transcript">
           <div className="ld-transcript-head">Transcript</div>
-          {turns.length === 0 ? (
+          {turns.filter(Boolean).length === 0 ? (
             <p className="empty">{running ? 'Connecting…' : 'Press Start to begin the conversation.'}</p>
           ) : (
             <div className="conversation">
-              {turns.map((turn, i) => (
+              {turns.filter(Boolean).map((turn, i) => (
                 <div key={i} className={`turn turn-${turn.role}`}>
                   <div className="turn-role">{turn.role === 'agent' ? 'AI' : 'You'}</div>
                   <div className="turn-text">{turn.text}</div>
