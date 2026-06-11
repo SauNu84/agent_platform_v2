@@ -12,7 +12,7 @@
  * no spend; the production `AnthropicAuthor` (Claude) implements the identical
  * interface and is selected when a key is configured (see `getAuthor`).
  */
-import { TOOL_REGISTRY } from '@/domain/scenario';
+import { TOOL_REGISTRY, type RubricItem } from '@/domain/scenario';
 
 /** A topic/brief the author turns into validated MD. */
 export interface AuthoringBrief {
@@ -53,6 +53,15 @@ export interface Author {
   readonly name: string; // 'template' | 'anthropic:<model>'
   generateScenario(brief: AuthoringBrief, opts?: AuthorOptions): Promise<string>;
   generateCourse(brief: AuthoringBrief, opts?: AuthorOptions): Promise<GeneratedCourse>;
+  /**
+   * Parse a free-text rubric the author wrote in the "Edit" tab into the
+   * structured, schema-shaped rubric the platform scores against (SAU-238). The
+   * raw text stays human-readable; this is the "Processed" projection an LLM (or
+   * the deterministic fallback) turns into `{ topic, weight, note }[]` with
+   * weights summing to 100. The structured result is still review-gated — the
+   * author confirms it before it is saved.
+   */
+  parseRubric(text: string): Promise<RubricItem[]>;
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -137,6 +146,112 @@ export function scenarioUserPrompt(brief: AuthoringBrief, prior?: PriorAttempt):
   return parts.join('\n');
 }
 
+// ── Rubric parsing (SAU-238): free text → structured { topic, weight, note }[] ─
+
+/** System prompt for the live rubric parser. */
+export function rubricParseSystemPrompt(): string {
+  return [
+    'You convert a coach\'s free-text grading rubric into a structured rubric for an automated LLM judge.',
+    'Return ONLY a JSON array (no prose, no code fence) of objects with these keys:',
+    '  topic:  short criterion name (string, required)',
+    '  weight: integer 0-100, importance of this criterion (the weights MUST sum to 100)',
+    '  note:   optional one-line clarification of what good looks like (string)',
+    'Infer sensible weights from the author\'s emphasis and ordering. If the author gave no weights, distribute 100 evenly.',
+    'Keep the author\'s wording; do not invent criteria they did not mention.',
+  ].join('\n');
+}
+
+/** User prompt carrying the author's free text. */
+export function rubricParseUserPrompt(text: string): string {
+  return `Parse this rubric into the JSON array described above:\n\n${text.trim()}`;
+}
+
+/**
+ * Round a set of fractional weights to integers that sum to exactly 100, giving
+ * any rounding remainder to the largest entries (largest-remainder method).
+ * Returns an empty array unchanged.
+ */
+export function roundWeightsTo100(weights: number[]): number[] {
+  if (weights.length === 0) return [];
+  const total = weights.reduce((s, w) => s + w, 0);
+  if (total <= 0) {
+    // No signal — distribute 100 as evenly as possible.
+    const base = Math.floor(100 / weights.length);
+    const out = weights.map(() => base);
+    for (let i = 0; i < 100 - base * weights.length; i++) out[i] += 1;
+    return out;
+  }
+  const scaled = weights.map((w) => (w / total) * 100);
+  const floored = scaled.map(Math.floor);
+  let remainder = 100 - floored.reduce((s, w) => s + w, 0);
+  // Hand the leftover points to the entries with the largest fractional parts.
+  const order = scaled
+    .map((w, i) => ({ i, frac: w - Math.floor(w) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let k = 0; k < order.length && remainder > 0; k++, remainder--) floored[order[k].i] += 1;
+  return floored;
+}
+
+/**
+ * Deterministic, dependency-free rubric parser — the no-spend fallback behind
+ * the same seam as `TemplateAuthor`. Splits the text into criteria (one per line
+ * or `;`-separated), pulls an explicit `NN%` / `weight: NN` if present, treats a
+ * trailing `:`/`—`/`-` separated clause as the note, and normalizes weights to
+ * sum to 100 (explicit weights honored; unspecified ones share the remainder).
+ */
+export function parseRubricText(text: string): RubricItem[] {
+  const segments = text
+    .split(/\r?\n|;/)
+    .map((s) => s.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()) // strip bullets/numbering
+    .filter((s) => s.length > 0);
+
+  const parsed = segments.map((seg) => {
+    let rest = seg;
+    let weight: number | null = null;
+    // Explicit weight: "30%", "weight: 30", "weight 30".
+    const pct = rest.match(/(\d{1,3})\s*%/);
+    const labeled = rest.match(/\bweight\s*[:=]?\s*(\d{1,3})\b/i);
+    if (pct) { weight = clampPct(Number(pct[1])); rest = rest.replace(pct[0], '').trim(); }
+    else if (labeled) { weight = clampPct(Number(labeled[1])); rest = rest.replace(labeled[0], '').trim(); }
+    // Tidy separators/punctuation left behind by weight removal.
+    rest = rest.replace(/[\s:;,(){}\[\]]*[—–-]?[\s:;]*$/, '').replace(/^[\s,—–-]+/, '').trim();
+    // Split a trailing note off the topic on the first ':' / '—' / ' - '.
+    let topic = rest;
+    let note: string | undefined;
+    const sep = rest.match(/\s*(?::|—|–|\s-\s)\s*/);
+    if (sep && sep.index !== undefined && sep.index > 0) {
+      topic = rest.slice(0, sep.index).trim();
+      const tail = rest.slice(sep.index + sep[0].length).replace(/[\s:;,–—-]+$/, '').trim();
+      if (tail) note = tail;
+    }
+    return { topic: topic || seg.trim(), note, weight };
+  });
+
+  const weights = roundWeightsTo100(distributeWeights(parsed.map((p) => p.weight)));
+  return parsed.map((p, i) => ({
+    topic: p.topic,
+    weight: weights[i],
+    ...(p.note ? { note: p.note } : {}),
+  }));
+}
+
+function clampPct(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, n));
+}
+
+/**
+ * Turn a mix of explicit and `null` weights into concrete numbers: explicit
+ * weights are kept, and the rest share whatever of 100 is left (evenly). If
+ * nothing was explicit, everything is 0 here and `roundWeightsTo100` spreads 100.
+ */
+function distributeWeights(weights: Array<number | null>): number[] {
+  const explicitTotal = weights.reduce<number>((s, w) => s + (w ?? 0), 0);
+  const blanks = weights.filter((w) => w === null).length;
+  const share = blanks > 0 ? Math.max(0, 100 - explicitTotal) / blanks : 0;
+  return weights.map((w) => (w === null ? share : w));
+}
+
 // ── Deterministic, dependency-free author (default; testable, no spend) ───────
 
 /**
@@ -150,6 +265,10 @@ export class TemplateAuthor implements Author {
 
   async generateScenario(brief: AuthoringBrief, _opts?: AuthorOptions): Promise<string> {
     return renderScenarioMd(brief);
+  }
+
+  async parseRubric(text: string): Promise<RubricItem[]> {
+    return parseRubricText(text);
   }
 
   async generateCourse(brief: AuthoringBrief, _opts?: AuthorOptions): Promise<GeneratedCourse> {

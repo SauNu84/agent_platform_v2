@@ -53,6 +53,13 @@ function toSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
 
+/** Render structured rubric rows back into the free-text "Edit" tab (SAU-238). */
+function rubricToText(rows: RubricRow[]): string {
+  return rows
+    .map((r) => `${r.topic}${r.weight ? ` — ${r.weight}%` : ''}${r.note ? `: ${r.note}` : ''}`)
+    .join('\n');
+}
+
 function CreateScenarioForm() {
   const router = useRouter();
   const uid = useId();
@@ -65,6 +72,13 @@ function CreateScenarioForm() {
   const [persona, setPersona] = useState('');
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const [rubric, setRubric] = useState<RubricRow[]>([]);
+  // Rubric setting (SAU-238): a free-text "Edit" tab the author writes naturally,
+  // and a "Processed" tab where an AI parses it into the structured rubric the
+  // judge scores against. `rubric` (structured) stays canonical for submit.
+  const [rubricTab, setRubricTab] = useState<'edit' | 'processed'>('edit');
+  const [rubricText, setRubricText] = useState('');
+  const [parsing, setParsing] = useState(false);
+  const [rubricError, setRubricError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Remix provenance (SAU-226): when seeded from a source scenario we carry the
@@ -89,7 +103,9 @@ function CreateScenarioForm() {
         setDescription(draft.description ?? '');
         setPersona(draft.persona);
         setVisibility(draft.visibility);
-        setRubric(draft.rubric.map((r) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' })));
+        const rows = draft.rubric.map((r) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' }));
+        setRubric(rows);
+        setRubricText(rubricToText(rows));
         setVoice(draft.voice);
         setCarriedMetadata(draft.metadata);
         setRemixedName(data.scenario.name);
@@ -105,8 +121,33 @@ function CreateScenarioForm() {
     if (!slugEdited) setSlug(toSlug(t.name));
     setDescription(t.description);
     setPersona(t.persona);
-    setRubric(t.rubric.map((r) => ({ ...r })));
+    const rows = t.rubric.map((r) => ({ ...r }));
+    setRubric(rows);
+    setRubricText(rubricToText(rows));
     setError(null);
+  }
+
+  // Processed tab (SAU-238): parse the free-text rubric into structured criteria
+  // via the AI authoring seam, then show the result for review in the Processed tab.
+  async function parseRubric() {
+    if (!rubricText.trim()) { setRubricError('Write the rubric in the Edit tab first.'); return; }
+    setParsing(true);
+    setRubricError(null);
+    try {
+      const res = await fetch('/api/authoring/parse-rubric', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: rubricText }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setRubric((data.rubric as RubricRow[]).map((r) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' })));
+      setRubricTab('processed');
+    } catch (e) {
+      setRubricError((e as Error).message);
+    } finally {
+      setParsing(false);
+    }
   }
 
   function handleNameChange(v: string) {
@@ -273,41 +314,80 @@ function CreateScenarioForm() {
             />
           </div>
 
-          {/* Rubric */}
+          {/* Rubric (SAU-238): Edit (free text) + Processed (AI-parsed structure) */}
           <div className="form-group">
-            <div className="form-row-head">
-              <label className="form-label">Rubric <span className="form-optional">(Optional)</span></label>
-              <button type="button" className="btn-ghost-sm" onClick={addRubricRow}>+ Add criterion</button>
+            <label className="form-label">Rubric <span className="form-optional">(Optional)</span></label>
+            <div className="tabs" role="tablist">
+              <button
+                type="button" role="tab" aria-selected={rubricTab === 'edit'}
+                className={`tab ${rubricTab === 'edit' ? 'active' : ''}`}
+                onClick={() => setRubricTab('edit')}
+              >Edit</button>
+              <button
+                type="button" role="tab" aria-selected={rubricTab === 'processed'}
+                className={`tab ${rubricTab === 'processed' ? 'active' : ''}`}
+                onClick={() => setRubricTab('processed')}
+              >Processed{rubric.length ? ` (${rubric.length})` : ''}</button>
             </div>
-            {rubric.length === 0 && (
-              <p className="form-hint-block">Add scored criteria to enable LLM-judge analysis after each session.</p>
-            )}
-            {rubric.map((row, i) => (
-              <div key={i} className="rubric-row">
-                <input
-                  type="text"
-                  className="form-input rubric-topic"
-                  placeholder="Criterion name"
-                  value={row.topic}
-                  onChange={(e) => updateRubricRow(i, { topic: e.target.value })}
+
+            {rubricTab === 'edit' ? (
+              <div className="tab-body">
+                <p className="form-hint-block">
+                  Describe what a good session looks like in plain language — one criterion per line.
+                  Add an importance like <code>40%</code> if you want; the AI will fill in the rest.
+                  Then <strong>Process with AI</strong> to turn it into scored criteria.
+                </p>
+                <textarea
+                  className="form-textarea form-textarea-tall"
+                  rows={6}
+                  placeholder={'Communication clarity — explains ideas simply: 40%\nTechnical depth — backs claims with specifics\nHandles objections calmly'}
+                  value={rubricText}
+                  onChange={(e) => setRubricText(e.target.value)}
                 />
-                <input
-                  type="number"
-                  className="form-input rubric-weight"
-                  placeholder="Weight %"
-                  min={0}
-                  max={100}
-                  value={row.weight || ''}
-                  onChange={(e) => updateRubricRow(i, { weight: Number(e.target.value) })}
-                />
-                <button type="button" className="btn-remove" onClick={() => removeRubricRow(i)} aria-label="Remove">×</button>
+                <div className="form-actions">
+                  <button type="button" className="btn-ghost-sm" onClick={parseRubric} disabled={parsing || !rubricText.trim()}>
+                    {parsing ? 'Processing…' : 'Process with AI →'}
+                  </button>
+                </div>
               </div>
-            ))}
-            {rubric.length > 0 && (
-              <p className="form-hint rubric-total">
-                Total weight: {rubric.reduce((s, r) => s + (r.weight || 0), 0)}% {rubric.reduce((s, r) => s + (r.weight || 0), 0) !== 100 ? '(must sum to 100 to publish)' : '✓'}
-              </p>
+            ) : (
+              <div className="tab-body">
+                <div className="form-row-head">
+                  <p className="form-hint-block" style={{ margin: 0 }}>AI-parsed criteria — review and adjust before saving.</p>
+                  <button type="button" className="btn-ghost-sm" onClick={addRubricRow}>+ Add criterion</button>
+                </div>
+                {rubric.length === 0 && (
+                  <p className="form-hint-block">Nothing parsed yet — write a rubric in the Edit tab and Process it, or add criteria manually.</p>
+                )}
+                {rubric.map((row, i) => (
+                  <div key={i} className="rubric-row">
+                    <input
+                      type="text"
+                      className="form-input rubric-topic"
+                      placeholder="Criterion name"
+                      value={row.topic}
+                      onChange={(e) => updateRubricRow(i, { topic: e.target.value })}
+                    />
+                    <input
+                      type="number"
+                      className="form-input rubric-weight"
+                      placeholder="Weight %"
+                      min={0}
+                      max={100}
+                      value={row.weight || ''}
+                      onChange={(e) => updateRubricRow(i, { weight: Number(e.target.value) })}
+                    />
+                    <button type="button" className="btn-remove" onClick={() => removeRubricRow(i)} aria-label="Remove">×</button>
+                  </div>
+                ))}
+                {rubric.length > 0 && (
+                  <p className="form-hint rubric-total">
+                    Total weight: {rubric.reduce((s, r) => s + (r.weight || 0), 0)}% {rubric.reduce((s, r) => s + (r.weight || 0), 0) !== 100 ? '(must sum to 100 to publish)' : '✓'}
+                  </p>
+                )}
+              </div>
             )}
+            {rubricError && <div className="notice" role="alert">{rubricError}</div>}
           </div>
 
           {error && <div className="notice" role="alert">{error}</div>}

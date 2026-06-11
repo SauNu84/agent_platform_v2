@@ -6,6 +6,7 @@ import { compileCourseContent, validateCourseReferences, CourseCompileError } fr
 import { toCompiledScenario } from '@/domain/scenario';
 import {
   Author, AuthoringBrief, AuthorOptions, GeneratedCourse, TemplateAuthor,
+  parseRubricText, roundWeightsTo100,
 } from '@/authoring/author';
 import {
   generateScenarioDraft, generateCourseDraft, publishScenarioDraft, publishCourseDraft, AuthoringError,
@@ -23,6 +24,9 @@ class ScriptedAuthor implements Author {
   }
   async generateCourse(_brief: AuthoringBrief, _opts?: AuthorOptions): Promise<GeneratedCourse> {
     return this.courses[Math.min(this.cCalls++, this.courses.length - 1)];
+  }
+  async parseRubric(text: string) {
+    return parseRubricText(text);
   }
 }
 
@@ -129,4 +133,45 @@ test('course gate: a course referencing a non-existent scenario is rejected with
 test('course compiler rejects duplicate ordered members', () => {
   const md = `---\nid: dup-course\nname: Dup\nscenarios:\n  - a-scenario\n  - a-scenario\n---\n`;
   assert.throws(() => compileCourseContent(md), CourseCompileError);
+});
+
+// ── Rubric parsing (SAU-238): free text → structured { topic, weight, note }[] ─
+
+test('SAU-238: roundWeightsTo100 always sums to exactly 100', () => {
+  assert.deepEqual(roundWeightsTo100([]), []);
+  assert.equal(roundWeightsTo100([1, 1, 1]).reduce((s, w) => s + w, 0), 100);
+  assert.equal(roundWeightsTo100([0, 0, 0, 0]).reduce((s, w) => s + w, 0), 100); // no signal → even-ish
+  assert.equal(roundWeightsTo100([10, 20, 30]).reduce((s, w) => s + w, 0), 100); // scaled up from 60
+  assert.deepEqual(roundWeightsTo100([50, 50]), [50, 50]);
+});
+
+test('SAU-238: parseRubricText splits lines into criteria and normalizes weights to 100', () => {
+  const rubric = parseRubricText(
+    'Communication clarity — explains ideas simply: 40%\nTechnical depth — backs claims with specifics\nHandles objections calmly',
+  );
+  assert.equal(rubric.length, 3);
+  assert.equal(rubric.reduce((s, r) => s + r.weight, 0), 100);
+  assert.equal(rubric[0].topic, 'Communication clarity');
+  assert.equal(rubric[0].weight, 40);            // explicit weight honored
+  assert.equal(rubric[0].note, 'explains ideas simply');
+  // The two unweighted criteria share the remaining 60.
+  assert.equal(rubric[1].weight + rubric[2].weight, 60);
+});
+
+test('SAU-238: parseRubricText with no weights distributes 100 evenly', () => {
+  const rubric = parseRubricText('Empathy\nClarity\nStructure\nFollow-up');
+  assert.equal(rubric.length, 4);
+  assert.equal(rubric.reduce((s, r) => s + r.weight, 0), 100);
+  assert.ok(rubric.every((r) => r.weight >= 24 && r.weight <= 26)); // ~25 each
+});
+
+test('SAU-238: parseRubricText strips bullets/numbering and ignores blank lines', () => {
+  const rubric = parseRubricText('- First\n2) Second\n\n   \n* Third (30%)');
+  assert.deepEqual(rubric.map((r) => r.topic), ['First', 'Second', 'Third']);
+  assert.equal(rubric.reduce((s, r) => s + r.weight, 0), 100);
+});
+
+test('SAU-238: TemplateAuthor.parseRubric matches the pure parser (seam wiring)', async () => {
+  const text = 'Discovery: asks open questions\nClosing — secures next step: 60%';
+  assert.deepEqual(await new TemplateAuthor().parseRubric(text), parseRubricText(text));
 });

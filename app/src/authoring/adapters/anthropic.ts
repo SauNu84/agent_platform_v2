@@ -17,7 +17,9 @@ import matter from 'gray-matter';
 import {
   Author, AuthoringBrief, AuthorOptions, GeneratedCourse,
   authoringSystemPrompt, scenarioUserPrompt, COURSE_SCHEMA_CONTRACT,
+  rubricParseSystemPrompt, rubricParseUserPrompt, roundWeightsTo100, parseRubricText,
 } from '../author';
+import type { RubricItem } from '@/domain/scenario';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = process.env.AUTHORING_MODEL || 'claude-opus-4-8';
@@ -54,6 +56,32 @@ export class AnthropicAuthor implements Author {
       ].join('\n'),
     ));
     return { courseMd, scenarioMds };
+  }
+
+  async parseRubric(text: string): Promise<RubricItem[]> {
+    const raw = stripFence(await this.complete(rubricParseSystemPrompt(), rubricParseUserPrompt(text)));
+    let arr: unknown;
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      // Model didn't return clean JSON — fall back to the deterministic parser
+      // rather than failing the author's request.
+      return parseRubricText(text);
+    }
+    if (!Array.isArray(arr)) return parseRubricText(text);
+    // Coerce/clean each entry, then re-normalize weights to sum to 100 (the model
+    // is asked to do this, but we never trust it to be exact).
+    const items = arr
+      .map((e) => (e && typeof e === 'object' ? (e as Record<string, unknown>) : null))
+      .filter((e): e is Record<string, unknown> => !!e && typeof e.topic === 'string' && (e.topic as string).trim().length > 0)
+      .map((e) => ({
+        topic: (e.topic as string).trim(),
+        weight: Number.isFinite(Number(e.weight)) ? Number(e.weight) : 0,
+        note: typeof e.note === 'string' && e.note.trim() ? e.note.trim() : undefined,
+      }));
+    if (items.length === 0) return parseRubricText(text);
+    const weights = roundWeightsTo100(items.map((i) => i.weight));
+    return items.map((i, idx) => ({ topic: i.topic, weight: weights[idx], ...(i.note ? { note: i.note } : {}) }));
   }
 
   /** One Messages API round-trip → the concatenated text content. */
