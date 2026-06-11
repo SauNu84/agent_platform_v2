@@ -9,7 +9,7 @@
  * pre-fills the form from a cloned config (buildRemixConfig) so the user can edit
  * and save it as their own private draft — the same create path, no separate API.
  */
-import { Suspense, useEffect, useState, useId, type ReactNode } from 'react';
+import { Suspense, useEffect, useState, useId } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { buildRemixConfig } from '@/services/remix';
@@ -56,24 +56,19 @@ function toSlug(name: string): string {
 }
 
 /**
- * Collapsible optional section (SAU-238 ask #11): optional settings are collapsed
- * by default and the user expands them. Reuses the rubric collapse styling.
+ * Settings tabs (SAU-238 ask #12 — Product Expert redesign): the form was a flat
+ * scroll of accordions with required + optional fields interleaved. We group fields
+ * by the question the author is answering. Tabs ARE the progressive disclosure, so
+ * there are no nested accordions inside. Required fields live in Basics + AI Agent;
+ * submit jumps to the tab holding the first invalid field.
  */
-function CollapsibleSection({ title, optional = false, icon, defaultOpen = false, children }: {
-  title: string; optional?: boolean; icon?: string; defaultOpen?: boolean; children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="form-group">
-      <button type="button" className="rubric-collapse" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span className="rubric-chevron" aria-hidden="true">{open ? '⌄' : '›'}</span>
-        {icon && <span className="rubric-icon" aria-hidden="true">{icon}</span>}
-        <span className="form-label" style={{ margin: 0 }}>{title}{optional && <span className="form-optional"> (Optional)</span>}</span>
-      </button>
-      {open && <div style={{ marginTop: 10 }}>{children}</div>}
-    </div>
-  );
-}
+const SETTINGS_TABS = [
+  { id: 'basics', label: 'Basics', icon: '🧩', blurb: 'Name, link, and who can see this scenario.' },
+  { id: 'agent', label: 'AI Agent', icon: '🤖', blurb: 'Who the AI is, how it behaves, and what it knows.' },
+  { id: 'session', label: 'Session & Scoring', icon: '🎯', blurb: 'What the learner is told, and how the session is graded.' },
+  { id: 'appearance', label: 'Voice & Look', icon: '🎙', blurb: 'How the agent sounds and appears.' },
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number]['id'];
 
 /** Render structured rubric rows back into the free-text "Edit" tab (SAU-238). */
 function rubricToText(rows: RubricRow[]): string {
@@ -87,6 +82,8 @@ function CreateScenarioForm() {
   const uid = useId();
   const remixFrom = useSearchParams().get('remix');
 
+  // Which settings tab is showing (SAU-238 redesign). Basics first.
+  const [tab, setTab] = useState<SettingsTab>('basics');
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [slugEdited, setSlugEdited] = useState(false);
@@ -269,8 +266,8 @@ function CreateScenarioForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!slug) { setError('Slug is required'); return; }
-    if (!persona) { setError('AI Instructions are required'); return; }
+    if (!slug) { setTab('basics'); setError('ID / Slug is required.'); return; }
+    if (!persona) { setTab('agent'); setError('AI Instructions are required.'); return; }
     setSubmitting(true);
     setError(null);
     try {
@@ -350,9 +347,29 @@ function CreateScenarioForm() {
         </section>
 
         <form onSubmit={handleSubmit}>
+          {/* Settings tab nav (SAU-238 redesign) — group fields by intent. */}
+          <div className="studio-tabnav" role="tablist" aria-label="Scenario settings">
+            {SETTINGS_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.id}
+                className={`studio-tab ${tab === t.id ? 'active' : ''}`}
+                onClick={() => setTab(t.id)}
+              >
+                <span aria-hidden="true">{t.icon}</span> {t.label}
+              </button>
+            ))}
+          </div>
+          <p className="studio-tab-blurb">{SETTINGS_TABS.find((t) => t.id === tab)?.blurb}</p>
+
+          {/* ── Basics ─────────────────────────────────────────────── */}
+          {tab === 'basics' && (
+          <div className="studio-pane">
           {/* Name */}
           <div className="form-group">
-            <label htmlFor={`${uid}-name`} className="form-label">Name</label>
+            <label htmlFor={`${uid}-name`} className="form-label">Name <span className="form-required">*</span></label>
             <input
               id={`${uid}-name`}
               type="text"
@@ -367,7 +384,7 @@ function CreateScenarioForm() {
           {/* Slug */}
           <div className="form-group">
             <label htmlFor={`${uid}-slug`} className="form-label">
-              ID / Slug <span className="form-hint">kebab-case, auto-generated from name</span>
+              ID / Slug <span className="form-required">*</span> <span className="form-hint">kebab-case, auto-generated from name</span>
             </label>
             <input
               id={`${uid}-slug`}
@@ -393,64 +410,37 @@ function CreateScenarioForm() {
             </div>
           </div>
 
-          {/* AI Model (SAU-238 ask #6) — OpenAI today; registry-extensible */}
-          <CollapsibleSection title="AI Model" optional icon="🧠">
-            <p className="form-hint-block">Which model powers this scenario. We run on <strong>OpenAI</strong> today; more providers are coming.</p>
-            <select
-              id={`${uid}-model`}
-              aria-label="AI Model"
-              className="form-input"
-              value={aiModel}
-              onChange={(e) => setAiModel(e.target.value)}
-            >
-              {AI_MODELS.map((m) => (
-                <option key={m.id} value={m.id} disabled={!m.available}>
-                  {m.label}{m.badge ? ` — ${m.available ? m.badge : 'coming soon'}` : ''}
-                </option>
-              ))}
-            </select>
-          </CollapsibleSection>
-
           {/* Public Description */}
-          <CollapsibleSection title="Public Description" optional>
+          <div className="form-group">
+            <label htmlFor={`${uid}-desc`} className="form-label">Public Description <span className="form-optional">(Optional)</span></label>
             <textarea
               id={`${uid}-desc`}
-              aria-label="Public Description"
               className="form-textarea"
               rows={3}
               placeholder="What participants see before starting — describe the scenario's purpose and what they'll practice."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
-          </CollapsibleSection>
+          </div>
+          </div>
+          )}
 
-          {/* User Instruction (SAU-238) — shown to the human learner, NOT sent to the agent */}
-          <CollapsibleSection title="User Instruction" optional>
-            <p className="form-hint-block">The learner&apos;s brief — their goal and what to do in this scenario. Shown to the user before/during the session; <strong>not</strong> sent to the AI (so it can&apos;t see the playbook).</p>
-            <textarea
-              id={`${uid}-userinstr`}
-              aria-label="User Instruction"
-              className="form-textarea"
-              rows={4}
-              placeholder="Your Goal: e.g., Convince the VP of Engineering to adopt your tool. They're skeptical and short on time — lead with proof."
-              value={userInstructions}
-              onChange={(e) => setUserInstructions(e.target.value)}
-            />
-          </CollapsibleSection>
-
+          {/* ── AI Agent ───────────────────────────────────────────── */}
+          {tab === 'agent' && (
+          <div className="studio-pane">
           {/* Description for AI (SAU-238) — persona identity, prepended to the model prompt */}
-          <CollapsibleSection title="Description for AI" optional>
+          <div className="form-group">
+            <label htmlFor={`${uid}-aidesc`} className="form-label">Description for AI <span className="form-optional">(Optional)</span></label>
             <p className="form-hint-block">Who the AI <em>is</em> — a short persona identity. This is prepended to the AI Instructions in the system prompt the model receives, so it <strong>does</strong> shape the agent.</p>
             <textarea
               id={`${uid}-aidesc`}
-              aria-label="Description for AI"
               className="form-textarea"
               rows={4}
               placeholder="You are Alex Chen, VP of Engineering at a 75-person company. Cost-conscious, risk-averse, currently happy with your existing tooling."
               value={aiDescription}
               onChange={(e) => setAiDescription(e.target.value)}
             />
-          </CollapsibleSection>
+          </div>
 
           {/* AI Instructions */}
           <div className="form-group">
@@ -469,8 +459,27 @@ function CreateScenarioForm() {
             />
           </div>
 
+          {/* AI Model (SAU-238 ask #6) — OpenAI today; registry-extensible */}
+          <div className="form-group">
+            <label htmlFor={`${uid}-model`} className="form-label">AI Model <span className="form-optional">(Optional)</span></label>
+            <p className="form-hint-block">Which model powers this scenario. We run on <strong>OpenAI</strong> today; more providers are coming.</p>
+            <select
+              id={`${uid}-model`}
+              className="form-input"
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+            >
+              {AI_MODELS.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.label}{m.badge ? ` — ${m.available ? m.badge : 'coming soon'}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Additional Context for AI (SAU-238 ask #7) — grounding folded into the prompt */}
-          <CollapsibleSection title="Additional Context for AI" optional icon="📎">
+          <div className="form-group">
+            <label className="form-label">Additional Context for AI <span className="form-optional">(Optional)</span></label>
             <p className="form-hint-block">Attach reference material the agent should treat as ground truth (a product page, spec, policy). It&apos;s folded into the AI&apos;s system prompt, so it <strong>does</strong> improve answers.</p>
             <div className="tabs" role="tablist">
               {([['pdf', '📄 PDF'], ['url', '🔗 URL']] as const).map(([id, lbl]) => (
@@ -525,10 +534,30 @@ function CreateScenarioForm() {
               )}
               {contextError && <div className="notice" role="alert">{contextError}</div>}
             </div>
-          </CollapsibleSection>
+          </div>
+          </div>
+          )}
+
+          {/* ── Session & Scoring ──────────────────────────────────── */}
+          {tab === 'session' && (
+          <div className="studio-pane">
+          {/* User Instruction (SAU-238) — shown to the human learner, NOT sent to the agent */}
+          <div className="form-group">
+            <label htmlFor={`${uid}-userinstr`} className="form-label">User Instruction <span className="form-optional">(Optional)</span></label>
+            <p className="form-hint-block">The learner&apos;s brief — their goal and what to do in this scenario. Shown to the user before/during the session; <strong>not</strong> sent to the AI (so it can&apos;t see the playbook).</p>
+            <textarea
+              id={`${uid}-userinstr`}
+              className="form-textarea"
+              rows={4}
+              placeholder="Your Goal: e.g., Convince the VP of Engineering to adopt your tool. They're skeptical and short on time — lead with proof."
+              value={userInstructions}
+              onChange={(e) => setUserInstructions(e.target.value)}
+            />
+          </div>
 
           {/* Rubrik (SAU-238): Edit (free text) + Processed (AI-parsed structure) */}
-          <CollapsibleSection title="Rubrik" optional icon="📋">
+          <div className="form-group">
+            <label className="form-label">📋 Rubrik <span className="form-optional">(Optional)</span></label>
               <>
                 <p className="form-hint-block rubric-info">
                   <span aria-hidden="true">ⓘ </span>Processed rubrik will be generated on first session analysis.
@@ -610,10 +639,13 @@ function CreateScenarioForm() {
                 )}
                 {rubricError && <div className="notice" role="alert">{rubricError}</div>}
               </>
-          </CollapsibleSection>
+          </div>
+          </div>
+          )}
 
-          {/* Appearance (SAU-238 ask #10) — voice (real) + static avatar; at the bottom per ask #11 */}
-          <CollapsibleSection title="Appearance" optional icon="🎨">
+          {/* ── Voice & Look ───────────────────────────────────────── */}
+          {tab === 'appearance' && (
+          <div className="studio-pane">
             <p className="form-hint-block">How the agent sounds and looks. Voice is live; the avatar image shows in the detail page and the live-demo window.</p>
             <label htmlFor={`${uid}-voice`} className="form-label" style={{ fontSize: 13 }}>Voice</label>
             <select id={`${uid}-voice`} className="form-input" value={voiceChoice} onChange={(e) => setVoiceChoice(e.target.value)}>
@@ -637,7 +669,8 @@ function CreateScenarioForm() {
               )}
             </div>
             <p className="form-hint">Animated / video &ldquo;live avatars&rdquo; (lip-sync) are a premium 3rd-party feature — not in this build.</p>
-          </CollapsibleSection>
+          </div>
+          )}
 
           {error && <div className="notice" role="alert">{error}</div>}
 
