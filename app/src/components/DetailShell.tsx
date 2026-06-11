@@ -301,7 +301,9 @@ export default function DetailShell(props: DetailShellProps) {
               <>
                 <h2>Additional Context for AI</h2>
                 <p className="empty" style={{ fontStyle: 'normal' }}>
-                  {aiContextSource ? <>Grounded on <a href={aiContextSource} target="_blank" rel="noreferrer">{aiContextSource}</a> · </> : null}
+                  {aiContextSource ? <>Grounded on {/^https?:\/\//.test(aiContextSource)
+                    ? <a href={aiContextSource} target="_blank" rel="noreferrer">{aiContextSource}</a>
+                    : <strong>{aiContextSource}</strong>} · </> : null}
                   {aiContext.length.toLocaleString()} chars folded into the system prompt.
                 </p>
               </>

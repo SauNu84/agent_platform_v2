@@ -154,3 +154,13 @@ test('SAU-238: modelInstructions appends _aiContext as reference context', () =>
   assert.ok(/Reference context/i.test(sys));
   assert.ok(sys.includes('Acme Pro costs $29/mo.'));
 });
+
+// SAU-238 ask #8: real PDF text extraction (no faking).
+import { extractPdfText } from '@/lib/pdf-text';
+import { readFileSync } from 'node:fs';
+
+test('SAU-238: extractPdfText pulls real text out of a PDF', async () => {
+  const bytes = new Uint8Array(readFileSync(new URL('./fixtures/sample.pdf', import.meta.url)));
+  const text = await extractPdfText(bytes);
+  assert.ok(text.includes('Hello PDF context for the agent'), `got: ${text}`);
+});

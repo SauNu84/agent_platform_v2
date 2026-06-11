@@ -80,7 +80,7 @@ function CreateScenarioForm() {
   // SAU-238 (ask #6): which AI model runs this scenario. OpenAI today; registry-extensible.
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODEL);
   // SAU-238 (ask #7): Additional Context for AI — reference text folded into the prompt.
-  const [contextTab, setContextTab] = useState<'url' | 'pdf' | 'youtube'>('url');
+  const [contextTab, setContextTab] = useState<'url' | 'pdf'>('pdf');
   const [contextUrl, setContextUrl] = useState('');
   const [aiContext, setAiContext] = useState('');         // extracted reference text (stored)
   const [contextSource, setContextSource] = useState(''); // where it came from (the URL)
@@ -167,6 +167,25 @@ function CreateScenarioForm() {
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
       setAiContext(data.text);
       setContextSource(data.source ?? contextUrl.trim());
+    } catch (e) {
+      setContextError((e as Error).message);
+    } finally {
+      setFetchingContext(false);
+    }
+  }
+
+  // PDF context (SAU-238 ask #8): upload → real server-side text extraction.
+  async function uploadPdf(file: File) {
+    setFetchingContext(true);
+    setContextError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/authoring/extract-pdf', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setAiContext(data.text);
+      setContextSource(data.source ?? file.name);
     } catch (e) {
       setContextError((e as Error).message);
     } finally {
@@ -427,25 +446,39 @@ function CreateScenarioForm() {
             <label className="form-label">Additional Context for AI</label>
             <p className="form-hint-block">Attach reference material the agent should treat as ground truth (a product page, spec, policy). It&apos;s folded into the AI&apos;s system prompt, so it <strong>does</strong> improve answers.</p>
             <div className="tabs" role="tablist">
-              {([['url', '🔗 URL'], ['pdf', '📄 PDF'], ['youtube', '▶ YouTube']] as const).map(([id, lbl]) => (
+              {([['pdf', '📄 PDF'], ['url', '🔗 URL']] as const).map(([id, lbl]) => (
                 <button
                   key={id} type="button" role="tab" aria-selected={contextTab === id}
                   className={`tab ${contextTab === id ? 'active' : ''}`}
-                  onClick={() => id === 'url' && setContextTab(id)}
-                  disabled={id !== 'url'}
-                  title={id !== 'url' ? 'Coming soon' : undefined}
-                >{lbl}{id !== 'url' ? ' — soon' : ''}</button>
+                  onClick={() => setContextTab(id)}
+                >{lbl}</button>
               ))}
             </div>
             <div className="tab-body">
               {aiContext ? (
                 <div className="report-panel">
                   <p className="form-hint-block" style={{ margin: 0 }}>
-                    ✓ Context attached{contextSource ? <> from <a href={contextSource} target="_blank" rel="noreferrer">{contextSource}</a></> : ''} — <strong>{aiContext.length.toLocaleString()}</strong> chars.
+                    ✓ Context attached{contextSource ? <> from {/^https?:\/\//.test(contextSource)
+                      ? <a href={contextSource} target="_blank" rel="noreferrer">{contextSource}</a>
+                      : <strong>{contextSource}</strong>}</> : ''} — <strong>{aiContext.length.toLocaleString()}</strong> chars.
                   </p>
                   <p className="ld-sim" style={{ marginTop: 6 }}>{aiContext.slice(0, 240)}{aiContext.length > 240 ? '…' : ''}</p>
                   <button type="button" className="btn-ghost-sm" onClick={clearContext}>Remove context</button>
                 </div>
+              ) : contextTab === 'pdf' ? (
+                <>
+                  <label className="btn-sm" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                    {fetchingContext ? 'Reading PDF…' : '⬆ Upload PDF context'}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      style={{ display: 'none' }}
+                      disabled={fetchingContext}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPdf(f); e.target.value = ''; }}
+                    />
+                  </label>
+                  <p className="form-hint">We extract the PDF&apos;s text and fold it into the AI&apos;s system prompt. (Scanned/image-only PDFs have no extractable text.)</p>
+                </>
               ) : (
                 <>
                   <div className="rubric-row">
@@ -460,7 +493,7 @@ function CreateScenarioForm() {
                       {fetchingContext ? 'Fetching…' : 'Fetch'}
                     </button>
                   </div>
-                  <p className="form-hint">Paste a public web page URL. PDF &amp; YouTube ingestion are coming soon.</p>
+                  <p className="form-hint">Paste a public web page URL — we extract its readable text.</p>
                 </>
               )}
               {contextError && <div className="notice" role="alert">{contextError}</div>}
