@@ -120,3 +120,37 @@ test('SAU-238: AI model registry — OpenAI is the available default; unknown fa
   assert.equal(aiModelLabel('unknown-id'), aiModelLabel(DEFAULT_AI_MODEL)); // safe fallback
   assert.ok(AI_MODELS.some((m) => m.available), 'at least one model must be runnable');
 });
+
+// SAU-238 ask #7: Additional Context for AI.
+import { htmlToText, htmlTitle, isFetchableUrl } from '@/lib/html-text';
+
+test('SAU-238: htmlToText strips tags/scripts and htmlTitle reads the title', () => {
+  const html = '<html><head><title>Pricing — Acme</title></head><body><script>evil()</script><h1>Plans</h1><p>Pro is $29/mo &amp; includes voice.</p></body></html>';
+  const text = htmlToText(html);
+  assert.ok(!/evil|<|>/.test(text), 'no script or tags should survive');
+  assert.ok(text.includes('Plans') && text.includes('Pro is $29/mo & includes voice.'));
+  assert.equal(htmlTitle(html), 'Pricing — Acme');
+});
+
+test('SAU-238: htmlToText truncates to the char cap', () => {
+  const text = htmlToText('<p>' + 'x'.repeat(9000) + '</p>', 6000);
+  assert.ok(text.length <= 6001); // 6000 + ellipsis
+  assert.ok(text.endsWith('…'));
+});
+
+test('SAU-238: isFetchableUrl blocks loopback/private and non-http(s)', () => {
+  assert.equal(isFetchableUrl('https://example.com/x'), true);
+  assert.equal(isFetchableUrl('http://localhost:3000'), false);
+  assert.equal(isFetchableUrl('http://127.0.0.1/'), false);
+  assert.equal(isFetchableUrl('http://192.168.1.5/'), false);
+  assert.equal(isFetchableUrl('http://169.254.1.1/'), false);
+  assert.equal(isFetchableUrl('file:///etc/passwd'), false);
+  assert.equal(isFetchableUrl('not a url'), false);
+});
+
+test('SAU-238: modelInstructions appends _aiContext as reference context', () => {
+  const sys = modelInstructions({ aiInstructions: 'Be terse.', metadata: { _aiContext: 'Acme Pro costs $29/mo.' } });
+  assert.ok(sys.includes('Be terse.'));
+  assert.ok(/Reference context/i.test(sys));
+  assert.ok(sys.includes('Acme Pro costs $29/mo.'));
+});

@@ -158,7 +158,12 @@ export function normalizeFrontmatter(fm: ScenarioFrontmatter, body: string): Com
  */
 export function modelInstructions(rec: { aiInstructions: string; metadata?: Record<string, unknown> }): string {
   const desc = typeof rec.metadata?._aiDescription === 'string' ? rec.metadata._aiDescription.trim() : '';
-  return [desc, rec.aiInstructions].filter(Boolean).join('\n\n');
+  // "Additional Context for AI" (SAU-238 ask #7): reference material the author
+  // attached (e.g. fetched from a URL). Grounding context → improves answers.
+  const context = typeof rec.metadata?._aiContext === 'string' ? rec.metadata._aiContext.trim() : '';
+  const parts = [desc, rec.aiInstructions];
+  if (context) parts.push(`## Reference context\nUse the following background as ground truth where relevant:\n\n${context}`);
+  return parts.filter(Boolean).join('\n\n');
 }
 
 /** Project a canonical record into the realtime voice seam's CompiledScenario. */

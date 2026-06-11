@@ -79,6 +79,13 @@ function CreateScenarioForm() {
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   // SAU-238 (ask #6): which AI model runs this scenario. OpenAI today; registry-extensible.
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODEL);
+  // SAU-238 (ask #7): Additional Context for AI — reference text folded into the prompt.
+  const [contextTab, setContextTab] = useState<'url' | 'pdf' | 'youtube'>('url');
+  const [contextUrl, setContextUrl] = useState('');
+  const [aiContext, setAiContext] = useState('');         // extracted reference text (stored)
+  const [contextSource, setContextSource] = useState(''); // where it came from (the URL)
+  const [fetchingContext, setFetchingContext] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
   const [rubric, setRubric] = useState<RubricRow[]>([]);
   // Rubric setting (SAU-238): a free-text "Edit" tab the author writes naturally,
   // and a "Processed" tab where an AI parses it into the structured rubric the
@@ -122,6 +129,8 @@ function CreateScenarioForm() {
         if (typeof md._userInstructions === 'string') setUserInstructions(md._userInstructions);
         if (typeof md._aiDescription === 'string') setAiDescription(md._aiDescription);
         if (typeof md._model === 'string') setAiModel(md._model);
+        if (typeof md._aiContext === 'string') setAiContext(md._aiContext);
+        if (typeof md._aiContextSource === 'string') { setContextSource(md._aiContextSource); setContextUrl(md._aiContextSource); }
         setRemixedName(data.scenario.name);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -143,6 +152,34 @@ function CreateScenarioForm() {
 
   // Processed tab (SAU-238): parse the free-text rubric into structured criteria
   // via the AI authoring seam, then show the result for review in the Processed tab.
+  // Additional Context for AI (SAU-238 ask #7): fetch a URL → extracted reference text.
+  async function fetchContext() {
+    if (!contextUrl.trim()) { setContextError('Enter a URL first.'); return; }
+    setFetchingContext(true);
+    setContextError(null);
+    try {
+      const res = await fetch('/api/authoring/fetch-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: contextUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setAiContext(data.text);
+      setContextSource(data.source ?? contextUrl.trim());
+    } catch (e) {
+      setContextError((e as Error).message);
+    } finally {
+      setFetchingContext(false);
+    }
+  }
+
+  function clearContext() {
+    setAiContext('');
+    setContextSource('');
+    setContextError(null);
+  }
+
   async function parseRubric() {
     if (!rubricText.trim()) { setRubricTab('edit'); setRubricError('Write the rubric in the Edit tab first.'); return; }
     setParsing(true);
@@ -215,6 +252,8 @@ function CreateScenarioForm() {
             ...(userInstructions.trim() ? { _userInstructions: userInstructions.trim() } : {}),
             ...(aiDescription.trim() ? { _aiDescription: aiDescription.trim() } : {}),
             _model: aiModel,
+            ...(aiContext.trim() ? { _aiContext: aiContext.trim() } : {}),
+            ...(contextSource.trim() ? { _aiContextSource: contextSource.trim() } : {}),
           },
         }),
       });
@@ -381,6 +420,51 @@ function CreateScenarioForm() {
               onChange={(e) => setPersona(e.target.value)}
               required
             />
+          </div>
+
+          {/* Additional Context for AI (SAU-238 ask #7) — grounding folded into the prompt */}
+          <div className="form-group">
+            <label className="form-label">Additional Context for AI</label>
+            <p className="form-hint-block">Attach reference material the agent should treat as ground truth (a product page, spec, policy). It&apos;s folded into the AI&apos;s system prompt, so it <strong>does</strong> improve answers.</p>
+            <div className="tabs" role="tablist">
+              {([['url', '🔗 URL'], ['pdf', '📄 PDF'], ['youtube', '▶ YouTube']] as const).map(([id, lbl]) => (
+                <button
+                  key={id} type="button" role="tab" aria-selected={contextTab === id}
+                  className={`tab ${contextTab === id ? 'active' : ''}`}
+                  onClick={() => id === 'url' && setContextTab(id)}
+                  disabled={id !== 'url'}
+                  title={id !== 'url' ? 'Coming soon' : undefined}
+                >{lbl}{id !== 'url' ? ' — soon' : ''}</button>
+              ))}
+            </div>
+            <div className="tab-body">
+              {aiContext ? (
+                <div className="report-panel">
+                  <p className="form-hint-block" style={{ margin: 0 }}>
+                    ✓ Context attached{contextSource ? <> from <a href={contextSource} target="_blank" rel="noreferrer">{contextSource}</a></> : ''} — <strong>{aiContext.length.toLocaleString()}</strong> chars.
+                  </p>
+                  <p className="ld-sim" style={{ marginTop: 6 }}>{aiContext.slice(0, 240)}{aiContext.length > 240 ? '…' : ''}</p>
+                  <button type="button" className="btn-ghost-sm" onClick={clearContext}>Remove context</button>
+                </div>
+              ) : (
+                <>
+                  <div className="rubric-row">
+                    <input
+                      type="url"
+                      className="form-input rubric-topic"
+                      placeholder="https://example.com/page-the-agent-should-know"
+                      value={contextUrl}
+                      onChange={(e) => setContextUrl(e.target.value)}
+                    />
+                    <button type="button" className="btn-sm" onClick={fetchContext} disabled={fetchingContext || !contextUrl.trim()}>
+                      {fetchingContext ? 'Fetching…' : 'Fetch'}
+                    </button>
+                  </div>
+                  <p className="form-hint">Paste a public web page URL. PDF &amp; YouTube ingestion are coming soon.</p>
+                </>
+              )}
+              {contextError && <div className="notice" role="alert">{contextError}</div>}
+            </div>
           </div>
 
           {/* Rubrik (SAU-238): Edit (free text) + Processed (AI-parsed structure) */}

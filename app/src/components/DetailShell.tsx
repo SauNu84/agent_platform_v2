@@ -72,6 +72,9 @@ export default function DetailShell(props: DetailShellProps) {
   const userInstructions = typeof props.metadata?._userInstructions === 'string' ? props.metadata._userInstructions : '';
   // SAU-238 ask #6: which AI model this scenario runs on.
   const aiModel = typeof props.metadata?._model === 'string' ? aiModelLabel(props.metadata._model) : '';
+  // SAU-238 ask #7: reference context attached to ground the agent.
+  const aiContext = typeof props.metadata?._aiContext === 'string' ? props.metadata._aiContext : '';
+  const aiContextSource = typeof props.metadata?._aiContextSource === 'string' ? props.metadata._aiContextSource : '';
   // Share short link (SAU-225) — confirmation (the copied URL) + busy/error state.
   const [shareInfo, setShareInfo] = useState<{ url: string; copied: boolean } | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -293,6 +296,16 @@ export default function DetailShell(props: DetailShellProps) {
 
             <h2>AI Instructions</h2>
             <div className="instructions">{props.instructions}</div>
+
+            {aiContext && (
+              <>
+                <h2>Additional Context for AI</h2>
+                <p className="empty" style={{ fontStyle: 'normal' }}>
+                  {aiContextSource ? <>Grounded on <a href={aiContextSource} target="_blank" rel="noreferrer">{aiContextSource}</a> · </> : null}
+                  {aiContext.length.toLocaleString()} chars folded into the system prompt.
+                </p>
+              </>
+            )}
 
             {props.rubric.length > 0 && (
               <>
