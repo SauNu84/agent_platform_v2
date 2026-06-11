@@ -10,7 +10,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE } from '@/auth/constants';
 
-const PUBLIC_PREFIXES = ['/login', '/api/auth'];
+// Public, unauthenticated paths: the login screen, the auth API, and the legal
+// pages linked from the login footer (Terms / AUP / Privacy — SAU-234).
+const PUBLIC_PREFIXES = ['/login', '/api/auth', '/terms', '/privacy-policy'];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

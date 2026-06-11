@@ -2,8 +2,11 @@
 
 /**
  * Login form (Slice 5). Posts credentials to /api/auth/login; on success the
- * server sets the httpOnly session cookie and we navigate to `next`. The seeded
- * test-user hint is shown only outside production so QA can sign in quickly.
+ * server sets the httpOnly session cookie and we navigate to `next`.
+ *
+ * Per board direction (SAU-234) the login screen shows NO user information
+ * (the seeded test-user credential hint was removed); seeded test accounts are
+ * documented in the README for QA instead.
  */
 import { useState } from 'react';
 
@@ -66,13 +69,6 @@ export default function LoginForm({ next }: { next: string }) {
       <button type="submit" className="btn-primary" disabled={busy}>
         {busy ? 'Signing in…' : 'Sign in'}
       </button>
-
-      {process.env.NODE_ENV !== 'production' && (
-        <p className="login-hint">
-          Test users (see README): <code>user@demo.test</code> · <code>admin@demo.test</code> ·{' '}
-          <code>operator@demo.test</code> — password <code>password123</code>.
-        </p>
-      )}
     </form>
   );
 }
