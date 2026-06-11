@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
+import LiveDemo from './LiveDemo';
 
 export interface SessionSummary {
   id: string;
@@ -64,6 +65,8 @@ export default function DetailShell(props: DetailShellProps) {
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
   // Text chat overlay (SAU-224) — replaces the live/simulated demo on this surface.
   const [chatOpen, setChatOpen] = useState(false);
+  // Live demo flow (SAU-238) — camera/mic verify → live interaction window.
+  const [liveDemoOpen, setLiveDemoOpen] = useState(false);
   // Share short link (SAU-225) — confirmation (the copied URL) + busy/error state.
   const [shareInfo, setShareInfo] = useState<{ url: string; copied: boolean } | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -137,6 +140,22 @@ export default function DetailShell(props: DetailShellProps) {
     } finally {
       setSharing(false);
     }
+  }
+
+  // Live demo flow (SAU-238) — camera/mic verify, then the live interaction window
+  // with the transcript on the right. Sessions land in the Sessions tab via upsert.
+  if (liveDemoOpen) {
+    return (
+      <LiveDemo
+        name={props.name}
+        instructions={props.instructions}
+        category={String(props.metadata?.role ?? props.metadata?.category ?? props.kind)}
+        slug={props.slug}
+        sessionsEndpoint={props.sessionsEndpoint}
+        onClose={() => setLiveDemoOpen(false)}
+        onSession={upsertSession}
+      />
+    );
   }
 
   // Text chat overlay (SAU-224) — discuss with the persona over text.
@@ -223,8 +242,8 @@ export default function DetailShell(props: DetailShellProps) {
             // default, live OpenAI Realtime when keyed (real end-user audio at scale
             // stays gated by SAU-193/SAU-208).
             <>
-              <button className="btn btn-secondary" onClick={join} disabled={joining} title="Run a live voice roleplay session">
-                {joining ? 'Connecting…' : '🎙 Live demo'}
+              <button className="btn btn-secondary" onClick={() => { setError(null); setLiveDemoOpen(true); }} title="Verify your camera & mic, then join a live roleplay">
+                🎙 Live demo
               </button>
               <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>
                 💬 Chat

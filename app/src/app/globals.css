@@ -536,3 +536,52 @@ td.warn { color: #d97706; font-weight: 600; }
   display: inline-block; padding: 2px 9px; border-radius: 999px; font-family: var(--mono);
   font-size: 12px; background: var(--accent-soft); color: var(--accent-2); border: 1px solid var(--accent);
 }
+
+/* ── Live demo flow (SAU-238): verify pre-flight + live interaction window ── */
+.live-demo { max-width: 1040px; }
+.ld-verify-head { margin-bottom: 6px; }
+.ld-title { margin: 0 0 18px; }
+.ld-verify { display: grid; grid-template-columns: 1.4fr 1fr; gap: 32px; align-items: start; }
+.ld-preview-col { display: flex; flex-direction: column; gap: 12px; }
+.ld-video-box { position: relative; aspect-ratio: 16 / 10; background: var(--panel-2); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+.ld-video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+.ld-video-off { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-family: var(--mono); font-size: 14px; }
+.ld-devices { display: flex; align-items: center; gap: 12px; justify-content: center; }
+.btn-sm.ld-on { border-color: var(--accent); color: var(--accent-2); }
+.ld-mic-test { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.ld-mic-dots { display: inline-flex; gap: 3px; }
+.ld-dot { width: 7px; height: 14px; border-radius: 3px; background: var(--border-strong); transition: background 80ms linear; }
+.ld-dot.on { background: var(--accent); }
+.ld-hint { text-align: center; color: var(--muted); font-size: 13px; margin: 0; }
+.ld-ready-col { display: flex; flex-direction: column; gap: 10px; }
+.ld-waiting { color: var(--accent-2); font-family: var(--mono); font-size: 13px; }
+.ld-ready-label { margin: 6px 0 0; }
+.ld-ready-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; color: var(--text); font-size: 14px; }
+.ld-trouble { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+.ld-record { color: var(--accent-2); font-size: 13px; margin: 0; }
+.ld-join { align-self: flex-start; margin-top: 6px; }
+.ld-warn { color: #b45309; font-size: 12px; margin: 2px 0 0; }
+
+.ld-live { display: grid; grid-template-columns: 1fr 360px; gap: 24px; align-items: start; min-height: 60vh; }
+.ld-stage { display: flex; flex-direction: column; align-items: center; gap: 16px; position: relative; padding-top: 8px; }
+.ld-timer { position: absolute; top: 0; left: 0; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.ld-avatar-wrap { margin-top: 28px; }
+.live-avatar { border: 3px solid var(--border); border-radius: 50%; padding: 6px; transition: border-color 120ms linear; }
+.live-avatar .avatar-monogram { border-radius: 50%; }
+.live-avatar .avatar-monogram span { font-size: 52px; }
+.ld-stage-name { margin: 6px 0 0; text-align: center; }
+.ld-instr-toggle { background: none; border: none; cursor: pointer; color: var(--accent-2); font-family: var(--mono); font-size: 14px; }
+.ld-instructions { max-width: 560px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; white-space: pre-wrap; font-size: 14px; }
+.ld-controls { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+.ld-mic, .ld-more { width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--panel); cursor: pointer; font-size: 18px; }
+.ld-mic { background: #ef4444; color: #fff; border-color: #ef4444; }
+.ld-mic.live { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.25); }
+.ld-listening { color: #ef4444; font-family: var(--mono); font-size: 13px; }
+.ld-sim { color: var(--muted); font-size: 12px; font-style: italic; margin: 4px 0 0; }
+.ld-transcript { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; min-height: 60vh; display: flex; flex-direction: column; gap: 10px; }
+.ld-transcript-head { font-family: var(--mono); font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--muted); }
+.ld-transcript .conversation { margin: 0; }
+.ld-leave { margin-top: auto; }
+@media (max-width: 860px) {
+  .ld-verify, .ld-live { grid-template-columns: 1fr; }
+}
