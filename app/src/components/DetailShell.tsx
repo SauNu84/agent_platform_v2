@@ -9,10 +9,25 @@
  * reuses it without change.
  */
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
 import LiveDemo from './LiveDemo';
 import { aiModelLabel } from '@/lib/ai-models';
+
+/**
+ * Render a learner-facing field as formatted Markdown (SAU-246). The reference
+ * product's scenario detail is a clean briefing — headings, numbered steps, a
+ * comparison table — not a monospace prompt dump. GFM gives us tables + lists.
+ */
+function Brief({ text }: { text: string }) {
+  return (
+    <div className="brief">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
+}
 
 export interface SessionSummary {
   id: string;
@@ -252,7 +267,12 @@ export default function DetailShell(props: DetailShellProps) {
           : <div className="avatar" aria-hidden />}
         <div style={{ flex: 1 }}>
           <h1>{props.name}</h1>
-          <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode}){aiModel ? ` · ${aiModel}` : ''}</p>
+          {/* SAU-246: a quiet, learner-facing subtitle — the scenario kind plus
+              its role/difficulty. Authoring config (model, voice, visibility)
+              moved out of the headline into the collapsed setup section below. */}
+          <p className="subtitle">
+            {props.kind}{role ? ` · ${role}` : ''}{difficulty ? ` · ${difficulty}` : ''}
+          </p>
         </div>
         <div className="join-actions">
           {props.remixHref && (
@@ -295,22 +315,6 @@ export default function DetailShell(props: DetailShellProps) {
         </div>
       )}
 
-      {/* At-a-glance config strip (SAU-246): the settings form is rich, but the
-          detail page surfaced almost none of it. These chips give a scannable
-          summary of how the scenario is configured before the prose blocks. */}
-      <div className="glance" aria-label="Scenario configuration summary">
-        <span className={`badge ${props.isPublic ? 'public' : ''}`}>{props.isPublic ? '🌐 Public' : '🔒 Private'}</span>
-        {role && <span className="badge">Role · {role}</span>}
-        {difficulty && <span className="badge">Difficulty · {difficulty}</span>}
-        {aiModel && <span className="badge">🤖 {aiModel}</span>}
-        <span className="badge">🎙 {props.voice.name} ({props.voice.languageCode})</span>
-        <span className="badge">📋 {props.rubric.length} rubric {props.rubric.length === 1 ? 'criterion' : 'criteria'}</span>
-        {knowledgeBases.length > 0 && (
-          <span className="badge">📚 {knowledgeBases.length} knowledge base{knowledgeBases.length === 1 ? '' : 's'}</span>
-        )}
-        {aiContext && <span className="badge">📎 Grounding context</span>}
-      </div>
-
       <div className="tabs" role="tablist">
         {(['details', 'sessions', 'analytics'] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
@@ -321,84 +325,96 @@ export default function DetailShell(props: DetailShellProps) {
 
       <div className="tab-body">
         {tab === 'details' && (
+          // SAU-246 (board: "easy for user to understand, not much configuration"):
+          // the detail page is now a LEARNER briefing, mirroring the reference
+          // product — Overview + Your Instructions rendered as clean Markdown.
+          // All authoring config (AI prompt/persona, model, voice, rubric weights,
+          // KBs, metadata) is tucked into a collapsed "Scenario setup" disclosure
+          // so it's available to authors without cluttering the practitioner view.
+          // The AI Instructions are also the "answer key" — hiding them by default
+          // keeps the roleplay honest.
           <>
             <h2>Overview</h2>
-            <div className="overview">{props.overview || <span className="empty">No description.</span>}</div>
+            {props.overview
+              ? <Brief text={props.overview} />
+              : <p className="empty">No description.</p>}
 
             {userInstructions && (
               <>
                 <h2>Your Instructions</h2>
-                <div className="instructions">{userInstructions}</div>
+                <Brief text={userInstructions} />
               </>
             )}
 
-            {aiPersona && (
-              <>
-                <h2>AI Persona</h2>
-                <div className="instructions">{aiPersona}</div>
-              </>
-            )}
-
-            <h2>AI Instructions</h2>
-            <div className="instructions">{props.instructions}</div>
-
-            {aiContext && (
-              <>
-                <h2>Additional Context for AI</h2>
-                <p className="empty" style={{ fontStyle: 'normal' }}>
-                  {aiContextSource ? <>Grounded on {/^https?:\/\//.test(aiContextSource)
-                    ? <a href={aiContextSource} target="_blank" rel="noreferrer">{aiContextSource}</a>
-                    : <strong>{aiContextSource}</strong>} · </> : null}
-                  {aiContext.length.toLocaleString()} chars folded into the system prompt.
-                </p>
-              </>
-            )}
-
-            {knowledgeBases.length > 0 && (
-              <>
-                <h2>Knowledge Bases</h2>
-                <ul className="kb-list">
-                  {knowledgeBases.map((kb) => (
-                    <li key={kb.id} className="kb-list-item">
-                      <span className="kb-list-title">📚 {kb.title}</span>
-                      <span className="empty" style={{ fontStyle: 'normal' }}>
-                        {kb.docCount} doc{kb.docCount === 1 ? '' : 's'}{kb.description ? ` · ${kb.description}` : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            {props.rubric.length > 0 && (
-              <>
-                <h2>Rubric</h2>
-                <table>
-                  <thead><tr><th>Topic</th><th>Weight</th><th>Note</th></tr></thead>
-                  <tbody>
-                    {props.rubric.map((r, i) => (
-                      <tr key={i}><td>{r.topic}</td><td>{r.weight}</td><td>{r.note ?? ''}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
-            )}
-
-            {Object.entries(props.metadata).filter(([k]) => !k.startsWith('_')).length > 0 && (
-              <>
-                <h2>Metadata</h2>
+            <details className="setup">
+              <summary>⚙️ Scenario setup <span className="setup-hint">— how this scenario is configured (for authors)</span></summary>
+              <div className="setup-body">
                 <dl className="kv">
+                  <div style={{ display: 'contents' }}><dt>Visibility</dt><dd>{props.isPublic ? 'Public' : 'Private'}</dd></div>
+                  {role && <div style={{ display: 'contents' }}><dt>Role</dt><dd>{role}</dd></div>}
+                  {difficulty && <div style={{ display: 'contents' }}><dt>Difficulty</dt><dd>{difficulty}</dd></div>}
+                  {aiModel && <div style={{ display: 'contents' }}><dt>AI model</dt><dd>{aiModel}</dd></div>}
+                  <div style={{ display: 'contents' }}><dt>Voice</dt><dd>{props.voice.name} ({props.voice.languageCode})</dd></div>
                   {Object.entries(props.metadata)
-                    .filter(([k]) => !k.startsWith('_')) // hide internal provenance keys (_source, _rubricText, …)
+                    .filter(([k]) => !k.startsWith('_') && k !== 'role' && k !== 'difficulty')
                     .map(([k, v]) => (
-                      <div key={k} style={{ display: 'contents' }}>
-                        <dt>{k}</dt>
-                        <dd>{String(v)}</dd>
-                      </div>
+                      <div key={k} style={{ display: 'contents' }}><dt>{k}</dt><dd>{String(v)}</dd></div>
                     ))}
                 </dl>
-              </>
-            )}
+
+                {aiPersona && (
+                  <>
+                    <h3>AI Persona</h3>
+                    <div className="instructions">{aiPersona}</div>
+                  </>
+                )}
+
+                <h3>AI Instructions <span className="setup-hint">— the system prompt the agent follows (answer key)</span></h3>
+                <div className="instructions">{props.instructions}</div>
+
+                {aiContext && (
+                  <>
+                    <h3>Additional Context for AI</h3>
+                    <p className="empty" style={{ fontStyle: 'normal' }}>
+                      {aiContextSource ? <>Grounded on {/^https?:\/\//.test(aiContextSource)
+                        ? <a href={aiContextSource} target="_blank" rel="noreferrer">{aiContextSource}</a>
+                        : <strong>{aiContextSource}</strong>} · </> : null}
+                      {aiContext.length.toLocaleString()} chars folded into the system prompt.
+                    </p>
+                  </>
+                )}
+
+                {knowledgeBases.length > 0 && (
+                  <>
+                    <h3>Knowledge Bases</h3>
+                    <ul className="kb-list">
+                      {knowledgeBases.map((kb) => (
+                        <li key={kb.id} className="kb-list-item">
+                          <span className="kb-list-title">📚 {kb.title}</span>
+                          <span className="empty" style={{ fontStyle: 'normal' }}>
+                            {kb.docCount} doc{kb.docCount === 1 ? '' : 's'}{kb.description ? ` · ${kb.description}` : ''}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+
+                {props.rubric.length > 0 && (
+                  <>
+                    <h3>Rubric</h3>
+                    <table>
+                      <thead><tr><th>Topic</th><th>Weight</th><th>Note</th></tr></thead>
+                      <tbody>
+                        {props.rubric.map((r, i) => (
+                          <tr key={i}><td>{r.topic}</td><td>{r.weight}</td><td>{r.note ?? ''}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                )}
+              </div>
+            </details>
           </>
         )}
 
