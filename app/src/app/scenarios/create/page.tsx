@@ -69,6 +69,11 @@ function CreateScenarioForm() {
   const [slug, setSlug] = useState('');
   const [slugEdited, setSlugEdited] = useState(false);
   const [description, setDescription] = useState('');
+  // SAU-238 (board ask #5): two fields from the reference Studio.
+  // userInstructions = the human learner's brief (shown in the UI, NOT sent to the model);
+  // aiDescription = the AI persona identity, prepended to AI Instructions in the model prompt.
+  const [userInstructions, setUserInstructions] = useState('');
+  const [aiDescription, setAiDescription] = useState('');
   const [persona, setPersona] = useState('');
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const [rubric, setRubric] = useState<RubricRow[]>([]);
@@ -109,6 +114,10 @@ function CreateScenarioForm() {
         setRubricText(rubricToText(rows));
         setVoice(draft.voice);
         setCarriedMetadata(draft.metadata);
+        // SAU-238: carry the human brief + AI description through a remix.
+        const md = (data.scenario.metadata ?? {}) as Record<string, unknown>;
+        if (typeof md._userInstructions === 'string') setUserInstructions(md._userInstructions);
+        if (typeof md._aiDescription === 'string') setAiDescription(md._aiDescription);
         setRemixedName(data.scenario.name);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -198,6 +207,9 @@ function CreateScenarioForm() {
           metadata: {
             ...(carriedMetadata ?? { _source: 'user' }),
             ...(rubricText.trim() ? { _rubricText: rubricText.trim() } : {}),
+            // SAU-238: human brief (UI only) + AI description (folded into the model prompt).
+            ...(userInstructions.trim() ? { _userInstructions: userInstructions.trim() } : {}),
+            ...(aiDescription.trim() ? { _aiDescription: aiDescription.trim() } : {}),
           },
         }),
       });
@@ -300,6 +312,34 @@ function CreateScenarioForm() {
               placeholder="What participants see before starting — describe the scenario's purpose and what they'll practice."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+
+          {/* User Instruction (SAU-238) — shown to the human learner, NOT sent to the agent */}
+          <div className="form-group">
+            <label htmlFor={`${uid}-userinstr`} className="form-label">User Instruction</label>
+            <p className="form-hint-block">The learner&apos;s brief — their goal and what to do in this scenario. Shown to the user before/during the session; <strong>not</strong> sent to the AI (so it can&apos;t see the playbook).</p>
+            <textarea
+              id={`${uid}-userinstr`}
+              className="form-textarea"
+              rows={4}
+              placeholder="Your Goal: e.g., Convince the VP of Engineering to adopt your tool. They're skeptical and short on time — lead with proof."
+              value={userInstructions}
+              onChange={(e) => setUserInstructions(e.target.value)}
+            />
+          </div>
+
+          {/* Description for AI (SAU-238) — persona identity, prepended to the model prompt */}
+          <div className="form-group">
+            <label htmlFor={`${uid}-aidesc`} className="form-label">Description for AI</label>
+            <p className="form-hint-block">Who the AI <em>is</em> — a short persona identity. This is prepended to the AI Instructions in the system prompt the model receives, so it <strong>does</strong> shape the agent.</p>
+            <textarea
+              id={`${uid}-aidesc`}
+              className="form-textarea"
+              rows={4}
+              placeholder="You are Alex Chen, VP of Engineering at a 75-person company. Cost-conscious, risk-averse, currently happy with your existing tooling."
+              value={aiDescription}
+              onChange={(e) => setAiDescription(e.target.value)}
             />
           </div>
 

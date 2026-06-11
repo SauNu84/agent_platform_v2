@@ -13,7 +13,7 @@
  * It still appears in Creator Analytics by session count (which aggregates the
  * `session` table directly).
  */
-import type { ScenarioRecord } from '@/domain/scenario';
+import { modelInstructions, type ScenarioRecord } from '@/domain/scenario';
 import type { Store, SessionTranscript } from '@/db/store';
 import { ChatResponder, ChatTurn, chatSystemPrompt, getResponder } from './responder';
 
@@ -50,7 +50,7 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<ChatTurnRes
   const trimmed = message.trim();
   if (!trimmed) throw new Error('message is required');
 
-  const system = chatSystemPrompt(scenario.aiInstructions);
+  const system = chatSystemPrompt(modelInstructions(scenario));
   const reply = await responder.reply({ system, history, message: trimmed });
 
   // Full transcript = prior history + this user turn + this agent reply.

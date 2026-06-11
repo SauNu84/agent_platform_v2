@@ -67,6 +67,8 @@ export default function DetailShell(props: DetailShellProps) {
   const [chatOpen, setChatOpen] = useState(false);
   // Live demo flow (SAU-238) — camera/mic verify → live interaction window.
   const [liveDemoOpen, setLiveDemoOpen] = useState(false);
+  // SAU-238: the human learner's brief (UI only, never sent to the model).
+  const userInstructions = typeof props.metadata?._userInstructions === 'string' ? props.metadata._userInstructions : '';
   // Share short link (SAU-225) — confirmation (the copied URL) + busy/error state.
   const [shareInfo, setShareInfo] = useState<{ url: string; copied: boolean } | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -148,7 +150,7 @@ export default function DetailShell(props: DetailShellProps) {
     return (
       <LiveDemo
         name={props.name}
-        instructions={props.instructions}
+        instructions={userInstructions || props.instructions}
         category={String(props.metadata?.role ?? props.metadata?.category ?? props.kind)}
         slug={props.slug}
         sessionsEndpoint={props.sessionsEndpoint}
@@ -279,7 +281,14 @@ export default function DetailShell(props: DetailShellProps) {
             <h2>Overview</h2>
             <div className="overview">{props.overview || <span className="empty">No description.</span>}</div>
 
-            <h2>Your Instructions</h2>
+            {userInstructions && (
+              <>
+                <h2>Your Instructions</h2>
+                <div className="instructions">{userInstructions}</div>
+              </>
+            )}
+
+            <h2>AI Instructions</h2>
             <div className="instructions">{props.instructions}</div>
 
             {props.rubric.length > 0 && (

@@ -148,12 +148,25 @@ export function normalizeFrontmatter(fm: ScenarioFrontmatter, body: string): Com
   };
 }
 
+/**
+ * The instructions the MODEL actually receives (SAU-238). The author-facing
+ * "Description for AI" (the persona identity, stored in `metadata._aiDescription`)
+ * is prepended to the detailed AI Instructions to form one system prompt — used by
+ * BOTH text chat and live voice. The "User Instruction" (`metadata._userInstructions`)
+ * is deliberately NOT here: it is the human learner's brief, shown in the UI only,
+ * so it never biases the agent.
+ */
+export function modelInstructions(rec: { aiInstructions: string; metadata?: Record<string, unknown> }): string {
+  const desc = typeof rec.metadata?._aiDescription === 'string' ? rec.metadata._aiDescription.trim() : '';
+  return [desc, rec.aiInstructions].filter(Boolean).join('\n\n');
+}
+
 /** Project a canonical record into the realtime voice seam's CompiledScenario. */
 export function toCompiledScenario(rec: ScenarioRecord): CompiledScenario {
   return {
     id: rec.id,
     name: rec.name,
-    aiInstructions: rec.aiInstructions,
+    aiInstructions: modelInstructions(rec),
     voice: { name: rec.voiceName, languageCode: rec.languageCode },
     tools: rec.tools,
     rubric: rec.rubric,

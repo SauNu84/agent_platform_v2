@@ -79,3 +79,31 @@ test('drift detection flags an edited source file', async () => {
   assert.equal(await isStale(same, store, scenario.id), false);
   assert.equal(await isStale(drift, store, scenario.id), true);
 });
+
+// SAU-238: Description for AI feeds the model prompt; User Instruction does not.
+import { modelInstructions, toCompiledScenario } from '@/domain/scenario';
+
+test('SAU-238: modelInstructions prepends _aiDescription and excludes _userInstructions', () => {
+  const rec = {
+    aiInstructions: '## Role\nAsk probing questions.',
+    metadata: { _aiDescription: 'You are Alex Chen, a skeptical VP.', _userInstructions: 'Your goal: win the deal.' },
+  };
+  const sys = modelInstructions(rec);
+  assert.ok(sys.startsWith('You are Alex Chen, a skeptical VP.'), 'AI description should lead the prompt');
+  assert.ok(sys.includes('Ask probing questions.'), 'detailed AI instructions should follow');
+  assert.ok(!sys.includes('win the deal'), 'user instruction must NOT reach the model');
+});
+
+test('SAU-238: a JSON-created scenario carries both fields in metadata and only _aiDescription reaches the model', async () => {
+  const store = new MemoryStore();
+  const scenario = await createScenarioFromJson(store, {
+    id: 'instr-fields', name: 'Instr Fields', persona: 'Stay in character.', visibility: 'public',
+    metadata: { _userInstructions: 'Convince the buyer.', _aiDescription: 'You are a tough buyer.' },
+  });
+  assert.equal(scenario.metadata._userInstructions, 'Convince the buyer.');
+  assert.equal(scenario.metadata._aiDescription, 'You are a tough buyer.');
+  // The voice seam's view (what the realtime token route sends) includes the description, not the user brief.
+  const compiled = toCompiledScenario(scenario);
+  assert.ok(compiled.aiInstructions.includes('You are a tough buyer.'));
+  assert.ok(!compiled.aiInstructions.includes('Convince the buyer.'));
+});
