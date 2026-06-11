@@ -15,6 +15,7 @@
  * both paths converge on one persistence + metering routine.
  */
 import { toCompiledScenario, type ScenarioRecord } from '@/domain/scenario';
+import { resolveKnowledgeContext } from '@/services/knowledge-base';
 import type {
   RealtimeVoiceProvider, RealtimeSession, SessionEvent, Transcript, SessionUsage,
 } from './realtime-interface';
@@ -123,7 +124,9 @@ export interface VoiceSessionResult {
 export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<VoiceSessionResult> {
   const { store, scenario, vendor, userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
   const provider = await getProvider(vendor);
-  const compiled = toCompiledScenario(scenario);
+  // Fold any linked Knowledge Base (SAU-243) into the voice agent's instructions.
+  const kb = await resolveKnowledgeContext(store, scenario.id);
+  const compiled = toCompiledScenario(scenario, { knowledgeBaseText: kb.text });
   if (instructions) compiled.aiInstructions = instructions;
   const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
 

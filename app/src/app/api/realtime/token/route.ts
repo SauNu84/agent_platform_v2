@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getScenario } from '@/services/scenarios';
+import { resolveKnowledgeContext } from '@/services/knowledge-base';
 import { toCompiledScenario } from '@/domain/scenario';
 import { resolveOpenAiVoice } from '@/lib/voices';
 
@@ -42,7 +43,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `failed to mint client secret (${resp.status})`, detail }, { status: 502 });
   }
   const secret = await resp.json();
-  const compiled = toCompiledScenario(scenario);
+  // Fold any linked Knowledge Base (SAU-243) into the browser-WebRTC agent prompt.
+  const kb = await resolveKnowledgeContext(getStore(), scenario.id);
+  const compiled = toCompiledScenario(scenario, { knowledgeBaseText: kb.text });
   // OpenAI Realtime's `voice` is a plain string from a fixed catalog. Honor the
   // scenario's chosen voice (Appearance tab, SAU-238) when it's a valid OpenAI
   // voice; otherwise fall back to OPENAI_VOICE/alloy (the stored voice may be a

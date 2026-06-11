@@ -156,24 +156,106 @@ export function normalizeFrontmatter(fm: ScenarioFrontmatter, body: string): Com
  * is deliberately NOT here: it is the human learner's brief, shown in the UI only,
  * so it never biases the agent.
  */
-export function modelInstructions(rec: { aiInstructions: string; metadata?: Record<string, unknown> }): string {
+export interface ModelInstructionsOptions {
+  /**
+   * Knowledge Base text (SAU-243): the bounded, deterministically-ordered block
+   * of linked-KB document text, ALREADY assembled + budget-capped by
+   * `assembleKnowledgeBaseContext`. Passed in (not resolved here) so this domain
+   * function stays pure: the async store read + truncation logging live in the
+   * caller (services/knowledge-base). Folded in AFTER Additional Context.
+   */
+  knowledgeBaseText?: string;
+}
+
+export function modelInstructions(
+  rec: { aiInstructions: string; metadata?: Record<string, unknown> },
+  opts?: ModelInstructionsOptions,
+): string {
   const desc = typeof rec.metadata?._aiDescription === 'string' ? rec.metadata._aiDescription.trim() : '';
   // "Additional Context for AI" (SAU-238 ask #7): reference material the author
   // attached (e.g. fetched from a URL). Grounding context → improves answers.
   const context = typeof rec.metadata?._aiContext === 'string' ? rec.metadata._aiContext.trim() : '';
+  const kb = typeof opts?.knowledgeBaseText === 'string' ? opts.knowledgeBaseText.trim() : '';
   const parts = [desc, rec.aiInstructions];
   if (context) parts.push(`## Reference context\nUse the following background as ground truth where relevant:\n\n${context}`);
+  // Knowledge Base (SAU-243): reusable, multi-document corpus linked to this
+  // scenario. Appended last, after Additional Context, so the per-scenario
+  // context still leads. Already bounded by KB_CONTEXT_CHAR_BUDGET upstream.
+  if (kb) parts.push(`## Knowledge base\nReference documents linked to this scenario. Treat as ground truth where relevant:\n\n${kb}`);
   return parts.filter(Boolean).join('\n\n');
 }
 
 /** Project a canonical record into the realtime voice seam's CompiledScenario. */
-export function toCompiledScenario(rec: ScenarioRecord): CompiledScenario {
+export function toCompiledScenario(rec: ScenarioRecord, opts?: ModelInstructionsOptions): CompiledScenario {
   return {
     id: rec.id,
     name: rec.name,
-    aiInstructions: modelInstructions(rec),
+    aiInstructions: modelInstructions(rec, opts),
     voice: { name: rec.voiceName, languageCode: rec.languageCode },
     tools: rec.tools,
     rubric: rec.rubric,
   };
+}
+
+// ── Knowledge Base injection (SAU-243, Phase 1) ──────────────────────────────
+/**
+ * Global cap on the total linked-KB text folded into ANY one scenario's system
+ * prompt, across all its linked knowledge bases (~150k chars ≈ ~38k tokens).
+ * This — not RAG — is what protects the context window and cost in Phase 1; at
+ * our measured prompt-cache hit rate a bounded static block sits in the cached
+ * prefix. RAG only becomes necessary once a single linked KB exceeds this
+ * budget (the Phase-2 trigger, per the spec).
+ */
+export const KB_CONTEXT_CHAR_BUDGET = 150_000;
+
+/** A linked-KB document reduced to what the prompt needs: a label + its text. */
+export interface KnowledgeBaseDoc {
+  filename: string;
+  text: string;
+}
+
+export interface AssembledKnowledge {
+  /** The joined, bounded reference block (empty when no usable text). */
+  text: string;
+  chars: number;
+  /** True when the budget cut off one or more documents (a marker was appended). */
+  truncated: boolean;
+}
+
+const KB_TRUNCATION_MARKER =
+  '\n\n[… knowledge base truncated at the context budget — remaining linked documents omitted …]';
+
+/**
+ * Pure, deterministic assembly of linked-KB docs into one bounded block.
+ * Docs are consumed in the order given (the store yields a deterministic order:
+ * link order, then document upload order). Total text is capped at `budget`;
+ * past the cap we keep a partial slice of the doc that crossed it (if a useful
+ * amount fits) and append a VISIBLE truncation marker — never silent overflow
+ * (AC #4). Returns `{ text, chars, truncated }` so the caller can log the cut.
+ */
+export function assembleKnowledgeBaseContext(
+  docs: KnowledgeBaseDoc[],
+  budget: number = KB_CONTEXT_CHAR_BUDGET,
+): AssembledKnowledge {
+  const pieces: string[] = [];
+  let used = 0;
+  let truncated = false;
+  for (const doc of docs) {
+    const body = (doc.text ?? '').trim();
+    if (!body) continue;
+    const header = `### ${(doc.filename || 'Document').trim()}\n`;
+    const piece = `${header}${body}`;
+    const sep = pieces.length ? 2 : 0; // '\n\n' join cost
+    if (used + sep + piece.length > budget) {
+      const room = budget - used - sep - header.length;
+      if (room > 200) pieces.push(`${header}${body.slice(0, room).trimEnd()}`);
+      truncated = true;
+      break;
+    }
+    pieces.push(piece);
+    used += sep + piece.length;
+  }
+  let text = pieces.join('\n\n');
+  if (truncated) text += KB_TRUNCATION_MARKER;
+  return { text, chars: text.length, truncated };
 }

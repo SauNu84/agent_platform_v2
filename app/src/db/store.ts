@@ -6,7 +6,7 @@
  * the compiler/CRUD/voice logic be tested hermetically (no live Postgres in CI).
  * Same pattern the realtime seam uses for vendors: one interface, swappable impls.
  */
-import type { CompiledScenarioRecord, RubricItem, ScenarioRecord } from '@/domain/scenario';
+import type { CompiledScenarioRecord, KnowledgeBaseDoc, RubricItem, ScenarioRecord } from '@/domain/scenario';
 import type { AnalysisRecord, Evaluation, Improvement } from '@/domain/analysis';
 import type { ToolDefinition, SessionUsage } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
@@ -222,6 +222,44 @@ export interface AuditEvent {
   refs: Record<string, unknown>;   // counts/ids only — NO PII content
 }
 
+// ── Knowledge Base (SAU-243, Phase 1) — reusable multi-doc corpus ────────────
+export interface KnowledgeBaseRecord {
+  id: string;
+  title: string;
+  description: string | null;
+  ownerUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** number of documents (convenience for list views). */
+  docCount: number;
+}
+
+export interface NewKnowledgeBase {
+  title: string;
+  description?: string | null;
+}
+
+export type KbContentType = 'pdf' | 'docx' | 'txt';
+
+export interface KnowledgeBaseDocRecord {
+  id: string;
+  kbId: string;
+  filename: string;
+  contentType: KbContentType;
+  extractedText: string;
+  chars: number;
+  byteSize: number;
+  createdAt: string;
+}
+
+export interface NewKnowledgeBaseDoc {
+  kbId: string;
+  filename: string;
+  contentType: KbContentType;
+  extractedText: string;
+  byteSize: number;
+}
+
 export interface Store {
   // ── Scenario CRUD ──────────────────────────────────────────────────────────
   listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]>;
@@ -238,6 +276,26 @@ export interface Store {
     owner?: OwnerOpts,
   ): Promise<{ scenario: ScenarioRecord; source: ContentSourceRecord; created: boolean }>;
   getContentSource(entityType: ContentEntityType, entityId: string): Promise<ContentSourceRecord | null>;
+
+  // ── Knowledge Base (SAU-243) ────────────────────────────────────────────────
+  createKnowledgeBase(input: NewKnowledgeBase, owner?: OwnerOpts): Promise<KnowledgeBaseRecord>;
+  /** All KBs visible to the request (RLS/own-filter applied by the caller's query). */
+  listKnowledgeBases(): Promise<KnowledgeBaseRecord[]>;
+  getKnowledgeBase(id: string): Promise<KnowledgeBaseRecord | null>;
+  deleteKnowledgeBase(id: string): Promise<boolean>;
+  addKnowledgeBaseDocument(doc: NewKnowledgeBaseDoc): Promise<KnowledgeBaseDocRecord>;
+  listKnowledgeBaseDocuments(kbId: string): Promise<KnowledgeBaseDocRecord[]>;
+  /** Link a KB to a scenario (idempotent — re-linking is a no-op). */
+  linkScenarioKnowledgeBase(scenarioId: string, kbId: string): Promise<void>;
+  /** Unlink (removes the ASSOCIATION only — the KB survives). Returns true if a link existed. */
+  unlinkScenarioKnowledgeBase(scenarioId: string, kbId: string): Promise<boolean>;
+  listScenarioKnowledgeBases(scenarioId: string): Promise<KnowledgeBaseRecord[]>;
+  /**
+   * Linked-KB document text for a scenario, in deterministic INJECTION order
+   * (link order, then per-KB upload order). Trusted server read used at session
+   * start to fold the corpus into the system prompt — never returned to clients.
+   */
+  listKnowledgeForScenario(scenarioId: string): Promise<KnowledgeBaseDoc[]>;
 
   // ── Coach CRUD (Slice 3 — composition over Scenario) ────────────────────────
   listCoaches(): Promise<CoachRecord[]>;

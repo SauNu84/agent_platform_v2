@@ -13,6 +13,7 @@ import {
   listScenarios, createScenarioFromJson, createScenarioFromMarkdown, ScenarioCompileError,
 } from '@/services/scenarios';
 import { actorWithCapability } from '@/auth/api-guard';
+import { getOwnedKnowledgeBase } from '@/services/knowledge-base';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +51,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ scenario }, { status: created ? 201 : 200 });
     }
     const scenario = await createScenarioFromJson(store, body, owner);
+    // Auto-link any Knowledge Bases chosen in the form (SAU-243, AC #1). The KB
+    // ids ride alongside the frontmatter (Zod strips them from the row); linking
+    // is idempotent, so a duplicate/unlinkable id is a harmless no-op.
+    const kbIds: string[] = Array.isArray(body?.knowledgeBaseIds)
+      ? body.knowledgeBaseIds.filter((x: unknown) => typeof x === 'string')
+      : [];
+    const kbActor = { userId: gate.actor.userId, isAdmin: gate.actor.isAdmin };
+    for (const kbId of kbIds) {
+      // Only link KBs the actor may use; skip the rest (idempotent, fail-soft).
+      try {
+        await getOwnedKnowledgeBase(store, kbId, kbActor);
+        await store.linkScenarioKnowledgeBase(scenario.id, kbId);
+      } catch { /* unlinkable / not owned — skip */ }
+    }
     return NextResponse.json({ scenario }, { status: 201 });
   } catch (e) {
     if (e instanceof ScenarioCompileError) {

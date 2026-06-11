@@ -4,13 +4,14 @@
  * migrations remain the production source of truth.
  */
 import { randomUUID } from 'node:crypto';
-import type { CompiledScenarioRecord, ScenarioRecord } from '@/domain/scenario';
+import type { CompiledScenarioRecord, KnowledgeBaseDoc, ScenarioRecord } from '@/domain/scenario';
 import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
   AuditEvent, AuthSessionRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
+  KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
   UserRecord, VoiceUsageRecord,
@@ -46,6 +47,10 @@ export class MemoryStore implements Store {
   private audit: (AuditEvent & { ts: string })[] = [];        // append-only
   private shareLinks = new Map<string, ShareLinkRecord>();    // by code
   private scenarioToShareCode = new Map<string, string>();    // scenarioId → code (idempotency)
+  // ── Knowledge Base (SAU-243) ──
+  private kbs = new Map<string, KnowledgeBaseRecord>();        // by id (docCount kept current)
+  private kbDocs: KnowledgeBaseDocRecord[] = [];               // array order = upload order
+  private scenarioKbLinks: Array<{ scenarioId: string; kbId: string; createdAt: string }> = []; // push order = link order
   // ── Slice 5: auth + RBAC ──
   private users = new Map<string, UserRecord>();              // by id
   private usersByEmail = new Map<string, string>();           // email → id
@@ -149,6 +154,83 @@ export class MemoryStore implements Store {
 
   async getShareLinkByCode(code: string): Promise<ShareLinkRecord | null> {
     return this.shareLinks.get(code) ?? null;
+  }
+
+  // ── Knowledge Base (SAU-243) ──────────────────────────────────────────────
+  async createKnowledgeBase(input: NewKnowledgeBase, owner?: OwnerOpts): Promise<KnowledgeBaseRecord> {
+    const id = randomUUID();
+    const ts = nowIso();
+    const rec: KnowledgeBaseRecord = {
+      id, title: input.title, description: input.description ?? null,
+      ownerUserId: owner?.ownerUserId ?? null, createdAt: ts, updatedAt: ts, docCount: 0,
+    };
+    this.kbs.set(id, rec);
+    return { ...rec };
+  }
+
+  async listKnowledgeBases(): Promise<KnowledgeBaseRecord[]> {
+    return [...this.kbs.values()]
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      .map((k) => ({ ...k }));
+  }
+
+  async getKnowledgeBase(id: string): Promise<KnowledgeBaseRecord | null> {
+    const k = this.kbs.get(id);
+    return k ? { ...k } : null;
+  }
+
+  async deleteKnowledgeBase(id: string): Promise<boolean> {
+    const existed = this.kbs.delete(id);
+    if (existed) {
+      this.kbDocs = this.kbDocs.filter((d) => d.kbId !== id);
+      this.scenarioKbLinks = this.scenarioKbLinks.filter((l) => l.kbId !== id);
+    }
+    return existed;
+  }
+
+  async addKnowledgeBaseDocument(doc: NewKnowledgeBaseDoc): Promise<KnowledgeBaseDocRecord> {
+    const rec: KnowledgeBaseDocRecord = {
+      id: randomUUID(), kbId: doc.kbId, filename: doc.filename, contentType: doc.contentType,
+      extractedText: doc.extractedText, chars: doc.extractedText.length, byteSize: doc.byteSize,
+      createdAt: nowIso(),
+    };
+    this.kbDocs.push(rec);
+    const kb = this.kbs.get(doc.kbId);
+    if (kb) { kb.docCount += 1; kb.updatedAt = rec.createdAt; }
+    return { ...rec };
+  }
+
+  async listKnowledgeBaseDocuments(kbId: string): Promise<KnowledgeBaseDocRecord[]> {
+    return this.kbDocs.filter((d) => d.kbId === kbId).map((d) => ({ ...d }));
+  }
+
+  async linkScenarioKnowledgeBase(scenarioId: string, kbId: string): Promise<void> {
+    if (this.scenarioKbLinks.some((l) => l.scenarioId === scenarioId && l.kbId === kbId)) return;
+    this.scenarioKbLinks.push({ scenarioId, kbId, createdAt: nowIso() });
+  }
+
+  async unlinkScenarioKnowledgeBase(scenarioId: string, kbId: string): Promise<boolean> {
+    const before = this.scenarioKbLinks.length;
+    this.scenarioKbLinks = this.scenarioKbLinks.filter((l) => !(l.scenarioId === scenarioId && l.kbId === kbId));
+    return this.scenarioKbLinks.length < before;
+  }
+
+  async listScenarioKnowledgeBases(scenarioId: string): Promise<KnowledgeBaseRecord[]> {
+    return this.scenarioKbLinks
+      .filter((l) => l.scenarioId === scenarioId)
+      .map((l) => this.kbs.get(l.kbId))
+      .filter((k): k is KnowledgeBaseRecord => !!k)
+      .map((k) => ({ ...k }));
+  }
+
+  async listKnowledgeForScenario(scenarioId: string): Promise<KnowledgeBaseDoc[]> {
+    const out: KnowledgeBaseDoc[] = [];
+    for (const link of this.scenarioKbLinks.filter((l) => l.scenarioId === scenarioId)) {
+      for (const d of this.kbDocs.filter((doc) => doc.kbId === link.kbId)) {
+        if (d.extractedText.trim()) out.push({ filename: d.filename, text: d.extractedText });
+      }
+    }
+    return out;
   }
 
   // ── Coach CRUD ──────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@
  * `session` table directly).
  */
 import { modelInstructions, type ScenarioRecord } from '@/domain/scenario';
+import { resolveKnowledgeContext } from '@/services/knowledge-base';
 import type { Store, SessionTranscript } from '@/db/store';
 import { ChatResponder, ChatTurn, chatSystemPrompt, getResponder } from './responder';
 
@@ -50,7 +51,9 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<ChatTurnRes
   const trimmed = message.trim();
   if (!trimmed) throw new Error('message is required');
 
-  const system = chatSystemPrompt(modelInstructions(scenario));
+  // Fold any linked Knowledge Base (SAU-243) into the persona system prompt.
+  const kb = await resolveKnowledgeContext(store, scenario.id);
+  const system = chatSystemPrompt(modelInstructions(scenario, { knowledgeBaseText: kb.text }));
   const reply = await responder.reply({ system, history, message: trimmed });
 
   // Full transcript = prior history + this user turn + this agent reply.

@@ -18,6 +18,12 @@ import { OPENAI_VOICES, DEFAULT_VOICE, isOpenAiVoice } from '@/lib/voices';
 
 interface RubricRow { topic: string; weight: number; note: string; }
 
+/** A Knowledge Base summary as returned by /api/knowledge-bases (SAU-243). */
+interface KbSummary { id: string; title: string; description: string | null; docCount: number; }
+
+const KB_ACCEPT = '.pdf,.docx,.txt';
+const KB_MAX_BYTES = 25 * 1024 * 1024;
+
 interface Template {
   label: string;
   name: string;
@@ -107,6 +113,22 @@ function CreateScenarioForm() {
   const [contextSource, setContextSource] = useState(''); // where it came from (the URL)
   const [fetchingContext, setFetchingContext] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
+  // Knowledge Base (SAU-243): reusable multi-doc corpus linked to this scenario.
+  // Linked KBs are held in form state and persisted (linked) on submit via
+  // `knowledgeBaseIds`; the scenario doesn't exist yet at create time.
+  const [kbOpen, setKbOpen] = useState(false);
+  const [linkedKbs, setLinkedKbs] = useState<KbSummary[]>([]);
+  const [availableKbs, setAvailableKbs] = useState<KbSummary[]>([]);
+  const [kbPickId, setKbPickId] = useState('');
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbError, setKbError] = useState<string | null>(null);
+  // Create Knowledge Base modal.
+  const [showKbModal, setShowKbModal] = useState(false);
+  const [kbTitle, setKbTitle] = useState('');
+  const [kbDesc, setKbDesc] = useState('');
+  const [kbFiles, setKbFiles] = useState<File[]>([]);
+  const [kbDragOver, setKbDragOver] = useState(false);
+  const [kbCreating, setKbCreating] = useState(false);
   const [rubric, setRubric] = useState<RubricRow[]>([]);
   // Rubric setting (SAU-238): a free-text "Edit" tab the author writes naturally,
   // and a "Processed" tab where an AI parses it into the structured rubric the
@@ -154,6 +176,15 @@ function CreateScenarioForm() {
         if (isOpenAiVoice(draft.voice?.name)) setVoiceChoice(draft.voice.name);
         if (typeof md._avatarUrl === 'string') setAvatarUrl(md._avatarUrl);
         setRemixedName(data.scenario.name);
+        // Carry the source scenario's linked Knowledge Bases into the remix
+        // (SAU-243); the auto-link on submit silently drops any the user can't use.
+        try {
+          const kbRes = await fetch(`/api/scenarios/${remixFrom}/knowledge-bases`);
+          if (kbRes.ok) {
+            const kbData = await kbRes.json();
+            if (!cancelled && Array.isArray(kbData.knowledgeBases)) { setLinkedKbs(kbData.knowledgeBases); setKbOpen(kbData.knowledgeBases.length > 0); }
+          }
+        } catch { /* non-fatal */ }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       }
@@ -219,6 +250,81 @@ function CreateScenarioForm() {
     setAiContext('');
     setContextSource('');
     setContextError(null);
+  }
+
+  // ── Knowledge Base (SAU-243) ──────────────────────────────────────────────
+  async function loadAvailableKbs() {
+    setKbLoading(true);
+    setKbError(null);
+    try {
+      const res = await fetch('/api/knowledge-bases');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setAvailableKbs(data.knowledgeBases ?? []);
+    } catch (e) {
+      setKbError((e as Error).message);
+    } finally {
+      setKbLoading(false);
+    }
+  }
+
+  function toggleKb() {
+    const next = !kbOpen;
+    setKbOpen(next);
+    if (next && availableKbs.length === 0) loadAvailableKbs();
+  }
+
+  function linkExisting() {
+    const kb = availableKbs.find((k) => k.id === kbPickId);
+    if (!kb || linkedKbs.some((l) => l.id === kb.id)) return;
+    setLinkedKbs((l) => [...l, kb]);
+    setKbPickId('');
+  }
+
+  function unlinkKb(id: string) {
+    setLinkedKbs((l) => l.filter((k) => k.id !== id));
+  }
+
+  function addKbFiles(files: FileList | File[]) {
+    const incoming = Array.from(files).filter((f) => f.size <= KB_MAX_BYTES && /\.(pdf|docx|txt)$/i.test(f.name));
+    const rejected = Array.from(files).length - incoming.length;
+    if (rejected > 0) setKbError(`${rejected} file(s) skipped — must be .pdf/.docx/.txt and ≤25MB.`);
+    setKbFiles((prev) => [...prev, ...incoming]);
+  }
+
+  async function createKb() {
+    if (!kbTitle.trim()) { setKbError('Title is required.'); return; }
+    setKbCreating(true);
+    setKbError(null);
+    try {
+      const res = await fetch('/api/knowledge-bases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: kbTitle.trim(), description: kbDesc.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      const kb: KbSummary = data.knowledgeBase;
+      // Upload each chosen document into the new KB.
+      let uploaded = 0;
+      for (const file of kbFiles) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const up = await fetch(`/api/knowledge-bases/${kb.id}/documents`, { method: 'POST', body: fd });
+        if (up.ok) uploaded += 1;
+        else { const ed = await up.json().catch(() => ({})); setKbError(`“${file.name}”: ${ed.error ?? up.status}`); }
+      }
+      const linked: KbSummary = { ...kb, docCount: uploaded };
+      setLinkedKbs((l) => [...l, linked]);
+      setAvailableKbs((a) => [linked, ...a]);
+      // Reset + close the modal.
+      setShowKbModal(false);
+      setKbTitle(''); setKbDesc(''); setKbFiles([]);
+    } catch (e) {
+      setKbError((e as Error).message);
+    } finally {
+      setKbCreating(false);
+    }
   }
 
   async function parseRubric() {
@@ -299,6 +405,8 @@ function CreateScenarioForm() {
             ...(aiContext.trim() ? { _aiContext: aiContext.trim() } : {}),
             ...(contextSource.trim() ? { _aiContextSource: contextSource.trim() } : {}),
           },
+          // Knowledge Base links (SAU-243) — linked server-side after create.
+          knowledgeBaseIds: linkedKbs.map((k) => k.id),
         }),
       });
       const data = await res.json();
@@ -535,6 +643,54 @@ function CreateScenarioForm() {
               {contextError && <div className="notice" role="alert">{contextError}</div>}
             </div>
           </div>
+
+          {/* Knowledge Base (SAU-243) — reusable multi-doc corpus, link once, reuse everywhere */}
+          <div className="form-group">
+            <button type="button" className="kb-section-head" aria-expanded={kbOpen} onClick={toggleKb}>
+              <span aria-hidden="true">{kbOpen ? '▾' : '▸'}</span> 📚 Knowledge Base <span className="form-optional">(Optional)</span>
+            </button>
+            {kbOpen && (
+              <div className="tab-body">
+                <p className="form-hint-block">Link knowledge bases to provide additional context and information to the AI during conversations. Unlike Additional Context, a knowledge base is reusable — build it once and link it to many scenarios.</p>
+
+                <p className="studio-section-label" style={{ marginTop: 4 }}>Linked Knowledge Bases</p>
+                {linkedKbs.length === 0 ? (
+                  <div className="report-panel"><p className="form-hint" style={{ margin: 0 }}>No knowledge bases linked yet.</p></div>
+                ) : (
+                  <ul className="kb-linked-list">
+                    {linkedKbs.map((kb) => (
+                      <li key={kb.id} className="kb-linked-item">
+                        <span>
+                          <strong>{kb.title}</strong>{' '}
+                          <span className="form-hint">{kb.docCount} doc{kb.docCount === 1 ? '' : 's'}{kb.description ? ` · ${kb.description}` : ''}</span>
+                        </span>
+                        <button type="button" className="btn-remove" onClick={() => unlinkKb(kb.id)} aria-label={`Unlink ${kb.title}`}>×</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="kb-actions">
+                  {/* Link an existing KB */}
+                  {availableKbs.filter((k) => !linkedKbs.some((l) => l.id === k.id)).length > 0 ? (
+                    <div className="rubric-row">
+                      <select className="form-input rubric-topic" value={kbPickId} onChange={(e) => setKbPickId(e.target.value)}>
+                        <option value="">Add knowledge base…</option>
+                        {availableKbs.filter((k) => !linkedKbs.some((l) => l.id === k.id)).map((k) => (
+                          <option key={k.id} value={k.id}>{k.title} ({k.docCount} doc{k.docCount === 1 ? '' : 's'})</option>
+                        ))}
+                      </select>
+                      <button type="button" className="btn-sm" onClick={linkExisting} disabled={!kbPickId}>+ Add</button>
+                    </div>
+                  ) : (
+                    <p className="form-hint">{kbLoading ? 'Loading…' : 'No other knowledge bases available.'}</p>
+                  )}
+                  <button type="button" className="btn-sm" onClick={() => { setKbError(null); setShowKbModal(true); }}>＋ Create Knowledge Base</button>
+                </div>
+                {kbError && <div className="notice" role="alert">{kbError}</div>}
+              </div>
+            )}
+          </div>
           </div>
           )}
 
@@ -704,6 +860,56 @@ function CreateScenarioForm() {
           <div className="preview-empty">Fill in the Name to see a preview.</div>
         )}
       </aside>
+
+      {/* Create Knowledge Base modal (SAU-243) */}
+      {showKbModal && (
+        <div className="kb-modal-backdrop" role="dialog" aria-modal="true" aria-label="Create Knowledge Base" onClick={() => !kbCreating && setShowKbModal(false)}>
+          <div className="kb-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="kb-modal-head">
+              <h2 className="studio-title" style={{ fontSize: 20, margin: 0 }}>Create Knowledge Base</h2>
+              <button type="button" className="btn-remove" onClick={() => setShowKbModal(false)} disabled={kbCreating} aria-label="Close">×</button>
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor={`${uid}-kbtitle`}>Title <span className="form-required">*</span></label>
+              <input id={`${uid}-kbtitle`} type="text" className="form-input" placeholder="e.g., Product Docs, Sales Playbook" value={kbTitle} onChange={(e) => setKbTitle(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor={`${uid}-kbdesc`}>Description <span className="form-optional">(Optional)</span></label>
+              <textarea id={`${uid}-kbdesc`} className="form-textarea" rows={2} placeholder="What this knowledge base contains." value={kbDesc} onChange={(e) => setKbDesc(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Documents <span className="form-hint">.pdf / .docx / .txt · max 25MB each</span></label>
+              <label
+                className={`kb-dropzone ${kbDragOver ? 'over' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setKbDragOver(true); }}
+                onDragLeave={() => setKbDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setKbDragOver(false); if (e.dataTransfer.files?.length) addKbFiles(e.dataTransfer.files); }}
+              >
+                <span>⬆ Drag &amp; drop files here, or click to browse</span>
+                <input type="file" multiple accept={KB_ACCEPT} style={{ display: 'none' }}
+                  onChange={(e) => { if (e.target.files?.length) addKbFiles(e.target.files); e.target.value = ''; }} />
+              </label>
+              {kbFiles.length > 0 && (
+                <ul className="kb-linked-list">
+                  {kbFiles.map((f, i) => (
+                    <li key={i} className="kb-linked-item">
+                      <span>{f.name} <span className="form-hint">{(f.size / 1024).toFixed(0)} KB</span></span>
+                      <button type="button" className="btn-remove" onClick={() => setKbFiles((p) => p.filter((_, idx) => idx !== i))} aria-label="Remove">×</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {kbError && <div className="notice" role="alert">{kbError}</div>}
+            <div className="form-actions">
+              <button type="button" className="btn" onClick={createKb} disabled={kbCreating || !kbTitle.trim()}>
+                {kbCreating ? 'Creating…' : 'Create'}
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => setShowKbModal(false)} disabled={kbCreating}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

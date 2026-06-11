@@ -13,7 +13,7 @@
  * the policies expose public/null-owner rows only.
  */
 import { Pool, PoolClient, QueryResult } from 'pg';
-import type { CompiledScenarioRecord, RubricItem, ScenarioRecord } from '@/domain/scenario';
+import type { CompiledScenarioRecord, KnowledgeBaseDoc, RubricItem, ScenarioRecord } from '@/domain/scenario';
 import type { AnalysisRecord, Evaluation, Improvement } from '@/domain/analysis';
 import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
@@ -21,6 +21,7 @@ import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
   AuditEvent, AuthSessionRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
+  KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
   UserRecord, VoiceUsageRecord,
@@ -145,6 +146,31 @@ function rowToMemory(r: Row): CoachMemoryRecord {
 
 function rowToShareLink(r: Row): ShareLinkRecord {
   return { code: r.code, scenarioId: r.scenario_id, createdAt: new Date(r.created_at).toISOString() };
+}
+
+function rowToKnowledgeBase(r: Row): KnowledgeBaseRecord {
+  return {
+    id: r.id,
+    title: r.title,
+    description: r.description ?? null,
+    ownerUserId: r.owner_user_id ?? null,
+    createdAt: new Date(r.created_at).toISOString(),
+    updatedAt: new Date(r.updated_at).toISOString(),
+    docCount: Number(r.doc_count ?? 0),
+  };
+}
+
+function rowToKbDoc(r: Row): KnowledgeBaseDocRecord {
+  return {
+    id: r.id,
+    kbId: r.kb_id,
+    filename: r.filename,
+    contentType: r.content_type,
+    extractedText: r.extracted_text ?? '',
+    chars: Number(r.chars ?? 0),
+    byteSize: Number(r.byte_size ?? 0),
+    createdAt: new Date(r.created_at).toISOString(),
+  };
 }
 
 export class PgStore implements Store {
@@ -332,6 +358,104 @@ export class PgStore implements Store {
   async getShareLinkByCode(code: string): Promise<ShareLinkRecord | null> {
     const { rows } = await this.q('SELECT * FROM share_link WHERE code = $1', [code]);
     return rows[0] ? rowToShareLink(rows[0]) : null;
+  }
+
+  // ── Knowledge Base (SAU-243) — migration 0008 ──────────────────────────────
+  async createKnowledgeBase(input: NewKnowledgeBase, owner?: OwnerOpts): Promise<KnowledgeBaseRecord> {
+    const { rows } = await this.q(
+      `INSERT INTO knowledge_base (title, description, owner_user_id) VALUES ($1,$2,$3) RETURNING *`,
+      [input.title, input.description ?? null, owner?.ownerUserId ?? null],
+    );
+    return rowToKnowledgeBase({ ...rows[0], doc_count: 0 });
+  }
+
+  async listKnowledgeBases(): Promise<KnowledgeBaseRecord[]> {
+    const { rows } = await this.q(
+      `SELECT kb.*, COUNT(d.id) AS doc_count
+       FROM knowledge_base kb LEFT JOIN knowledge_base_document d ON d.kb_id = kb.id
+       GROUP BY kb.id ORDER BY kb.created_at DESC`,
+    );
+    return rows.map(rowToKnowledgeBase);
+  }
+
+  async getKnowledgeBase(id: string): Promise<KnowledgeBaseRecord | null> {
+    const { rows } = await this.q(
+      `SELECT kb.*, COUNT(d.id) AS doc_count
+       FROM knowledge_base kb LEFT JOIN knowledge_base_document d ON d.kb_id = kb.id
+       WHERE kb.id = $1 GROUP BY kb.id`,
+      [id],
+    );
+    return rows[0] ? rowToKnowledgeBase(rows[0]) : null;
+  }
+
+  async deleteKnowledgeBase(id: string): Promise<boolean> {
+    // documents + join rows cascade (FK ON DELETE CASCADE in migration 0008).
+    const { rowCount } = await this.q('DELETE FROM knowledge_base WHERE id = $1', [id]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  async addKnowledgeBaseDocument(doc: NewKnowledgeBaseDoc): Promise<KnowledgeBaseDocRecord> {
+    return this.withActorTx(async (c) => {
+      const { rows } = await c.query(
+        `INSERT INTO knowledge_base_document (kb_id, filename, content_type, extracted_text, chars, byte_size)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [doc.kbId, doc.filename, doc.contentType, doc.extractedText, doc.extractedText.length, doc.byteSize],
+      );
+      await c.query('UPDATE knowledge_base SET updated_at = now() WHERE id = $1', [doc.kbId]);
+      return rowToKbDoc(rows[0]);
+    });
+  }
+
+  async listKnowledgeBaseDocuments(kbId: string): Promise<KnowledgeBaseDocRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM knowledge_base_document WHERE kb_id = $1 ORDER BY created_at ASC, id ASC',
+      [kbId],
+    );
+    return rows.map(rowToKbDoc);
+  }
+
+  async linkScenarioKnowledgeBase(scenarioId: string, kbId: string): Promise<void> {
+    await this.q(
+      `INSERT INTO scenario_knowledge_base (scenario_id, kb_id) VALUES ($1,$2)
+       ON CONFLICT (scenario_id, kb_id) DO NOTHING`,
+      [scenarioId, kbId],
+    );
+  }
+
+  async unlinkScenarioKnowledgeBase(scenarioId: string, kbId: string): Promise<boolean> {
+    const { rowCount } = await this.q(
+      'DELETE FROM scenario_knowledge_base WHERE scenario_id = $1 AND kb_id = $2',
+      [scenarioId, kbId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async listScenarioKnowledgeBases(scenarioId: string): Promise<KnowledgeBaseRecord[]> {
+    const { rows } = await this.q(
+      `SELECT kb.*, COUNT(d.id) AS doc_count
+       FROM scenario_knowledge_base skb
+       JOIN knowledge_base kb ON kb.id = skb.kb_id
+       LEFT JOIN knowledge_base_document d ON d.kb_id = kb.id
+       WHERE skb.scenario_id = $1
+       GROUP BY kb.id, skb.created_at ORDER BY skb.created_at ASC`,
+      [scenarioId],
+    );
+    return rows.map(rowToKnowledgeBase);
+  }
+
+  async listKnowledgeForScenario(scenarioId: string): Promise<KnowledgeBaseDoc[]> {
+    // Deterministic injection order: link order (skb.created_at), then per-KB
+    // upload order (doc.created_at). Open SELECT policy (migration 0008) lets
+    // this run for any session-runner, not just the owner.
+    const { rows } = await this.q(
+      `SELECT d.filename, d.extracted_text
+       FROM scenario_knowledge_base skb
+       JOIN knowledge_base_document d ON d.kb_id = skb.kb_id
+       WHERE skb.scenario_id = $1 AND length(btrim(d.extracted_text)) > 0
+       ORDER BY skb.created_at ASC, skb.kb_id ASC, d.created_at ASC, d.id ASC`,
+      [scenarioId],
+    );
+    return rows.map((r) => ({ filename: r.filename, text: r.extracted_text }));
   }
 
   async createSession(input: NewSession): Promise<SessionRecord> {
