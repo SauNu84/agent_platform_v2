@@ -14,7 +14,8 @@
  * persistence, and History/Analytics wiring are all exercised by tests today, and
  * swapping in the judge touches one file (follow-up: live LLM-judge integration).
  */
-import type { ScenarioRecord } from '@/domain/scenario';
+import type { ScenarioRecord, RubricItem } from '@/domain/scenario';
+import { parseRubricText } from '@/authoring/author';
 import type {
   AnalysisRecord, Evaluation, Improvement, ReportCardItem,
 } from '@/domain/analysis';
@@ -57,6 +58,20 @@ function clampScore(n: number): number {
 }
 
 /**
+ * The rubric to score against (SAU-238). Prefer the structured rubric the author
+ * already processed; otherwise generate it from the free-text rubric saved in
+ * `metadata._rubricText` — "the Processed rubrik is generated on first session
+ * analysis". This is the deterministic parse (no spend); the author can still
+ * Process with the live AI in the Studio beforehand.
+ */
+function resolveRubric(scenario: ScenarioRecord): RubricItem[] {
+  if (scenario.rubric?.length) return scenario.rubric;
+  const raw = scenario.metadata?._rubricText;
+  if (typeof raw === 'string' && raw.trim()) return parseRubricText(raw);
+  return [];
+}
+
+/**
  * Deterministic, dependency-free scorer. Scores each rubric topic by how well the
  * learner's turns engaged its keywords (topic + note words), giving partial credit
  * so participation is never zero, then weights into a final score. Honest as an
@@ -77,7 +92,7 @@ export class HeuristicScorer implements Scorer {
     // Participation floor: engagement when a topic has no matchable keywords.
     const participation = clampScore(50 + userTurns * 8);
 
-    const rubric = scenario.rubric ?? [];
+    const rubric = resolveRubric(scenario);
     const reportCard: ReportCardItem[] = rubric.map((item) => {
       const kw = keywords(item.topic, item.note ?? '');
       let score: number;

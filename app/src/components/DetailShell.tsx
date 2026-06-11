@@ -277,16 +277,18 @@ export default function DetailShell(props: DetailShellProps) {
               </>
             )}
 
-            {Object.keys(props.metadata).length > 0 && (
+            {Object.entries(props.metadata).filter(([k]) => !k.startsWith('_')).length > 0 && (
               <>
                 <h2>Metadata</h2>
                 <dl className="kv">
-                  {Object.entries(props.metadata).map(([k, v]) => (
-                    <div key={k} style={{ display: 'contents' }}>
-                      <dt>{k}</dt>
-                      <dd>{String(v)}</dd>
-                    </div>
-                  ))}
+                  {Object.entries(props.metadata)
+                    .filter(([k]) => !k.startsWith('_')) // hide internal provenance keys (_source, _rubricText, …)
+                    .map(([k, v]) => (
+                      <div key={k} style={{ display: 'contents' }}>
+                        <dt>{k}</dt>
+                        <dd>{String(v)}</dd>
+                      </div>
+                    ))}
                 </dl>
               </>
             )}

@@ -448,6 +448,15 @@ td.warn { color: #d97706; font-weight: 600; }
 .btn-remove { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 8px; height: 36px; line-height: 1; }
 .btn-remove:hover { border-color: #ef4444; color: #ef4444; }
 .rubric-total { margin-top: 4px; }
+/* Rubrik setting (SAU-238): collapsible header, info line, AI "Process" action */
+.rubric-collapse { display: flex; align-items: center; gap: 8px; background: none; border: none; padding: 0; cursor: pointer; color: var(--text); }
+.rubric-chevron { color: var(--accent-2); font-family: var(--mono); width: 12px; display: inline-block; }
+.rubric-icon { color: var(--accent-2); }
+.rubric-info { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.rubric-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.rubric-empty { display: flex; justify-content: flex-end; align-items: center; min-height: 64px; }
+.rubric-process { color: var(--accent-2); }
+.rubric-process:hover { border-color: var(--accent); }
 .btn-ghost-sm { background: none; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--accent-2); font-size: 12px; font-family: var(--mono); cursor: pointer; padding: 4px 10px; }
 .btn-ghost-sm:hover { background: var(--accent-soft); }
 

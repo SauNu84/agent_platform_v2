@@ -88,3 +88,38 @@ test('heuristic scorer is deterministic', async () => {
   const b = await scorer.score(scenario, { turns: t.turns, toolCalls: [] });
   assert.deepEqual(a, b);
 });
+
+// SAU-238: a scenario with no structured rubric but a free-text rubric in
+// metadata._rubricText gets its Processed rubric generated on first analysis.
+const MD_TEXT_RUBRIC = `---
+id: text-rubric-scenario
+name: Text Rubric Scenario
+persona: be a tough buyer
+rubric: []
+visibility: public
+metadata:
+  _rubricText: |
+    Discovery questions — uncover needs: 40%
+    Pricing objection handling
+---
+`;
+
+test('SAU-238: Processed rubric is generated from metadata._rubricText on first analysis', async () => {
+  const store = new MemoryStore();
+  const { scenario } = await createScenarioFromMarkdown(store, MD_TEXT_RUBRIC);
+  assert.equal(scenario.rubric.length, 0); // nothing was processed by hand
+  const result = await persistClientSession({
+    store, scenario, vendor: 'mock', userId: 'u1',
+    transcript: transcriptWith(['I asked discovery questions and handled the pricing objection']),
+  });
+
+  const analysis = await analyzeSession(store, result.sessionId);
+  // The free-text rubric was parsed into two scored criteria — not the empty-rubric
+  // participation-only path.
+  assert.equal(analysis.evaluation.reportCard.length, 2);
+  assert.deepEqual(
+    analysis.evaluation.reportCard.map((r) => r.topic).sort(),
+    ['Discovery questions', 'Pricing objection handling'],
+  );
+  assert.equal(analysis.evaluation.reportCard.reduce((s, r) => s + (r.weight || 0), 0), 100);
+});
