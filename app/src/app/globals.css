@@ -486,6 +486,49 @@ td.warn { color: #d97706; font-weight: 600; }
 .preview-desc { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .preview-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }
 
+/* ── AI Studio — conversational authoring (SAU-244) ────────────────────────── */
+.studio-shell { max-width: 1100px; }
+/* Mode toggle: Classic ⇄ AI Studio segmented control in the header. */
+.studio-modetoggle { display: inline-flex; gap: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+.studio-modebtn { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 13px; font-family: var(--mono); padding: 5px 12px; border-radius: 6px; }
+.studio-modebtn:hover { color: var(--text); }
+.studio-modebtn.active { background: var(--accent-soft); color: var(--accent-2); border: 1px solid var(--accent); padding: 4px 11px; }
+
+/* Two-pane layout: copilot (left) + form pane (right). */
+.aistudio-layout { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; gap: 24px; align-items: start; }
+@media (max-width: 900px) { .aistudio-layout { grid-template-columns: 1fr; } }
+
+/* Right-pane sub-tabs: Form · Preview · Copy(soon). */
+.aistudio-subtabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.aistudio-previewpane { padding: 8px 0; }
+
+/* Copilot pane. */
+.copilot-pane { display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; position: sticky; top: 24px; max-height: calc(100vh - 48px); }
+.copilot-head { border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.copilot-title { margin: 0 0 4px; font-family: var(--mono); font-size: 14px; font-weight: 600; }
+.copilot-sub { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.copilot-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; min-height: 180px; max-height: 46vh; padding-right: 4px; }
+.copilot-empty { color: var(--muted); font-size: 13px; }
+.copilot-empty ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.copilot-empty li { font-family: var(--mono); font-size: 12px; }
+.copilot-turn { border-radius: 10px; padding: 9px 12px; font-size: 13px; line-height: 1.5; }
+.copilot-turn p { margin: 0; }
+.copilot-turn.user { background: var(--accent-soft); border: 1px solid var(--accent); align-self: flex-end; max-width: 90%; }
+.copilot-turn.copilot { background: var(--bg); border: 1px solid var(--border); }
+.copilot-turn.err { border-color: #f59e0b; }
+.copilot-tag { display: block; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-2); margin-bottom: 3px; }
+.copilot-turn.err .copilot-tag { color: #f59e0b; }
+.copilot-thinking { color: var(--muted); font-style: italic; }
+
+.copilot-inputbar { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.copilot-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.copilot-effort { display: inline-flex; gap: 6px; }
+.effort-chip { background: var(--bg); border: 1px solid var(--border-strong); border-radius: 7px; color: var(--muted); cursor: pointer; font-size: 12px; font-family: var(--mono); padding: 5px 10px; }
+.effort-chip:hover { color: var(--text); border-color: var(--accent); }
+.effort-chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
+.copilot-send { padding: 7px 16px; font-size: 13px; }
+
 /* ── Slice 5: auth (login) + admin + role chrome ─────────────────────────── */
 .login-wrap {
   display: flex; flex-direction: column; align-items: center; justify-content: center;

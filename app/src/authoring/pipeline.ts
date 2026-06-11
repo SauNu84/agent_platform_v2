@@ -23,7 +23,10 @@ import {
 import type { CompiledScenarioRecord, ScenarioRecord } from '@/domain/scenario';
 import type { CompiledCourseRecord } from '@/domain/course';
 import type { Store } from '@/db/store';
-import { Author, AuthoringBrief, getAuthor, PriorAttempt } from './author';
+import {
+  Author, AuthoringBrief, AuthoringEffort, getAuthor, PriorAttempt,
+  ScenarioEditFields, scenarioFieldsToMd,
+} from './author';
 
 export class AuthoringError extends Error {}
 
@@ -31,6 +34,8 @@ export interface PipelineOptions {
   author?: Author;
   /** Total generation attempts (1 = no repair). Default 2. */
   maxAttempts?: number;
+  /** Model-effort for the authoring call (AI Studio Flash/Deep, SAU-244). */
+  effort?: AuthoringEffort;
 }
 
 // ── Draft shapes (the validated-but-unpublished artifact) ─────────────────────
@@ -81,7 +86,7 @@ export async function generateScenarioDraft(
   let lastErrors = '';
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    lastMd = await author.generateScenario(brief, { prior });
+    lastMd = await author.generateScenario(brief, { prior, effort: opts.effort });
     try {
       const { record } = compileScenarioContent(lastMd);
       return { kind: 'scenario', ok: true, md: lastMd, record, slug: record.slug, attempts: attempt, author: author.name };
@@ -143,6 +148,43 @@ export async function generateCourseDraft(
     prior = { md: courseMd + '\n\n' + scenarioMds.join('\n\n'), errors: errors.join('\n') };
   }
   return last;
+}
+
+// ── Edit (AI Studio, SAU-244): patch a draft from a NL instruction ────────────
+
+export interface ScenarioEditDraft {
+  kind: 'edit';
+  ok: boolean;
+  /** The patched field set the form re-renders from (always returned). */
+  fields: ScenarioEditFields;
+  /** One-line "what changed" summary for the copilot turn. */
+  summary: string;
+  /** Present iff !ok — actionable validation errors (the patch didn't compile). */
+  errors?: string;
+  author: string;
+}
+
+/**
+ * Apply a natural-language instruction to the current draft field set and
+ * VALIDATE the result against the Slice-1 compiler (the same safety gate as
+ * generation). It NEVER writes the DB — the copilot proposes a patch the author
+ * reviews in the form. A patch that fails to compile comes back `ok: false` with
+ * actionable errors, but the proposed `fields` are still returned so the author
+ * can see and hand-fix them.
+ */
+export async function editScenarioDraft(
+  current: ScenarioEditFields,
+  instruction: string,
+  opts: PipelineOptions = {},
+): Promise<ScenarioEditDraft> {
+  const author = opts.author ?? getAuthor();
+  const { fields, summary } = await author.editScenario(current, instruction, { effort: opts.effort });
+  try {
+    compileScenarioContent(scenarioFieldsToMd(fields));
+    return { kind: 'edit', ok: true, fields, summary, author: author.name };
+  } catch (e) {
+    return { kind: 'edit', ok: false, fields, summary, errors: (e as Error).message, author: author.name };
+  }
 }
 
 // ── 5: the review/publish gate ────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import { compileCourseContent, validateCourseReferences, CourseCompileError } fr
 import { toCompiledScenario } from '@/domain/scenario';
 import {
   Author, AuthoringBrief, AuthorOptions, GeneratedCourse, TemplateAuthor,
-  parseRubricText, roundWeightsTo100,
+  ScenarioEditFields, deterministicEdit, parseRubricText, roundWeightsTo100,
 } from '@/authoring/author';
 import {
   generateScenarioDraft, generateCourseDraft, publishScenarioDraft, publishCourseDraft, AuthoringError,
@@ -27,6 +27,9 @@ class ScriptedAuthor implements Author {
   }
   async parseRubric(text: string) {
     return parseRubricText(text);
+  }
+  async editScenario(current: ScenarioEditFields, instruction: string) {
+    return deterministicEdit(current, instruction);
   }
 }
 

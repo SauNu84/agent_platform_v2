@@ -145,6 +145,20 @@ function CreateScenarioForm() {
   const [voice, setVoice] = useState<{ name: string; language: string } | null>(null);
   const [carriedMetadata, setCarriedMetadata] = useState<Record<string, unknown> | null>(null);
 
+  // ── AI Studio (SAU-244) — conversational authoring alongside the Classic form.
+  // The form state above is the single source of truth: the copilot proposes
+  // patches that flow into these same setters, and state persists across the
+  // Classic⇄AI toggle (it's one component). New scenarios land in AI Studio (the
+  // differentiator, spec D3); a remix opens Classic since it's already pre-filled.
+  const [studioMode, setStudioMode] = useState<'classic' | 'ai'>(remixFrom ? 'classic' : 'ai');
+  const [rightTab, setRightTab] = useState<'form' | 'preview'>('form');
+  const [copilotInput, setCopilotInput] = useState('');
+  const [copilotEffort, setCopilotEffort] = useState<'flash' | 'deep'>('flash');
+  const [copilotBusy, setCopilotBusy] = useState(false);
+  const [copilotTurns, setCopilotTurns] = useState<
+    { role: 'user' | 'copilot'; text: string; ok?: boolean }[]
+  >([]);
+
   // Pre-fill from the source scenario's config when opened as a remix.
   useEffect(() => {
     if (!remixFrom) return;
@@ -348,6 +362,100 @@ function CreateScenarioForm() {
     }
   }
 
+  // ── AI Studio copilot (SAU-244) ───────────────────────────────────────────
+  /** Push a returned field set into the form (the copilot's proposed patch). */
+  function applyFields(f: {
+    name: string; description: string; userInstructions: string;
+    aiDescription: string; persona: string; rubric: RubricRow[];
+  }) {
+    setName(f.name);
+    if (!slugEdited && f.name) setSlug(toSlug(f.name));
+    setDescription(f.description);
+    setUserInstructions(f.userInstructions);
+    setAiDescription(f.aiDescription);
+    setPersona(f.persona);
+    const rows = f.rubric.map((r) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' }));
+    setRubric(rows);
+    setRubricText(rubricToText(rows));
+  }
+
+  /** True when the draft is empty enough to treat a prompt as "generate from scratch". */
+  function draftIsEmpty(): boolean {
+    return !name.trim() && !persona.trim() && !description.trim()
+      && !aiDescription.trim() && !userInstructions.trim()
+      && rubric.filter((r) => r.topic.trim()).length === 0;
+  }
+
+  /**
+   * Run one copilot turn. Intent is auto-detected: an empty draft generates from
+   * scratch (/api/authoring/generate); an existing draft is edited in place
+   * (/api/authoring/edit). Either way the copilot proposes — it never publishes.
+   */
+  async function runCopilot() {
+    const instruction = copilotInput.trim();
+    if (!instruction || copilotBusy) return;
+    setCopilotBusy(true);
+    setCopilotInput('');
+    setCopilotTurns((t) => [...t, { role: 'user', text: instruction }]);
+    const generate = draftIsEmpty();
+    try {
+      if (generate) {
+        const res = await fetch('/api/authoring/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'scenario', topic: instruction, visibility, effort: copilotEffort }),
+        });
+        const data = await res.json();
+        const draft = data.draft;
+        if (!res.ok || !draft?.ok) {
+          const msg = draft?.errors ?? data.error ?? `Error ${res.status}`;
+          setCopilotTurns((t) => [...t, { role: 'copilot', text: `Couldn't generate a valid draft: ${msg}`, ok: false }]);
+        } else {
+          const rec = draft.record;
+          applyFields({
+            name: rec.name ?? '',
+            description: rec.description ?? '',
+            userInstructions: '',
+            aiDescription: '',
+            persona: rec.aiInstructions ?? '',
+            rubric: (rec.rubric ?? []).map((r: RubricRow) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' })),
+          });
+          setCopilotTurns((t) => [...t, { role: 'copilot', text: `Drafted “${rec.name}” — review and refine any field, or tell me what to change.`, ok: true }]);
+        }
+      } else {
+        const fields = {
+          name, description, userInstructions, aiDescription, persona,
+          rubric: rubric.filter((r) => r.topic.trim()),
+        };
+        const res = await fetch('/api/authoring/edit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ draft: fields, instruction, effort: copilotEffort }),
+        });
+        const data = await res.json();
+        const draft = data.draft;
+        if (!draft) {
+          setCopilotTurns((t) => [...t, { role: 'copilot', text: data.error ?? `Error ${res.status}`, ok: false }]);
+        } else {
+          // Apply the proposed patch either way; flag validation problems so the
+          // author can hand-fix (the copilot never blocks the form).
+          applyFields({
+            name: draft.fields.name, description: draft.fields.description,
+            userInstructions: draft.fields.userInstructions, aiDescription: draft.fields.aiDescription,
+            persona: draft.fields.persona,
+            rubric: (draft.fields.rubric ?? []).map((r: RubricRow) => ({ topic: r.topic, weight: r.weight, note: r.note ?? '' })),
+          });
+          const text = draft.ok ? draft.summary : `${draft.summary} ⚠ Needs a fix before publishing: ${draft.errors}`;
+          setCopilotTurns((t) => [...t, { role: 'copilot', text, ok: draft.ok }]);
+        }
+      }
+    } catch (e) {
+      setCopilotTurns((t) => [...t, { role: 'copilot', text: (e as Error).message, ok: false }]);
+    } finally {
+      setCopilotBusy(false);
+    }
+  }
+
   function handleNameChange(v: string) {
     setName(v);
     if (!slugEdited) setSlug(toSlug(v));
@@ -426,22 +534,112 @@ function CreateScenarioForm() {
   } : null;
 
   return (
-    <div className="studio-layout">
-      {/* Left: form */}
-      <div className="studio-form">
-        <nav className="studio-nav">
-          <Link href="/library" className="back-link">← Scenarios</Link>
-          <span className="studio-mode-badge">{remixFrom ? 'Remix' : 'Classic'}</span>
-        </nav>
-        <h1 className="studio-title">{remixFrom ? 'Remix Scenario' : 'Scenario Studio'}</h1>
+    <div className="studio-shell">
+      <nav className="studio-nav">
+        <Link href="/library" className="back-link">← Scenarios</Link>
+        {/* Mode toggle (SAU-244): Classic ⇄ AI Studio. Form state is shared, so
+            it persists across the switch — no data loss either direction. */}
+        <div className="studio-modetoggle" role="tablist" aria-label="Authoring mode">
+          <button
+            type="button" role="tab" aria-selected={studioMode === 'ai'}
+            className={`studio-modebtn ${studioMode === 'ai' ? 'active' : ''}`}
+            onClick={() => setStudioMode('ai')}
+          ><span aria-hidden="true">✦</span> AI Studio</button>
+          <button
+            type="button" role="tab" aria-selected={studioMode === 'classic'}
+            className={`studio-modebtn ${studioMode === 'classic' ? 'active' : ''}`}
+            onClick={() => setStudioMode('classic')}
+          >Classic</button>
+        </div>
+        {remixFrom && <span className="studio-mode-badge">Remix</span>}
+      </nav>
+      <h1 className="studio-title">{remixFrom ? 'Remix Scenario' : 'Scenario Studio'}</h1>
 
-        {remixedName && (
-          <div className="notice" role="status">
-            Remixing <strong>{remixedName}</strong> — edit anything below and save it as your own
-            private draft. It won&apos;t touch the original.
-          </div>
+      {remixedName && (
+        <div className="notice" role="status">
+          Remixing <strong>{remixedName}</strong> — edit anything below and save it as your own
+          private draft. It won&apos;t touch the original.
+        </div>
+      )}
+
+      <div className={studioMode === 'ai' ? 'aistudio-layout' : 'studio-layout'}>
+        {/* ── AI Studio copilot pane (left) ── */}
+        {studioMode === 'ai' && (
+          <section className="copilot-pane" aria-label="AI authoring copilot">
+            <div className="copilot-head">
+              <p className="copilot-title">Ask me to draft or edit your scenario…</p>
+              <p className="copilot-sub">I fill the form on the right. You stay in control — nothing is published until you click Save.</p>
+            </div>
+
+            <div className="copilot-log" aria-live="polite">
+              {copilotTurns.length === 0 ? (
+                <div className="copilot-empty">
+                  <p>Try:</p>
+                  <ul>
+                    <li>“A skeptical enterprise CFO who stalls on price”</li>
+                    <li>“Make the persona more aggressive on objections”</li>
+                    <li>“Add a rubric criterion for active listening”</li>
+                  </ul>
+                </div>
+              ) : (
+                copilotTurns.map((turn, i) => (
+                  <div key={i} className={`copilot-turn ${turn.role}${turn.ok === false ? ' err' : ''}`}>
+                    {turn.role === 'copilot' && <span className="copilot-tag">{turn.ok === false ? '⚠' : '✦'} what changed</span>}
+                    <p>{turn.text}</p>
+                  </div>
+                ))
+              )}
+              {copilotBusy && <div className="copilot-turn copilot"><p className="copilot-thinking">Working…</p></div>}
+            </div>
+
+            <div className="copilot-inputbar">
+              <textarea
+                className="form-textarea"
+                rows={3}
+                placeholder={draftIsEmpty() ? 'Describe the scenario you want to practice…' : 'Describe how you’d like to edit your scenario…'}
+                value={copilotInput}
+                onChange={(e) => setCopilotInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runCopilot(); } }}
+                disabled={copilotBusy}
+              />
+              <div className="copilot-controls">
+                <div className="copilot-effort" role="group" aria-label="Model effort">
+                  <button
+                    type="button"
+                    className={`effort-chip ${copilotEffort === 'flash' ? 'active' : ''}`}
+                    aria-pressed={copilotEffort === 'flash'}
+                    title="Fast, low-cost model"
+                    onClick={() => setCopilotEffort('flash')}
+                  ><span aria-hidden="true">⚡</span> Flash</button>
+                  <button
+                    type="button"
+                    className={`effort-chip ${copilotEffort === 'deep' ? 'active' : ''}`}
+                    aria-pressed={copilotEffort === 'deep'}
+                    title="Higher-effort model with extended reasoning. Live web retrieval arrives in Phase 2."
+                    onClick={() => setCopilotEffort('deep')}
+                  ><span aria-hidden="true">🔬</span> Deep Research</button>
+                </div>
+                <button type="button" className="btn copilot-send" onClick={runCopilot} disabled={copilotBusy || !copilotInput.trim()}>
+                  {copilotBusy ? '…' : '↑ Send'}
+                </button>
+              </div>
+              <p className="form-hint" style={{ marginLeft: 0 }}>⌘/Ctrl + Enter to send{copilotEffort === 'deep' ? ' · Deep = high-effort model (no live web in this build)' : ''}</p>
+            </div>
+          </section>
         )}
 
+        {/* ── Form pane (right in AI Studio, sole pane in Classic) ── */}
+        <div className="studio-form">
+          {studioMode === 'ai' && (
+            <div className="aistudio-subtabs" role="tablist" aria-label="Editor view">
+              <button type="button" role="tab" aria-selected={rightTab === 'form'} className={`tab ${rightTab === 'form' ? 'active' : ''}`} onClick={() => setRightTab('form')}><span aria-hidden="true">📝</span> Form</button>
+              <button type="button" role="tab" aria-selected={rightTab === 'preview'} className={`tab ${rightTab === 'preview' ? 'active' : ''}`} onClick={() => setRightTab('preview')}><span aria-hidden="true">👁</span> Preview</button>
+              <button type="button" className="tab" disabled title="Raw Markdown export — coming in Phase 2"><span aria-hidden="true">⧉</span> Copy</button>
+            </div>
+          )}
+
+          {(studioMode === 'classic' || rightTab === 'form') && (
+          <>
         {/* Templates */}
         <section className="studio-section">
           <p className="studio-section-label">Start with a template</p>
@@ -837,29 +1035,53 @@ function CreateScenarioForm() {
             <Link href="/library" className="btn-ghost">Cancel</Link>
           </div>
         </form>
-      </div>
+          </>
+          )}
 
-      {/* Right: Live Preview */}
-      <aside className="studio-preview">
-        <div className="preview-header">
-          <span className="preview-dot red" /><span className="preview-dot amber" /><span className="preview-dot green" />
-          <span className="preview-title">Live Preview</span>
-        </div>
-        <p className="preview-sub">Updates when you fill in the fields.</p>
-        {preview ? (
-          <div className="preview-card">
-            <div className="preview-avatar" style={{ background: 'linear-gradient(135deg, #06b6d4, #0891b2)' }} />
-            <h3 className="preview-name">{preview.name}</h3>
-            <p className="preview-desc">{preview.description}</p>
-            <div className="badges">
-              <span className="badge">Private</span>
-              <span className="badge sales">Practice</span>
+          {/* AI Studio: the Preview subtab renders the same live card inline. */}
+          {studioMode === 'ai' && rightTab === 'preview' && (
+            <div className="aistudio-previewpane">
+              {preview ? (
+                <div className="preview-card">
+                  <div className="preview-avatar" style={{ background: 'linear-gradient(135deg, #06b6d4, #0891b2)' }} />
+                  <h3 className="preview-name">{preview.name}</h3>
+                  <p className="preview-desc">{preview.description}</p>
+                  <div className="badges">
+                    <span className="badge">{visibility === 'public' ? 'Public' : 'Private'}</span>
+                    <span className="badge sales">Practice</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="preview-empty">Ask the copilot or fill the Form to see a preview.</div>
+              )}
             </div>
+          )}
+        </div>
+
+        {/* Classic: Live Preview aside (right column). */}
+        {studioMode === 'classic' && (
+        <aside className="studio-preview">
+          <div className="preview-header">
+            <span className="preview-dot red" /><span className="preview-dot amber" /><span className="preview-dot green" />
+            <span className="preview-title">Live Preview</span>
           </div>
-        ) : (
-          <div className="preview-empty">Fill in the Name to see a preview.</div>
+          <p className="preview-sub">Updates when you fill in the fields.</p>
+          {preview ? (
+            <div className="preview-card">
+              <div className="preview-avatar" style={{ background: 'linear-gradient(135deg, #06b6d4, #0891b2)' }} />
+              <h3 className="preview-name">{preview.name}</h3>
+              <p className="preview-desc">{preview.description}</p>
+              <div className="badges">
+                <span className="badge">Private</span>
+                <span className="badge sales">Practice</span>
+              </div>
+            </div>
+          ) : (
+            <div className="preview-empty">Fill in the Name to see a preview.</div>
+          )}
+        </aside>
         )}
-      </aside>
+      </div>
 
       {/* Create Knowledge Base modal (SAU-243) */}
       {showKbModal && (

@@ -15,22 +15,68 @@
  */
 import matter from 'gray-matter';
 import {
-  Author, AuthoringBrief, AuthorOptions, GeneratedCourse,
+  Author, AuthoringBrief, AuthorOptions, AuthoringEffort, GeneratedCourse,
+  ScenarioEdit, ScenarioEditFields,
   authoringSystemPrompt, scenarioUserPrompt, COURSE_SCHEMA_CONTRACT,
+  editScenarioSystemPrompt, editScenarioUserPrompt, deterministicEdit,
   rubricParseSystemPrompt, rubricParseUserPrompt, roundWeightsTo100, parseRubricText,
 } from '../author';
 import type { RubricItem } from '@/domain/scenario';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
+// Deep = the most capable Claude (adaptive thinking); Flash = a fast/cheap model,
+// no extended thinking (AI Studio model-effort toggle, SAU-244). Both overridable.
 const MODEL = process.env.AUTHORING_MODEL || 'claude-opus-4-8';
+const MODEL_FLASH = process.env.AUTHORING_MODEL_FLASH || 'claude-haiku-4-5-20251001';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 export class AnthropicAuthor implements Author {
   readonly name = `anthropic:${MODEL}`;
 
   async generateScenario(brief: AuthoringBrief, opts?: AuthorOptions): Promise<string> {
-    const text = await this.complete(authoringSystemPrompt(), scenarioUserPrompt(brief, opts?.prior));
+    const text = await this.complete(authoringSystemPrompt(), scenarioUserPrompt(brief, opts?.prior), opts?.effort);
     return stripFence(text);
+  }
+
+  /**
+   * AI Studio edit turn (SAU-244): the model returns the full patched field set
+   * as JSON + a one-line summary. We never trust it blindly — entries are coerced,
+   * rubric weights re-normalized to sum 100, and on any JSON/shape failure we fall
+   * back to the deterministic editor so the author's turn never hard-fails.
+   */
+  async editScenario(current: ScenarioEditFields, instruction: string, opts?: AuthorOptions): Promise<ScenarioEdit> {
+    const raw = stripFence(await this.complete(editScenarioSystemPrompt(), editScenarioUserPrompt(current, instruction), opts?.effort));
+    let obj: unknown;
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      return deterministicEdit(current, instruction);
+    }
+    if (!obj || typeof obj !== 'object') return deterministicEdit(current, instruction);
+    const o = obj as Record<string, unknown>;
+    const str = (v: unknown, fallback: string): string => (typeof v === 'string' ? v : fallback);
+    const rubricIn = Array.isArray(o.rubric) ? o.rubric : current.rubric;
+    const items = rubricIn
+      .map((e) => (e && typeof e === 'object' ? (e as Record<string, unknown>) : null))
+      .filter((e): e is Record<string, unknown> => !!e && typeof e.topic === 'string' && (e.topic as string).trim().length > 0)
+      .map((e) => ({
+        topic: (e.topic as string).trim(),
+        weight: Number.isFinite(Number(e.weight)) ? Number(e.weight) : 0,
+        note: typeof e.note === 'string' && e.note.trim() ? e.note.trim() : undefined,
+      }));
+    const weights = roundWeightsTo100(items.map((i) => i.weight));
+    const rubric: RubricItem[] = items.map((i, idx) => ({ topic: i.topic, weight: weights[idx], ...(i.note ? { note: i.note } : {}) }));
+    return {
+      fields: {
+        name: str(o.name, current.name),
+        description: str(o.description, current.description),
+        userInstructions: str(o.userInstructions, current.userInstructions),
+        aiDescription: str(o.aiDescription, current.aiDescription),
+        persona: str(o.persona, current.persona),
+        rubric: items.length ? rubric : current.rubric,
+      },
+      summary: str(o.summary, 'Applied your edit.').trim() || 'Applied your edit.',
+    };
   }
 
   async generateCourse(brief: AuthoringBrief, opts?: AuthorOptions): Promise<GeneratedCourse> {
@@ -84,8 +130,12 @@ export class AnthropicAuthor implements Author {
     return items.map((i, idx) => ({ topic: i.topic, weight: weights[idx], ...(i.note ? { note: i.note } : {}) }));
   }
 
-  /** One Messages API round-trip → the concatenated text content. */
-  private async complete(system: string, user: string): Promise<string> {
+  /**
+   * One Messages API round-trip → the concatenated text content. `effort` picks
+   * the model + whether extended thinking is on (Flash = fast model, no thinking;
+   * Deep/default = the most capable model with adaptive thinking).
+   */
+  private async complete(system: string, user: string, effort?: AuthoringEffort): Promise<string> {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error(
@@ -93,6 +143,7 @@ export class AnthropicAuthor implements Author {
         'The default TemplateAuthor runs the pipeline offline with no spend.',
       );
     }
+    const flash = effort === 'flash';
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: {
@@ -101,9 +152,9 @@ export class AnthropicAuthor implements Author {
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: flash ? MODEL_FLASH : MODEL,
         max_tokens: 4096,
-        thinking: { type: 'adaptive' },
+        ...(flash ? {} : { thinking: { type: 'adaptive' } }),
         system,
         messages: [{ role: 'user', content: user }],
       }),

@@ -39,11 +39,13 @@ export async function POST(req: NextRequest) {
     visibility: body.visibility === 'public' ? 'public' : 'private',
   };
   const maxAttempts = typeof body.maxAttempts === 'number' ? body.maxAttempts : undefined;
+  // AI Studio model-effort toggle (SAU-244): Flash = fast/cheap, Deep = high-effort.
+  const effort = body.effort === 'deep' ? 'deep' : body.effort === 'flash' ? 'flash' : undefined;
 
   try {
     const draft = kind === 'course'
-      ? await generateCourseDraft(brief, { maxAttempts })
-      : await generateScenarioDraft(brief, { maxAttempts });
+      ? await generateCourseDraft(brief, { maxAttempts, effort })
+      : await generateScenarioDraft(brief, { maxAttempts, effort });
     // Validation failure is a 422 (the generation didn't meet the schema), but
     // the draft body is still returned so the caller sees the actionable errors.
     return NextResponse.json({ draft }, { status: draft.ok ? 200 : 422 });
