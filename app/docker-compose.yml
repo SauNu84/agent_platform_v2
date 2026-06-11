@@ -7,11 +7,22 @@
 # Host port 5433 (not 5432) on purpose, so this never collides with a
 # Postgres you may already run locally on the default 5432.
 #
+# Two Postgres roles, by design (SAU-233):
+#   * agent   — superuser/owner. Runs MIGRATIONS (DDL) and the SEED path.
+#   * app_rw  — non-superuser, NOBYPASSRLS. The app's RUNTIME connection.
+# Superusers (and BYPASSRLS roles) bypass Row-Level Security entirely — even
+# FORCE — so the Slice-5 ownership/RLS policies only actually bite when the app
+# serves requests as app_rw. Migration 0007 creates app_rw + its grants.
+#
 # Usage:
 #   docker compose up -d
+#   # migrations + seed run as the owner:
 #   export DATABASE_URL=postgres://agent:agent@localhost:5433/agent_platform
-#   npm run migrate
+#   npm run migrate    # creates the app_rw role (migration 0007)
 #   npm run seed
+#   # the app runs as the restricted role so FORCE RLS engages:
+#   export DATABASE_URL=postgres://app_rw:app_rw@localhost:5433/agent_platform
+#   npm run dev
 #
 # Tear down (drops all data):  docker compose down -v
 services:
@@ -22,6 +33,14 @@ services:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: agent
       POSTGRES_DB: agent_platform
+      # Require a real password for TCP/host connections (the app connects over
+      # the published port). This flips the initdb default `trust` on the
+      # 127.0.0.1/::1 host lines to scram so passwords are actually verified.
+      # The unix-socket `local` line stays trust so `docker exec ... psql -U agent`
+      # keeps working without a password. Applies on a FRESH volume only — an
+      # existing agent_platform_pgdata keeps its old pg_hba until recreated
+      # (docker compose down -v && up).
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     ports:
       - "5433:5432"
     volumes:

@@ -46,11 +46,33 @@ already run locally. Run each line on its own:
 ```bash
 cd app
 docker compose up -d
+
+# Migrations (DDL) + seed run as the owner/superuser role `agent`:
 export DATABASE_URL=postgres://agent:agent@localhost:5433/agent_platform
-npm run migrate
+npm run migrate          # migration 0007 creates the restricted `app_rw` role
 npm run seed
+
+# The app SERVES requests as the non-superuser `app_rw` role, so the Slice-5
+# ownership/RLS policies actually engage (see "Why two roles" below):
+export DATABASE_URL=postgres://app_rw:app_rw@localhost:5433/agent_platform
 npm run dev
 ```
+
+> **Why two roles (SAU-233).** Postgres superusers — and any `BYPASSRLS` role —
+> bypass Row-Level Security *entirely*, even `FORCE`. The docker-default `agent`
+> role is a superuser, so if the app connected as `agent` the Slice-5 RLS
+> policies would be inert (the API-layer guards would still enforce, but the
+> DB-layer backstop wouldn't). `app_rw` is a `NOSUPERUSER NOBYPASSRLS` login role
+> with table DML + sequence grants and nothing else, created by migration 0007.
+> Keep migrations and the seed path on `agent` (they need DDL / write platform
+> content); point only the runtime `DATABASE_URL` at `app_rw`. Verify it bites:
+> `DATABASE_URL=postgres://app_rw:app_rw@localhost:5433/agent_platform npm test`
+> runs `tests/rls.test.ts` for real (it self-skips under a superuser role).
+>
+> The compose file also flips host auth from initdb's default `trust` to
+> `scram-sha-256`, so passwords are actually verified on the published port. That
+> takes effect on a **fresh** volume — an existing `agent_platform_pgdata` keeps
+> its old `pg_hba` until you recreate it (`docker compose down -v && docker compose up -d`).
 
 Now the app serves from Postgres. Sessions, transcripts, voice-usage, analysis,
 and coach memory persist across restarts. Verify the DB directly:
