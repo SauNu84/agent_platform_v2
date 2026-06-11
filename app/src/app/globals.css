@@ -254,6 +254,13 @@ a.card:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(15, 23, 
 
 /* ── Detail shell ── */
 .detail-head { display: flex; gap: 18px; align-items: flex-start; }
+/* At-a-glance scenario config chips (SAU-246) */
+.glance { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+.glance .badge { font-size: 12px; padding: 4px 10px; }
+/* Linked Knowledge Bases list on detail (SAU-246) */
+.kb-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.kb-list-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+.kb-list-title { font-family: var(--mono); font-size: 14px; color: var(--text); }
 .avatar { width: 64px; height: 64px; border-radius: 14px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex: none; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 24px 0 0; }
 .tab { padding: 10px 16px; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 14px; font-family: var(--mono); border-bottom: 2px solid transparent; }

@@ -22,6 +22,16 @@ export default async function ScenarioDetailPage({ params }: { params: { slug: s
     turns: s.transcript?.turns ?? [],
   }));
 
+  // SAU-246: surface the linked Knowledge Bases (SAU-243) on the detail page —
+  // the settings form lets authors link them, but the reader never saw them.
+  const linkedKbs = await store.listScenarioKnowledgeBases(scenario.id);
+  const knowledgeBases = linkedKbs.map((kb) => ({
+    id: kb.id,
+    title: kb.title,
+    description: kb.description,
+    docCount: kb.docCount,
+  }));
+
   return (
     <DetailShell
       kind="Scenario"
@@ -32,6 +42,9 @@ export default async function ScenarioDetailPage({ params }: { params: { slug: s
       rubric={scenario.rubric}
       metadata={scenario.metadata}
       voice={{ name: scenario.voiceName, languageCode: scenario.languageCode }}
+      // SAU-246: reflect the configured visibility + linked Knowledge Bases.
+      isPublic={scenario.isPublic}
+      knowledgeBases={knowledgeBases}
       initialSessions={initialSessions}
       sessionsEndpoint={`/api/scenarios/${scenario.slug}/sessions`}
       // SAU-224: scenario detail offers a text Chat with the persona instead of

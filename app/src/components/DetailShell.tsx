@@ -31,6 +31,14 @@ export interface DetailShellProps {
   rubric: RubricItem[];
   metadata: Record<string, unknown>;
   voice: { name: string; languageCode: string };
+  /** Whether the scenario is publicly listed (SAU-246: surfaced as a config chip). */
+  isPublic?: boolean;
+  /**
+   * Knowledge Bases linked to this scenario (SAU-243). The settings form lets you
+   * link reusable corpora, but the detail page never reflected them (SAU-246) —
+   * we now list them so the configured grounding is visible to the reader.
+   */
+  knowledgeBases?: Array<{ id: string; title: string; description: string | null; docCount: number }>;
   initialSessions: SessionSummary[];
   sessionsEndpoint: string;
   /**
@@ -70,8 +78,16 @@ export default function DetailShell(props: DetailShellProps) {
   const [liveDemoOpen, setLiveDemoOpen] = useState(false);
   // SAU-238: the human learner's brief (UI only, never sent to the model).
   const userInstructions = typeof props.metadata?._userInstructions === 'string' ? props.metadata._userInstructions : '';
+  // SAU-238 ask #5: the AI persona identity ("Description for AI"), prepended to
+  // the system prompt. It shapes the agent, so SAU-246 surfaces it on detail.
+  const aiPersona = typeof props.metadata?._aiDescription === 'string' ? props.metadata._aiDescription : '';
   // SAU-238 ask #6: which AI model this scenario runs on.
   const aiModel = typeof props.metadata?._model === 'string' ? aiModelLabel(props.metadata._model) : '';
+  // Human-readable scenario taxonomy (role / difficulty), pulled out of metadata
+  // for the at-a-glance config strip (SAU-246).
+  const role = typeof props.metadata?.role === 'string' ? props.metadata.role : '';
+  const difficulty = typeof props.metadata?.difficulty === 'string' ? props.metadata.difficulty : '';
+  const knowledgeBases = props.knowledgeBases ?? [];
   // SAU-238 ask #7: reference context attached to ground the agent.
   const aiContext = typeof props.metadata?._aiContext === 'string' ? props.metadata._aiContext : '';
   const aiContextSource = typeof props.metadata?._aiContextSource === 'string' ? props.metadata._aiContextSource : '';
@@ -279,6 +295,22 @@ export default function DetailShell(props: DetailShellProps) {
         </div>
       )}
 
+      {/* At-a-glance config strip (SAU-246): the settings form is rich, but the
+          detail page surfaced almost none of it. These chips give a scannable
+          summary of how the scenario is configured before the prose blocks. */}
+      <div className="glance" aria-label="Scenario configuration summary">
+        <span className={`badge ${props.isPublic ? 'public' : ''}`}>{props.isPublic ? '🌐 Public' : '🔒 Private'}</span>
+        {role && <span className="badge">Role · {role}</span>}
+        {difficulty && <span className="badge">Difficulty · {difficulty}</span>}
+        {aiModel && <span className="badge">🤖 {aiModel}</span>}
+        <span className="badge">🎙 {props.voice.name} ({props.voice.languageCode})</span>
+        <span className="badge">📋 {props.rubric.length} rubric {props.rubric.length === 1 ? 'criterion' : 'criteria'}</span>
+        {knowledgeBases.length > 0 && (
+          <span className="badge">📚 {knowledgeBases.length} knowledge base{knowledgeBases.length === 1 ? '' : 's'}</span>
+        )}
+        {aiContext && <span className="badge">📎 Grounding context</span>}
+      </div>
+
       <div className="tabs" role="tablist">
         {(['details', 'sessions', 'analytics'] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
@@ -300,6 +332,13 @@ export default function DetailShell(props: DetailShellProps) {
               </>
             )}
 
+            {aiPersona && (
+              <>
+                <h2>AI Persona</h2>
+                <div className="instructions">{aiPersona}</div>
+              </>
+            )}
+
             <h2>AI Instructions</h2>
             <div className="instructions">{props.instructions}</div>
 
@@ -312,6 +351,22 @@ export default function DetailShell(props: DetailShellProps) {
                     : <strong>{aiContextSource}</strong>} · </> : null}
                   {aiContext.length.toLocaleString()} chars folded into the system prompt.
                 </p>
+              </>
+            )}
+
+            {knowledgeBases.length > 0 && (
+              <>
+                <h2>Knowledge Bases</h2>
+                <ul className="kb-list">
+                  {knowledgeBases.map((kb) => (
+                    <li key={kb.id} className="kb-list-item">
+                      <span className="kb-list-title">📚 {kb.title}</span>
+                      <span className="empty" style={{ fontStyle: 'normal' }}>
+                        {kb.docCount} doc{kb.docCount === 1 ? '' : 's'}{kb.description ? ` · ${kb.description}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </>
             )}
 
