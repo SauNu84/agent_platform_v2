@@ -12,6 +12,7 @@ import { useState } from 'react';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
 import LiveDemo from './LiveDemo';
+import { aiModelLabel } from '@/lib/ai-models';
 
 export interface SessionSummary {
   id: string;
@@ -69,6 +70,8 @@ export default function DetailShell(props: DetailShellProps) {
   const [liveDemoOpen, setLiveDemoOpen] = useState(false);
   // SAU-238: the human learner's brief (UI only, never sent to the model).
   const userInstructions = typeof props.metadata?._userInstructions === 'string' ? props.metadata._userInstructions : '';
+  // SAU-238 ask #6: which AI model this scenario runs on.
+  const aiModel = typeof props.metadata?._model === 'string' ? aiModelLabel(props.metadata._model) : '';
   // Share short link (SAU-225) — confirmation (the copied URL) + busy/error state.
   const [shareInfo, setShareInfo] = useState<{ url: string; copied: boolean } | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -224,7 +227,7 @@ export default function DetailShell(props: DetailShellProps) {
         <div className="avatar" aria-hidden />
         <div style={{ flex: 1 }}>
           <h1>{props.name}</h1>
-          <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode})</p>
+          <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode}){aiModel ? ` · ${aiModel}` : ''}</p>
         </div>
         <div className="join-actions">
           {props.remixHref && (

@@ -107,3 +107,16 @@ test('SAU-238: a JSON-created scenario carries both fields in metadata and only 
   assert.ok(compiled.aiInstructions.includes('You are a tough buyer.'));
   assert.ok(!compiled.aiInstructions.includes('Convince the buyer.'));
 });
+
+// SAU-238 ask #6: AI model registry.
+import { aiModelLabel, isAvailableModel, AI_MODELS, DEFAULT_AI_MODEL } from '@/lib/ai-models';
+
+test('SAU-238: AI model registry — OpenAI is the available default; unknown falls back', () => {
+  assert.equal(DEFAULT_AI_MODEL, 'openai-realtime');
+  assert.equal(isAvailableModel('openai-realtime'), true);
+  assert.equal(isAvailableModel('anthropic-claude'), false); // future, not wired yet
+  assert.equal(isAvailableModel('nope'), false);
+  assert.match(aiModelLabel('openai-realtime'), /OpenAI/);
+  assert.equal(aiModelLabel('unknown-id'), aiModelLabel(DEFAULT_AI_MODEL)); // safe fallback
+  assert.ok(AI_MODELS.some((m) => m.available), 'at least one model must be runnable');
+});

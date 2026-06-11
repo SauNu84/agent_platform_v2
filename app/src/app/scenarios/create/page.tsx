@@ -13,6 +13,7 @@ import { Suspense, useEffect, useState, useId } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { buildRemixConfig } from '@/services/remix';
+import { AI_MODELS, DEFAULT_AI_MODEL } from '@/lib/ai-models';
 
 interface RubricRow { topic: string; weight: number; note: string; }
 
@@ -76,6 +77,8 @@ function CreateScenarioForm() {
   const [aiDescription, setAiDescription] = useState('');
   const [persona, setPersona] = useState('');
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
+  // SAU-238 (ask #6): which AI model runs this scenario. OpenAI today; registry-extensible.
+  const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODEL);
   const [rubric, setRubric] = useState<RubricRow[]>([]);
   // Rubric setting (SAU-238): a free-text "Edit" tab the author writes naturally,
   // and a "Processed" tab where an AI parses it into the structured rubric the
@@ -118,6 +121,7 @@ function CreateScenarioForm() {
         const md = (data.scenario.metadata ?? {}) as Record<string, unknown>;
         if (typeof md._userInstructions === 'string') setUserInstructions(md._userInstructions);
         if (typeof md._aiDescription === 'string') setAiDescription(md._aiDescription);
+        if (typeof md._model === 'string') setAiModel(md._model);
         setRemixedName(data.scenario.name);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -210,6 +214,7 @@ function CreateScenarioForm() {
             // SAU-238: human brief (UI only) + AI description (folded into the model prompt).
             ...(userInstructions.trim() ? { _userInstructions: userInstructions.trim() } : {}),
             ...(aiDescription.trim() ? { _aiDescription: aiDescription.trim() } : {}),
+            _model: aiModel,
           },
         }),
       });
@@ -300,6 +305,24 @@ function CreateScenarioForm() {
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* AI Model (SAU-238 ask #6) — OpenAI today; registry-extensible */}
+          <div className="form-group">
+            <label htmlFor={`${uid}-model`} className="form-label">AI Model</label>
+            <p className="form-hint-block">Which model powers this scenario. We run on <strong>OpenAI</strong> today; more providers are coming.</p>
+            <select
+              id={`${uid}-model`}
+              className="form-input"
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+            >
+              {AI_MODELS.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.label}{m.badge ? ` — ${m.available ? m.badge : 'coming soon'}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Public Description */}
