@@ -98,10 +98,20 @@ export default async function LibraryPage({
         </div>
       )}
 
+      {/* Create-Scenario CTA lives inside the My Scenarios tab (SAU-237). */}
+      {activeTab === 'my' && scenarios.length > 0 && (
+        <div className="lib-actions">
+          <Link href="/scenarios/create" className="btn">+ Create new scenario</Link>
+        </div>
+      )}
+
       {scenarios.length === 0 ? (
         <div className="lib-empty">
           {activeTab === 'my' ? (
-            <p>You haven&apos;t created any scenarios yet.</p>
+            <>
+              <p>You haven&apos;t created any scenarios yet.</p>
+              <Link href="/scenarios/create" className="btn">+ Create new scenario</Link>
+            </>
           ) : (
             <p>No scenarios match your search.</p>
           )}

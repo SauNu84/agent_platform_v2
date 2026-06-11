@@ -406,6 +406,8 @@ td.warn { color: #d97706; font-weight: 600; }
 .lib-tab-count { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; font-size: 11px; color: var(--muted); }
 .lib-tab.active .lib-tab-count { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
 .lib-empty { margin: 32px 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.lib-actions { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.lib-actions .btn { text-decoration: none; }
 
 /* ── Scenario Studio — Classic create form (SAU-214) ── */
 .studio-layout { display: grid; grid-template-columns: 1fr 320px; gap: 32px; align-items: start; }
