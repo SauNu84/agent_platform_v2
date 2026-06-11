@@ -75,6 +75,8 @@ export default function DetailShell(props: DetailShellProps) {
   // SAU-238 ask #7: reference context attached to ground the agent.
   const aiContext = typeof props.metadata?._aiContext === 'string' ? props.metadata._aiContext : '';
   const aiContextSource = typeof props.metadata?._aiContextSource === 'string' ? props.metadata._aiContextSource : '';
+  // SAU-238 ask #10: optional custom avatar image (Appearance).
+  const avatarUrl = typeof props.metadata?._avatarUrl === 'string' && /^https?:\/\//.test(props.metadata._avatarUrl) ? props.metadata._avatarUrl : '';
   // Share short link (SAU-225) — confirmation (the copied URL) + busy/error state.
   const [shareInfo, setShareInfo] = useState<{ url: string; copied: boolean } | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -159,6 +161,7 @@ export default function DetailShell(props: DetailShellProps) {
         instructions={userInstructions || props.instructions}
         category={String(props.metadata?.role ?? props.metadata?.category ?? props.kind)}
         slug={props.slug}
+        avatarUrl={avatarUrl}
         sessionsEndpoint={props.sessionsEndpoint}
         onClose={() => setLiveDemoOpen(false)}
         onSession={upsertSession}
@@ -227,7 +230,10 @@ export default function DetailShell(props: DetailShellProps) {
   return (
     <div>
       <div className="detail-head">
-        <div className="avatar" aria-hidden />
+        {avatarUrl
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img className="avatar" src={avatarUrl} alt="" style={{ objectFit: 'cover' }} />
+          : <div className="avatar" aria-hidden />}
         <div style={{ flex: 1 }}>
           <h1>{props.name}</h1>
           <p className="subtitle">{props.kind} · voice {props.voice.name} ({props.voice.languageCode}){aiModel ? ` · ${aiModel}` : ''}</p>

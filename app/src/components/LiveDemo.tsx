@@ -39,6 +39,7 @@ export default function LiveDemo({
   instructions,
   category,
   slug,
+  avatarUrl,
   sessionsEndpoint,
   onClose,
   onSession,
@@ -47,6 +48,7 @@ export default function LiveDemo({
   instructions: string;
   category: string;
   slug: string;
+  avatarUrl?: string;
   sessionsEndpoint: string;
   onClose: () => void;
   onSession: (summary: SessionSummary) => void;
@@ -396,7 +398,10 @@ export default function LiveDemo({
           <div className="ld-timer">⏱ {fmt(elapsed)}</div>
           <div className="ld-avatar-wrap">
             <div className="live-avatar" style={{ borderColor: micLevel > 0.15 ? 'var(--accent)' : 'var(--border)' }}>
-              <Avatar name={name} category={category} slug={slug} size={180} />
+              {avatarUrl
+                // eslint-disable-next-line @next/next/no-img-element
+                ? <img src={avatarUrl} alt="" width={180} height={180} style={{ borderRadius: '50%', objectFit: 'cover' }} />
+                : <Avatar name={name} category={category} slug={slug} size={180} />}
             </div>
           </div>
           <h1 className="ld-stage-name">{name}</h1>

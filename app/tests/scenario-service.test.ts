@@ -164,3 +164,15 @@ test('SAU-238: extractPdfText pulls real text out of a PDF', async () => {
   const text = await extractPdfText(bytes);
   assert.ok(text.includes('Hello PDF context for the agent'), `got: ${text}`);
 });
+
+// SAU-238 ask #10: Appearance — voice selection is real (wired to the live session).
+import { resolveOpenAiVoice, isOpenAiVoice, DEFAULT_VOICE } from '@/lib/voices';
+
+test('SAU-238: resolveOpenAiVoice honors a valid OpenAI voice, else falls back', () => {
+  assert.equal(isOpenAiVoice('verse'), true);
+  assert.equal(isOpenAiVoice('Aoede'), false);            // a non-OpenAI (Gemini) voice
+  assert.equal(resolveOpenAiVoice('verse'), 'verse');     // chosen voice honored
+  assert.equal(resolveOpenAiVoice('Aoede', 'shimmer'), 'shimmer'); // bad name → env voice
+  assert.equal(resolveOpenAiVoice('Aoede', 'also-bad'), DEFAULT_VOICE); // → default
+  assert.equal(resolveOpenAiVoice(undefined), DEFAULT_VOICE);
+});

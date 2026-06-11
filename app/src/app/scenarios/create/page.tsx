@@ -14,6 +14,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { buildRemixConfig } from '@/services/remix';
 import { AI_MODELS, DEFAULT_AI_MODEL } from '@/lib/ai-models';
+import { OPENAI_VOICES, DEFAULT_VOICE, isOpenAiVoice } from '@/lib/voices';
 
 interface RubricRow { topic: string; weight: number; note: string; }
 
@@ -79,6 +80,9 @@ function CreateScenarioForm() {
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   // SAU-238 (ask #6): which AI model runs this scenario. OpenAI today; registry-extensible.
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODEL);
+  // SAU-238 (ask #10): Appearance — voice (real, wired to live) + static avatar image.
+  const [voiceChoice, setVoiceChoice] = useState<string>(DEFAULT_VOICE);
+  const [avatarUrl, setAvatarUrl] = useState('');
   // SAU-238 (ask #7): Additional Context for AI — reference text folded into the prompt.
   const [contextTab, setContextTab] = useState<'url' | 'pdf'>('pdf');
   const [contextUrl, setContextUrl] = useState('');
@@ -131,6 +135,8 @@ function CreateScenarioForm() {
         if (typeof md._model === 'string') setAiModel(md._model);
         if (typeof md._aiContext === 'string') setAiContext(md._aiContext);
         if (typeof md._aiContextSource === 'string') { setContextSource(md._aiContextSource); setContextUrl(md._aiContextSource); }
+        if (isOpenAiVoice(draft.voice?.name)) setVoiceChoice(draft.voice.name);
+        if (typeof md._avatarUrl === 'string') setAvatarUrl(md._avatarUrl);
         setRemixedName(data.scenario.name);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -263,9 +269,12 @@ function CreateScenarioForm() {
           // a fresh scenario just marks itself user-authored. The raw rubric text
           // (SAU-238) rides along as `_rubricText` so the Processed rubric can be
           // generated on first session analysis if it was never processed by hand.
-          voice: voice ?? undefined,
+          // Appearance (SAU-238): the chosen OpenAI Realtime voice is wired into the
+          // live session; keep the carried language if remixing.
+          voice: { name: voiceChoice, language: voice?.language ?? 'en-US' },
           metadata: {
             ...(carriedMetadata ?? { _source: 'user' }),
+            ...(avatarUrl.trim() ? { _avatarUrl: avatarUrl.trim() } : {}),
             ...(rubricText.trim() ? { _rubricText: rubricText.trim() } : {}),
             // SAU-238: human brief (UI only) + AI description (folded into the model prompt).
             ...(userInstructions.trim() ? { _userInstructions: userInstructions.trim() } : {}),
@@ -381,6 +390,34 @@ function CreateScenarioForm() {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Appearance (SAU-238 ask #10) — voice (real) + static avatar image */}
+          <div className="form-group">
+            <label className="form-label">Appearance <span className="form-optional">(Optional)</span></label>
+            <p className="form-hint-block">How the agent sounds and looks. Voice is live; the avatar image shows in the detail page and the live-demo window.</p>
+            <label htmlFor={`${uid}-voice`} className="form-label" style={{ fontSize: 13 }}>Voice</label>
+            <select id={`${uid}-voice`} className="form-input" value={voiceChoice} onChange={(e) => setVoiceChoice(e.target.value)}>
+              {OPENAI_VOICES.map((v) => (
+                <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}{v === DEFAULT_VOICE ? ' (default)' : ''}</option>
+              ))}
+            </select>
+            <label htmlFor={`${uid}-avatar`} className="form-label" style={{ fontSize: 13, marginTop: 12 }}>Custom Avatar (Static Image)</label>
+            <div className="rubric-row">
+              <input
+                id={`${uid}-avatar`}
+                type="url"
+                className="form-input rubric-topic"
+                placeholder="https://…/avatar.png — image URL for the agent"
+                value={avatarUrl}
+                onChange={(e) => setAvatarUrl(e.target.value)}
+              />
+              {avatarUrl.trim() && /^https?:\/\//.test(avatarUrl) && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={avatarUrl} alt="" width={40} height={40} style={{ borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border)' }} />
+              )}
+            </div>
+            <p className="form-hint">Animated / video &ldquo;live avatars&rdquo; (lip-sync) are a premium 3rd-party feature — not in this build.</p>
           </div>
 
           {/* Public Description */}

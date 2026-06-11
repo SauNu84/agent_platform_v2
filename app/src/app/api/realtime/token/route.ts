@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getScenario } from '@/services/scenarios';
 import { toCompiledScenario } from '@/domain/scenario';
+import { resolveOpenAiVoice } from '@/lib/voices';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,11 +43,11 @@ export async function POST(req: NextRequest) {
   }
   const secret = await resp.json();
   const compiled = toCompiledScenario(scenario);
-  // OpenAI Realtime's `voice` is a plain string and its catalog differs from the
-  // scenario's stored voice (which may be a Gemini voice like 'Aoede'). Mirror the
-  // server adapter (src/voice/adapters/openai.ts): use OPENAI_VOICE, never the
-  // scenario voice object — sending the object/an unknown name is rejected.
-  const voice = process.env.OPENAI_VOICE || 'alloy';
+  // OpenAI Realtime's `voice` is a plain string from a fixed catalog. Honor the
+  // scenario's chosen voice (Appearance tab, SAU-238) when it's a valid OpenAI
+  // voice; otherwise fall back to OPENAI_VOICE/alloy (the stored voice may be a
+  // non-OpenAI name like 'Aoede', which OpenAI rejects).
+  const voice = resolveOpenAiVoice(scenario.voiceName, process.env.OPENAI_VOICE);
   return NextResponse.json({
     clientSecret: secret.value ?? secret.client_secret?.value ?? secret,
     model: MODEL,
