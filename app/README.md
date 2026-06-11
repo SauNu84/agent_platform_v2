@@ -144,7 +144,8 @@ transaction so the policies scope every row. Public reads (`is_public` /
 ### Seeded test users (for QA)
 
 One account per role exists out of the box. **Dev/QA only** — never seed these in
-production.
+production. The login page intentionally does **not** display these credentials
+(SAU-234); this README is the canonical place to find them.
 
 | Email | Password | Role |
 |---|---|---|
@@ -152,6 +153,9 @@ production.
 | `admin@demo.test` | `password123` | admin |
 | `operator@demo.test` | `password123` | operator |
 
+- **Defined in code:** [`src/db/seed-users.ts`](src/db/seed-users.ts) — the three
+  accounts and the shared password (`TEST_USER_PASSWORD`) are the single source of
+  truth. Update that file (and this table) if the seed set changes.
 - **Zero-infra (in-memory):** these users are auto-seeded on boot — just open the
   app and sign in.
 - **Postgres:** `npm run seed` (or `npm run seed:users`) creates them durably.
