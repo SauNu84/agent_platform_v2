@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Top menu bar (SAU-228) — matches the ToughTongue reference chrome:
+ * Top menu bar (SAU-228) — reference chrome:
  *   left:  Home breadcrumb / navigator
  *   right: Language · Help · user menu (avatar + dropdown)
  *

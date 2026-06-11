@@ -1,5 +1,5 @@
 /*
- * Visual system: ToughTongue (SAU-215) — light surface, monospace headings/prompts,
+ * Visual system (SAU-215) — light surface, monospace headings/prompts,
  * cyan accent, dotted-grid canvas, subtle borders. Token-driven so the chrome
  * (sidebar, top-bar, cards, tabs, buttons, badges) restyles from :root alone.
  * Visual-system pass only — no IA or behavior change; class names are unchanged.

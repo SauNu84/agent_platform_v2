@@ -3,8 +3,15 @@
 // PROVENANCE: the policy BODY text below is the CISO/Legal-approved copy authored
 // and ratified under SAU-235 (CISO review 2026-06-11). It is ported here VERBATIM
 // from its authoring location into agent_platform_v2 — the correct project for the
-// Tough Tongue AI POC login page (SAU-234). Do not edit the policy body without a
-// CISO re-review; bump LEGAL_LAST_UPDATED on any substantive change.
+// POC login page (SAU-234). Do not edit the policy body without a CISO re-review;
+// bump LEGAL_LAST_UPDATED on any substantive change.
+//
+// PRODUCT NAME: per board direction (SAU-234, 2026-06-11) the codebase and UI must
+// NOT carry the prior reference product's name (a competitor). There is no agreed
+// product name yet, so LEGAL_COMPANY/LEGAL_CONTACT below are INTERIM PLACEHOLDERS
+// ("Agent Platform" — the neutral working name already used in the app chrome).
+// Swapping the name does not change any policy substance; settling the real
+// product name + contact domain is part of the pre-GA naming work (SAU-236).
 //
 // Scope of the CISO approval — what was actually verified:
 //   • The data-handling, retention/erasure, security, and sub-processor
@@ -26,13 +33,12 @@
 //   (2) Qualified-counsel review of the ToS liability / IP / arbitration
 //       clauses.
 //
-// Adapted from our canonical published references:
-//   https://app.toughtongueai.com/privacy-policy/
-//   https://app.toughtongueai.com/terms/
-//   https://app.toughtongueai.com/terms/#9-acceptable-use-policy
+// The copy is adapted to this platform's actual data practices (see the
+// SECURITY-REVIEW §6.0/§6.1 grounding noted above), not copied from any third party.
 
-export const LEGAL_COMPANY = 'Tough Tongue AI';
-export const LEGAL_CONTACT = 'privacy@toughtongueai.com';
+// Interim placeholders — see "PRODUCT NAME" note above (SAU-234 / SAU-236).
+export const LEGAL_COMPANY = 'Agent Platform';
+export const LEGAL_CONTACT = 'privacy@example.com';
 
 // 'approved' removes the "pending legal review" draft banner. Cleared by
 // CISO/Legal under SAU-235.
