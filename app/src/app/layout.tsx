@@ -14,17 +14,37 @@ export const metadata: Metadata = {
   description: 'Hyper-realistic AI roleplay to practice high-stakes conversations.',
 };
 
-// Fixed left nav from the verified reference UI (design §intro). All sections
-// are live as of the Slice 1-4 integration (SAU-210): Scenarios (S1),
-// Courses + Coaches (S3), Analytics + History (S2). `adminOnly` items are gated
-// on the platform_admin capability (Slice 5, SAU-229).
-const NAV = [
-  { href: '/library', label: 'Scenarios', adminOnly: false },
-  { href: '/courses', label: 'Course', adminOnly: false },
-  { href: '/coaches', label: 'Coach', adminOnly: false },
-  { href: '/analytics', label: 'Analytics', adminOnly: false },
-  { href: '/history', label: 'History', adminOnly: false },
-  { href: '/admin', label: 'Admin', adminOnly: true },
+// Left nav, reordered + grouped to mirror the reference rail (SAU-250 board ask):
+// a primary "Practice" block, then a labelled "Sessions" group, then an admin
+// group, with billing/account pinned to the footer. Each item carries a small
+// glyph for parity with the reference. `adminOnly` groups render only for admins
+// (platform_admin capability, Slice 5/SAU-229). We list only real destinations —
+// no placeholder/dead links (design rule, SAU-216).
+const NAV_GROUPS: {
+  heading: string | null;
+  adminOnly?: boolean;
+  items: { href: string; label: string; icon: string }[];
+}[] = [
+  {
+    heading: null,
+    items: [
+      { href: '/library', label: 'Scenarios', icon: '🎯' },
+      { href: '/courses', label: 'Course', icon: '📚' },
+      { href: '/coaches', label: 'Coach', icon: '🧭' },
+    ],
+  },
+  {
+    heading: 'Sessions',
+    items: [
+      { href: '/analytics', label: 'Analytics', icon: '📊' },
+      { href: '/history', label: 'History', icon: '🕘' },
+    ],
+  },
+  {
+    heading: 'Admin',
+    adminOnly: true,
+    items: [{ href: '/admin', label: 'Admin', icon: '🛡' }],
+  },
 ];
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
@@ -43,7 +63,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       /* keep placeholder */
     }
   }
-  const nav = NAV.filter((n) => !n.adminOnly || actor?.isAdmin);
+  const groups = NAV_GROUPS.filter((g) => !g.adminOnly || actor?.isAdmin);
   return (
     <html lang="en">
       <head>
@@ -53,20 +73,41 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <div className="app-shell">
           <nav className="side-nav">
             <div className="brand">Agent Platform</div>
-            <ul>
-              {nav.map((n) => (
-                <li key={n.href}>
-                  <Link href={n.href}>{n.label}</Link>
-                </li>
+            <div className="side-nav-scroll">
+              {groups.map((g, i) => (
+                <div className="side-nav-group" key={g.heading ?? `g${i}`}>
+                  {g.heading && <div className="side-nav-heading">{g.heading}</div>}
+                  <ul>
+                    {g.items.map((n) => (
+                      <li key={n.href}>
+                        <Link href={n.href}>
+                          <span className="side-nav-ico" aria-hidden="true">{n.icon}</span>
+                          {n.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
-            {/* Bottom group — account/billing, mirrors the reference left rail (SAU-250). */}
-            <ul className="side-nav-bottom">
-              <li>
-                <Link href="/billing">Billing</Link>
-              </li>
-            </ul>
-            <Link href="/billing" className="balance">Balance · {balance}</Link>
+            </div>
+            {/* Pinned account footer — Balance + Upgrade + Billing, mirrors the
+                reference left rail (SAU-250). */}
+            <div className="side-foot">
+              <Link href="/billing" className="side-balance">
+                <span className="side-balance-label">Balance</span>
+                <span className="side-balance-val">{balance}</span>
+              </Link>
+              <Link href="/billing" className="btn side-upgrade">
+                <span aria-hidden="true">⚡</span> Upgrade
+              </Link>
+              <ul className="side-nav-bottom">
+                <li>
+                  <Link href="/billing">
+                    <span className="side-nav-ico" aria-hidden="true">💳</span> Billing
+                  </Link>
+                </li>
+              </ul>
+            </div>
           </nav>
           <main className="content">
             <TopBar

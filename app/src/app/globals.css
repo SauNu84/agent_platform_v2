@@ -77,6 +77,11 @@ code { font-family: var(--mono); font-size: 0.92em; background: var(--panel-2); 
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Pin the rail to the viewport so the account footer stays visible while the
+     page scrolls (SAU-250, mirrors the reference rail). */
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 .side-nav .brand {
   font-family: var(--mono);
@@ -94,24 +99,48 @@ code { font-family: var(--mono); font-size: 0.92em; background: var(--panel-2); 
   background: var(--accent);
   vertical-align: middle;
 }
-.side-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.side-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+/* Scrollable nav body; the account footer is pinned below it (SAU-250). */
+.side-nav-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.side-nav-group { display: flex; flex-direction: column; gap: 4px; }
+.side-nav-heading {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 10px 2px;
+}
 .side-nav li a, .side-nav li .nav-disabled {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   padding: 8px 10px;
   border-radius: 8px;
   color: var(--text);
   font-family: var(--mono);
   font-size: 13.5px;
 }
+.side-nav-ico { font-size: 13px; width: 16px; text-align: center; flex-shrink: 0; filter: grayscale(0.2); }
 .side-nav li a:hover { background: var(--accent-soft); color: var(--accent-2); text-decoration: none; }
 .nav-disabled { color: var(--muted); cursor: not-allowed; }
-.balance {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 12.5px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
+
+/* ── Account footer (pinned) ── Balance + Upgrade + Billing (SAU-250) ──────── */
+.side-foot { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.side-balance {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  color: var(--muted); font-family: var(--mono); font-size: 12.5px;
+  text-decoration: none; padding: 0 4px;
 }
+.side-balance:hover { color: var(--accent-2); }
+.side-balance-val { color: var(--text); font-weight: 600; }
+.side-upgrade {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 8px 10px; font-size: 13px; text-decoration: none;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.side-upgrade:hover { filter: brightness(1.05); text-decoration: none; }
 
 /* ── Main canvas ──
  * .content is the full-width column (top bar + scrollable body). The body
@@ -677,10 +706,7 @@ td.warn { color: #d97706; font-weight: 600; }
 .kb-dropzone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-2); }
 
 /* ── Billing (SAU-250) ────────────────────────────────────────────────────── */
-/* Bottom nav group must not steal the flex space the main list uses to push it down. */
-.side-nav-bottom { flex: 0 0 auto; margin-top: 4px; }
-a.balance { display: block; text-decoration: none; }
-a.balance:hover { color: var(--accent-2); }
+.side-nav-bottom { margin-top: 2px; }
 
 .billing h1 { margin: 0 0 4px; }
 .billing-muted { color: var(--muted); font-size: 13.5px; margin: 0; font-family: var(--sans); }
