@@ -14,7 +14,7 @@ import type {
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
-  UserRecord, VoiceUsageRecord, WebhookRecord,
+  UserRecord, UserSettingRecord, VoiceUsageRecord, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { ROLE_CAPABILITIES } from '@/auth/rbac';
@@ -40,6 +40,7 @@ export class MemoryStore implements Store {
   private checkouts = new Map<string, CheckoutRecord>();       // by id (SAU-250)
   private apiKeys = new Map<string, ApiKeyRecord>();           // by id (SAU-252)
   private webhooks = new Map<string, WebhookRecord>();         // by id (SAU-252)
+  private userSettings = new Map<string, UserSettingRecord>(); // by `${userId}:${key}` (SAU-253)
   // ── Slice 3 ──
   private coaches = new Map<string, CoachRecord>();           // by slug
   private coachIdToSlug = new Map<string, string>();
@@ -631,6 +632,28 @@ export class MemoryStore implements Store {
     const rec = this.webhooks.get(id);
     if (!rec || rec.userId !== userId) return false;
     return this.webhooks.delete(id);
+  }
+
+  // ── User settings (SAU-253) — per-user key/value preferences ─────────────────
+  async getUserSetting(userId: string, key: string): Promise<UserSettingRecord | null> {
+    return this.userSettings.get(`${userId}:${key}`) ?? null;
+  }
+
+  async listUserSettings(userId: string): Promise<UserSettingRecord[]> {
+    return [...this.userSettings.entries()]
+      .filter(([k]) => k.startsWith(`${userId}:`))
+      .map(([, v]) => v)
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  async putUserSetting(userId: string, key: string, value: Record<string, unknown>): Promise<UserSettingRecord> {
+    const rec: UserSettingRecord = { key, value, updatedAt: nowIso() };
+    this.userSettings.set(`${userId}:${key}`, rec);
+    return rec;
+  }
+
+  async deleteUserSetting(userId: string, key: string): Promise<boolean> {
+    return this.userSettings.delete(`${userId}:${key}`);
   }
 
   // ── Coach memory (ADR-004) — (coach,user)-scoped in-memory analogue of RLS ──

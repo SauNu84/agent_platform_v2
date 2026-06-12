@@ -211,6 +211,15 @@ export interface WebhookRecord {
   createdAt: string;
 }
 
+// ── User settings (SAU-253) — generic per-user key/value preferences ─────────
+// Backs the Language / My Voice / Integrations Settings tabs. `value` is a small
+// JSON config blob (no secrets/PII). Scoped at the app layer by user_id.
+export interface UserSettingRecord {
+  key: string;
+  value: Record<string, unknown>;
+  updatedAt: string;
+}
+
 // ── Coach memory (ADR-004) ─────────────────────────────────────────────────
 export type MemoryKind = 'summary' | 'fact' | 'preference' | 'goal';
 
@@ -418,6 +427,16 @@ export interface Store {
   listWebhooks(userId: string): Promise<WebhookRecord[]>;
   /** Delete a webhook the user owns. Returns false if not found / not theirs. */
   deleteWebhook(userId: string, id: string): Promise<boolean>;
+
+  // ── User settings (SAU-253) — per-user key/value preferences ────────────────
+  /** Read one setting for a user, or null if unset. */
+  getUserSetting(userId: string, key: string): Promise<UserSettingRecord | null>;
+  /** All settings for a user (used to hydrate the Settings hub). */
+  listUserSettings(userId: string): Promise<UserSettingRecord[]>;
+  /** Upsert a single setting (replaces the value). */
+  putUserSetting(userId: string, key: string, value: Record<string, unknown>): Promise<UserSettingRecord>;
+  /** Clear a setting. Returns false if it was not set. */
+  deleteUserSetting(userId: string, key: string): Promise<boolean>;
 
   // ── Coach memory (ADR-004): per-(coach,user), RLS-scoped in Postgres ────────
   writeCoachMemory(rec: NewCoachMemory): Promise<CoachMemoryRecord>;

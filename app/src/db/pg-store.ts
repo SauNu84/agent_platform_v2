@@ -24,7 +24,7 @@ import type {
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
-  UserRecord, VoiceUsageRecord, WebhookRecord,
+  UserRecord, UserSettingRecord, VoiceUsageRecord, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { getActorContext } from '@/auth/actor';
@@ -183,6 +183,14 @@ function rowToWebhook(r: Row): WebhookRecord {
     events: Array.isArray(r.events) ? r.events : [],
     enabled: Boolean(r.enabled),
     createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+function rowToUserSetting(r: Row): UserSettingRecord {
+  return {
+    key: r.key,
+    value: (r.value ?? {}) as Record<string, unknown>,
+    updatedAt: new Date(r.updated_at).toISOString(),
   };
 }
 
@@ -763,6 +771,42 @@ export class PgStore implements Store {
     const { rowCount } = await this.q(
       'DELETE FROM webhook_endpoint WHERE id = $1 AND user_id = $2',
       [id, userId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  // ── User settings (SAU-253) — per-user key/value preferences ─────────────────
+  async getUserSetting(userId: string, key: string): Promise<UserSettingRecord | null> {
+    const { rows } = await this.q(
+      'SELECT key, value, updated_at FROM user_setting WHERE user_id = $1 AND key = $2',
+      [userId, key],
+    );
+    return rows[0] ? rowToUserSetting(rows[0]) : null;
+  }
+
+  async listUserSettings(userId: string): Promise<UserSettingRecord[]> {
+    const { rows } = await this.q(
+      'SELECT key, value, updated_at FROM user_setting WHERE user_id = $1 ORDER BY key',
+      [userId],
+    );
+    return rows.map(rowToUserSetting);
+  }
+
+  async putUserSetting(userId: string, key: string, value: Record<string, unknown>): Promise<UserSettingRecord> {
+    const { rows } = await this.q(
+      `INSERT INTO user_setting (user_id, key, value, updated_at)
+       VALUES ($1, $2, $3::jsonb, now())
+       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+       RETURNING key, value, updated_at`,
+      [userId, key, JSON.stringify(value)],
+    );
+    return rowToUserSetting(rows[0]);
+  }
+
+  async deleteUserSetting(userId: string, key: string): Promise<boolean> {
+    const { rowCount } = await this.q(
+      'DELETE FROM user_setting WHERE user_id = $1 AND key = $2',
+      [userId, key],
     );
     return (rowCount ?? 0) > 0;
   }

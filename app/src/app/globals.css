@@ -953,3 +953,75 @@ td.warn { color: #d97706; font-weight: 600; }
   padding: 10px 12px; overflow-x: auto; font-size: 12.5px; margin: 0;
 }
 .devtools-ref-example code { font-family: var(--mono); }
+
+/* ── Settings hub (SAU-253) ──────────────────────────────────────────────── */
+.settings-head h1 { margin: 0 0 2px; }
+.settings-layout { display: grid; grid-template-columns: 220px 1fr; gap: 32px; align-items: start; }
+@media (max-width: 720px) { .settings-layout { grid-template-columns: 1fr; } }
+
+.settings-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.settings-nav a {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px;
+  color: var(--muted); text-decoration: none; font-size: 14.5px; font-family: var(--sans);
+}
+.settings-nav a:hover { background: var(--panel-2); color: var(--text); }
+.settings-nav a.is-active { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.settings-nav-ico { font-size: 15px; width: 18px; text-align: center; }
+
+.settings-panel { min-width: 0; }
+.settings-section h2 { font-size: 19px; margin: 0 0 2px; }
+.settings-section h3 { font-size: 15.5px; margin: 0 0 2px; }
+
+.settings-field { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; max-width: 460px; }
+.settings-field label { font-size: 13px; color: var(--muted); font-weight: 600; }
+.settings-input, .settings-select {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 12px; font-size: 14.5px; font-family: var(--sans); color: var(--text); width: 100%;
+}
+.settings-select { font-family: var(--sans); }
+.settings-actions { margin-top: 18px; display: flex; align-items: center; gap: 14px; }
+
+.settings-identity { display: flex; align-items: center; gap: 14px; margin: 18px 0 8px; }
+.settings-identity-name { font-weight: 700; font-size: 16px; }
+.settings-facts { margin: 18px 0 0; border-top: 1px solid var(--border); }
+.settings-facts > div {
+  display: grid; grid-template-columns: 180px 1fr; gap: 12px; padding: 12px 2px;
+  border-bottom: 1px solid var(--border); align-items: center;
+}
+.settings-facts dt { color: var(--muted); font-size: 13.5px; margin: 0; }
+.settings-facts dd { margin: 0; font-size: 14.5px; }
+
+.settings-badge {
+  display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px;
+  border: 1px solid var(--border-strong); border-radius: 999px; color: var(--muted); margin-right: 8px;
+}
+.settings-badge.connected, .settings-badge.pending { color: var(--accent-2); border-color: var(--accent); }
+
+.settings-status-card, .settings-pending-note {
+  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 12px 14px; margin-top: 16px; font-size: 13.5px;
+}
+.settings-status-card strong { margin-right: 10px; }
+.settings-pending-note { color: var(--muted); }
+
+.settings-options { display: flex; flex-wrap: wrap; gap: 14px; }
+.settings-check { display: flex; align-items: center; gap: 7px; font-size: 14px; color: var(--text); }
+
+.settings-integration-list { display: flex; flex-direction: column; gap: 18px; margin-top: 18px; }
+.settings-integration { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.settings-integration-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.settings-integration-head h3 { margin: 0 0 4px; }
+.settings-integration-form { margin-top: 6px; }
+
+.settings-kb-create { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 6px; }
+.settings-kb-create .settings-input { width: auto; flex: 1 1 200px; }
+
+.settings-memory-groups { display: flex; flex-direction: column; gap: 18px; margin-top: 18px; }
+.settings-memory-coach { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.settings-memory-coach a { font-weight: 600; text-decoration: none; color: var(--text); }
+.settings-memory-coach a:hover { color: var(--accent-2); }
+.settings-memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.settings-memory-list li {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 12px; font-size: 14px;
+}

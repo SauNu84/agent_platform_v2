@@ -116,6 +116,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                     <span className="side-nav-ico" aria-hidden="true">💳</span> Billing
                   </Link>
                 </li>
+                {/* Settings hub (SAU-253) — sits directly below Billing per the
+                    board reference. */}
+                <li>
+                  <Link href="/settings">
+                    <span className="side-nav-ico" aria-hidden="true">⚙️</span> Settings
+                  </Link>
+                </li>
               </ul>
             </div>
           </nav>
