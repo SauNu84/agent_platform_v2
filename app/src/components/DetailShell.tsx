@@ -14,7 +14,7 @@ import remarkGfm from 'remark-gfm';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
 import LiveDemo from './LiveDemo';
-import { aiModelLabel, OPENAI_REALTIME_TIER_NOTE } from '@/lib/ai-models';
+import { aiModelLabel, aiModelById } from '@/lib/ai-models';
 
 /** Subset of the SAU-257 voice meter the detail surface renders. */
 interface VoiceMeter {
@@ -113,8 +113,10 @@ export default function DetailShell(props: DetailShellProps) {
   // SAU-238 ask #5: the AI persona identity ("Description for AI"), prepended to
   // the system prompt. It shapes the agent, so SAU-246 surfaces it on detail.
   const aiPersona = typeof props.metadata?._aiDescription === 'string' ? props.metadata._aiDescription : '';
-  // SAU-238 ask #6: which AI model this scenario runs on.
-  const aiModel = typeof props.metadata?._model === 'string' ? aiModelLabel(props.metadata._model) : '';
+  // SAU-238 ask #6 → SAU-258: which voice engine this scenario runs on.
+  const aiModelId = typeof props.metadata?._model === 'string' ? props.metadata._model : '';
+  const aiModel = aiModelId ? aiModelLabel(aiModelId) : '';
+  const aiModelOption = aiModelId ? aiModelById(aiModelId) : null;
   // Human-readable scenario taxonomy (role / difficulty), pulled out of metadata
   // for the at-a-glance config strip (SAU-246).
   const role = typeof props.metadata?.role === 'string' ? props.metadata.role : '';
@@ -415,7 +417,7 @@ export default function DetailShell(props: DetailShellProps) {
                   <div style={{ display: 'contents' }}><dt>Visibility</dt><dd>{props.isPublic ? 'Public' : 'Private'}</dd></div>
                   {role && <div style={{ display: 'contents' }}><dt>Role</dt><dd>{role}</dd></div>}
                   {difficulty && <div style={{ display: 'contents' }}><dt>Difficulty</dt><dd>{difficulty}</dd></div>}
-                  {aiModel && <div style={{ display: 'contents' }}><dt>AI model</dt><dd>{aiModel}<span className="setup-hint"> — {OPENAI_REALTIME_TIER_NOTE}</span></dd></div>}
+                  {aiModel && <div style={{ display: 'contents' }}><dt>AI model</dt><dd>{aiModel}{aiModelOption?.note && <span className="setup-hint"> — {aiModelOption.note}</span>}{aiModelOption?.engineClass === 'premium' && <span className="setup-hint"> (premium — free viewers run on a cost engine)</span>}</dd></div>}
                   <div style={{ display: 'contents' }}><dt>Voice</dt><dd>{props.voice.name} ({props.voice.languageCode})</dd></div>
                   {Object.entries(props.metadata)
                     .filter(([k]) => !k.startsWith('_') && k !== 'role' && k !== 'difficulty')

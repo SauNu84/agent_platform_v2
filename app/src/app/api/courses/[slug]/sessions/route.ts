@@ -8,8 +8,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getCourse, resolveCourseScenarios } from '@/services/courses';
-import { runVoiceSession, persistClientSession, defaultVendor, type Vendor } from '@/voice/session-service';
-import { resolveTierForUser } from '@/voice/engine-router';
+import { runVoiceSession, persistClientSession, clientVendorForEngine, type Vendor } from '@/voice/session-service';
+import { resolveTierForUser, resolveSessionEngine } from '@/voice/engine-router';
 import type { Transcript } from '@/voice/realtime-interface';
 import { getActor } from '@/services/current-user';
 
@@ -48,18 +48,20 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     return NextResponse.json({ error: `scenario "${body.scenarioSlug}" is not part of this course` }, { status: 400 });
   }
 
-  const configured = defaultVendor();
-  // Server-driven path always uses mock — real OpenAI Realtime needs browser audio (SAU-208).
-  const vendor: Vendor = body.transcript
-    ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
-    : 'mock';
   const userId = actor.userId;
   const tier = await resolveTierForUser(store, userId); // SAU-256 tiered router
+  // SAU-258: honour the scenario's author-chosen engine, gated by viewer tier.
+  const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
+  const engine = resolveSessionEngine({ modelId, tier });
+  // Server-driven path always uses mock — real realtime needs browser audio (SAU-208).
+  const vendor: Vendor = body.transcript
+    ? ((body.vendor as Vendor) ?? clientVendorForEngine(engine.vendor))
+    : 'mock';
 
   try {
     const result = body.transcript
-      ? await persistClientSession({ store, scenario, vendor, tier, userId, courseId: course.id, transcript: body.transcript })
-      : await runVoiceSession({ store, scenario, vendor, tier, userId, courseId: course.id });
+      ? await persistClientSession({ store, scenario, vendor, tier, modelId, userId, courseId: course.id, transcript: body.transcript })
+      : await runVoiceSession({ store, scenario, vendor, tier, modelId, userId, courseId: course.id });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

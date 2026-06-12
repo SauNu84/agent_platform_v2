@@ -6,8 +6,11 @@
  * never exposed to the client. We also hand back the compiled scenario's
  * instructions + voice so the client can configure the session.
  *
- * Without OPENAI_API_KEY this returns 501 — the server-driven Join path
- * (/api/scenarios/[slug]/sessions) still works via the mock vendor for dev/demo.
+ * The engine is resolved from the scenario's author-chosen model (SAU-258) AND the
+ * viewer's tier (SAU-256). The browser live path is OpenAI-specific (WebRTC); other
+ * vendors (Gemini Live) are wired server-side behind the seam but not yet in the
+ * browser, so this returns 501 for them and for a missing OPENAI_API_KEY — the
+ * server-driven Join (mock vendor) / text Chat still work for dev/demo.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
@@ -16,29 +19,46 @@ import { resolveKnowledgeContext } from '@/services/knowledge-base';
 import { toCompiledScenario } from '@/domain/scenario';
 import { resolveOpenAiVoice } from '@/lib/voices';
 import { getActor } from '@/services/current-user';
-import { resolveTierForUser, resolveVoiceEngine, voiceKbCharBudget } from '@/voice/engine-router';
+import { resolveTierForUser, resolveSessionEngine, voiceKbCharBudget } from '@/voice/engine-router';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const { slug } = await req.json().catch(() => ({ slug: undefined }));
+  if (!slug) return NextResponse.json({ error: 'slug required' }, { status: 400 });
+  const scenario = await getScenario(getStore(), slug);
+  if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
+
+  // Multi-model voice router (SAU-256/258): resolve the engine from the scenario's
+  // author-chosen model AND the viewer's tier (free downgrades a premium engine).
+  const actor = await getActor();
+  const tier = await resolveTierForUser(getStore(), actor?.userId ?? null);
+  const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
+  const engine = resolveSessionEngine({ modelId, tier });
+  const model = engine.model;
+
+  // Browser live voice currently mints an OpenAI ephemeral secret only. A Gemini
+  // (or other) engine is honored server-side but has no browser transport yet —
+  // report gracefully so the client falls back (no crash).
   const apiKey = process.env.OPENAI_API_KEY;
+  if (engine.vendor !== 'openai') {
+    return NextResponse.json(
+      {
+        error: `Live browser voice for ${engine.label} is not yet available in the browser. ` +
+          'Use the server-driven Join, or choose an OpenAI engine for live browser voice.',
+        vendor: engine.vendor,
+        model,
+        tier,
+      },
+      { status: 501 },
+    );
+  }
   if (!apiKey) {
     return NextResponse.json(
       { error: 'OPENAI_API_KEY not configured. Use the server-driven Join (mock vendor) for dev/demo.' },
       { status: 501 },
     );
   }
-  const { slug } = await req.json().catch(() => ({ slug: undefined }));
-  if (!slug) return NextResponse.json({ error: 'slug required' }, { status: 400 });
-  const scenario = await getScenario(getStore(), slug);
-  if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
-
-  // Tiered voice router (SAU-256): mint the client secret for the engine this
-  // user's billing tier maps to (free → cheaper engine, paid → "Super").
-  const actor = await getActor();
-  const tier = await resolveTierForUser(getStore(), actor?.userId ?? null);
-  const engine = resolveVoiceEngine(tier);
-  const model = engine.model;
 
   const resp = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
     method: 'POST',

@@ -38,6 +38,8 @@ export interface RunCoachSessionOptions {
   vendor: Vendor;
   /** voice tier (SAU-256): selects the engine + metered tier. Default 'free'. */
   tier?: VoiceTier;
+  /** scenario's chosen engine id (SAU-258, metadata._model); router gates by tier. */
+  modelId?: string | null;
   userId: string | null;
   /** client-driven path: a transcript the browser already produced */
   transcript?: Transcript;
@@ -48,7 +50,7 @@ export interface RunCoachSessionOptions {
 }
 
 export async function runCoachSession(opts: RunCoachSessionOptions): Promise<CoachSessionResult> {
-  const { store, coach, scenario, vendor, tier = 'free', userId, transcript, nowMs, k } = opts;
+  const { store, coach, scenario, vendor, tier = 'free', modelId = null, userId, transcript, nowMs, k } = opts;
 
   // 1) Retrieve + inject memory (only for an identified user).
   let injectedMemories: CoachMemoryRecord[] = [];
@@ -75,8 +77,8 @@ export async function runCoachSession(opts: RunCoachSessionOptions): Promise<Coa
 
   // 2) Run the session, tagged with coach_id.
   const result: VoiceSessionResult = transcript
-    ? await persistClientSession({ store, scenario, vendor, tier, userId, coachId: coach.id, transcript })
-    : await runVoiceSession({ store, scenario, vendor, tier, userId, coachId: coach.id, instructions: injectedInstructions });
+    ? await persistClientSession({ store, scenario, vendor, tier, modelId, userId, coachId: coach.id, transcript })
+    : await runVoiceSession({ store, scenario, vendor, tier, modelId, userId, coachId: coach.id, instructions: injectedInstructions });
 
   // 3) Write derived memories (consent-gated; ADR-004).
   let wroteMemories = 0;

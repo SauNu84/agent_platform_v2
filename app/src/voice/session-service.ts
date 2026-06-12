@@ -20,14 +20,24 @@ import type {
   RealtimeVoiceProvider, RealtimeSession, SessionEvent, Transcript, SessionUsage,
 } from './realtime-interface';
 import { MockProvider } from './adapters/mock';
-import { resolveVoiceEngine, voiceKbCharBudget, type VoiceTier } from './engine-router';
+import { resolveSessionEngine, voiceKbCharBudget, type VoiceTier, type VoiceVendor } from './engine-router';
 import type { Store, SessionTranscript, VoiceUsageRecord } from '@/db/store';
 
-export type Vendor = 'openai' | 'mock';
+export type Vendor = 'openai' | 'gemini' | 'mock';
 
-/** Resolve the realtime vendor adapter behind the stable interface. */
+/**
+ * Resolve the realtime vendor adapter behind the stable interface (ADR-003).
+ * Real vendors are key-gated and FAIL SOFT to the mock adapter when their key is
+ * absent — a key-less deploy never crashes a Join (SAU-258 AC).
+ */
 export async function getProvider(vendor: Vendor): Promise<RealtimeVoiceProvider> {
   if (vendor === 'mock') return new MockProvider();
+  if (vendor === 'gemini') {
+    if (!process.env.GEMINI_API_KEY) return new MockProvider(); // no key ⇒ graceful mock
+    const { GeminiRealtimeProvider } = await import('./adapters/gemini');
+    return new GeminiRealtimeProvider();
+  }
+  if (!process.env.OPENAI_API_KEY) return new MockProvider(); // no key ⇒ graceful mock
   // Lazy import keeps `ws` server-only and out of any client bundle.
   const { OpenAIRealtimeProvider } = await import('./adapters/openai');
   return new OpenAIRealtimeProvider();
@@ -35,7 +45,20 @@ export async function getProvider(vendor: Vendor): Promise<RealtimeVoiceProvider
 
 export function defaultVendor(): Vendor {
   const v = (process.env.REALTIME_VENDOR ?? 'openai').toLowerCase();
-  return v === 'mock' ? 'mock' : 'openai';
+  if (v === 'mock') return 'mock';
+  if (v === 'gemini') return 'gemini';
+  return 'openai';
+}
+
+/**
+ * Map an engine's vendor to the realtime transport to actually use for a
+ * client-driven (browser-produced) session, falling back to the mock vendor when
+ * that vendor's API key is absent so persistence never fails (SAU-258).
+ */
+export function clientVendorForEngine(vendor: VoiceVendor): Vendor {
+  if (vendor === 'gemini') return process.env.GEMINI_API_KEY ? 'gemini' : 'mock';
+  if (vendor === 'openai') return process.env.OPENAI_API_KEY ? 'openai' : 'mock';
+  return 'mock';
 }
 
 /** A safety timeout that does NOT keep the process/event loop alive once the
@@ -104,6 +127,8 @@ export interface RunVoiceSessionOptions {
   vendor: Vendor;
   /** voice tier (SAU-256): selects the engine + the metered tier. Default 'free'. */
   tier?: VoiceTier;
+  /** scenario's chosen engine id (SAU-258, metadata._model); router gates by tier. */
+  modelId?: string | null;
   userId?: string | null;
   /** tag the session as coach-driven / in-course (Slice 3 compositions) */
   coachId?: string | null;
@@ -128,10 +153,11 @@ export interface VoiceSessionResult {
  * Returns once the session ends (or `maxMs` elapses).
  */
 export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, tier = 'free', userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
+  const { store, scenario, vendor, tier = 'free', modelId = null, userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
   const provider = await getProvider(vendor);
-  // Tiered router (SAU-256): resolve the config-driven engine for this tier.
-  const engine = resolveVoiceEngine(tier);
+  // Tiered router (SAU-256/258): resolve the engine from the scenario's chosen
+  // model + the viewer's tier (tier gating downgrades premium → cost for free).
+  const engine = resolveSessionEngine({ modelId, tier });
   // Fold any linked Knowledge Base (SAU-243) into the voice agent's instructions,
   // bounded by the tighter VOICE budget (cost lever #2) for a small, cacheable prefix.
   const kb = await resolveKnowledgeContext(store, scenario.id, voiceKbCharBudget());
@@ -194,13 +220,15 @@ export async function persistClientSession(opts: {
   vendor: Vendor;
   /** voice tier (SAU-256): the engine the browser ran + the metered tier. Default 'free'. */
   tier?: VoiceTier;
+  /** scenario's chosen engine id (SAU-258, metadata._model); router gates by tier. */
+  modelId?: string | null;
   userId?: string | null;
   coachId?: string | null;
   courseId?: string | null;
   transcript: Transcript;
 }): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, tier = 'free', userId = null, coachId = null, courseId = null, transcript } = opts;
-  const engine = resolveVoiceEngine(tier);
+  const { store, scenario, vendor, tier = 'free', modelId = null, userId = null, coachId = null, courseId = null, transcript } = opts;
+  const engine = resolveSessionEngine({ modelId, tier });
   const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
   const sessionTranscript = toSessionTranscript(transcript);
   // Persist transcript turns/tool-calls as events for the Sessions tab + Analyst.

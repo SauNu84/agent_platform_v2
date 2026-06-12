@@ -9,8 +9,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getCoach, resolveCoachScenario } from '@/services/coaches';
 import { runCoachSession } from '@/voice/coach-session';
-import { defaultVendor, type Vendor } from '@/voice/session-service';
-import { resolveTierForUser } from '@/voice/engine-router';
+import { clientVendorForEngine, type Vendor } from '@/voice/session-service';
+import { resolveTierForUser, resolveSessionEngine } from '@/voice/engine-router';
 import type { Transcript } from '@/voice/realtime-interface';
 import { getActor } from '@/services/current-user';
 
@@ -42,16 +42,18 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     /* empty body is fine */
   }
 
-  const configured = defaultVendor();
-  // Server-driven path always uses mock — real OpenAI Realtime needs browser audio (SAU-208).
-  const vendor: Vendor = body.transcript
-    ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
-    : 'mock';
   const userId = actor.userId;
   const tier = await resolveTierForUser(store, userId); // SAU-256 tiered router
+  // SAU-258: honour the scenario's author-chosen engine, gated by viewer tier.
+  const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
+  const engine = resolveSessionEngine({ modelId, tier });
+  // Server-driven path always uses mock — real realtime needs browser audio (SAU-208).
+  const vendor: Vendor = body.transcript
+    ? ((body.vendor as Vendor) ?? clientVendorForEngine(engine.vendor))
+    : 'mock';
 
   try {
-    const result = await runCoachSession({ store, coach, scenario, vendor, tier, userId, transcript: body.transcript });
+    const result = await runCoachSession({ store, coach, scenario, vendor, tier, modelId, userId, transcript: body.transcript });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

@@ -11,8 +11,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getScenario } from '@/services/scenarios';
-import { runVoiceSession, persistClientSession, defaultVendor, type Vendor } from '@/voice/session-service';
-import { resolveTierForUser } from '@/voice/engine-router';
+import { runVoiceSession, persistClientSession, clientVendorForEngine, type Vendor } from '@/voice/session-service';
+import { resolveTierForUser, resolveSessionEngine } from '@/voice/engine-router';
 import { assertWithinCap, CapExceededError } from '@/services/meter';
 import { getActor } from '@/services/current-user';
 import type { Transcript } from '@/voice/realtime-interface';
@@ -41,16 +41,6 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     /* empty body is fine */
   }
 
-  // Vendor selection:
-  // - Server-driven path (no transcript body): always mock. Real OpenAI Realtime needs
-  //   browser audio (WebRTC mic → client-driven path, SAU-208). Server-side there is
-  //   no audio input, so a real adapter returns 0 turns even with a valid key.
-  // - Client-driven path (browser ran the session, posting transcript): use the
-  //   configured vendor since the browser already produced a real transcript.
-  const configured = defaultVendor();
-  const vendor: Vendor = body.transcript
-    ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
-    : 'mock';
   const userId = actor.userId;
 
   // Monetization guardrail (Slice 2): block Join when the user's voice-minute cap
@@ -64,16 +54,31 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     throw e;
   }
 
-  // Tiered voice router (SAU-256): free-tier users get the cheaper engine, paid
-  // tiers get the "Super" engine — resolved from the user's billing plan_tier.
+  // Tiered/multi-model voice router (SAU-256/258): resolve the engine from the
+  // scenario's author-chosen model (metadata._model) AND the viewer's billing
+  // tier — free → cost engine, paid → the author's full choice (gating downgrades
+  // a premium engine to a same-vendor cost engine for free viewers).
   const tier = await resolveTierForUser(store, userId);
+  const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
+  const engine = resolveSessionEngine({ modelId, tier });
+
+  // Vendor selection:
+  // - Server-driven path (no transcript body): always mock. Real realtime needs
+  //   browser audio (WebRTC mic → client-driven path, SAU-208). Server-side there
+  //   is no audio input, so a real adapter returns 0 turns even with a valid key.
+  // - Client-driven path (browser ran the session, posting transcript): use the
+  //   resolved engine's vendor (key-gated, mock fallback) since the browser
+  //   already produced a real transcript on that engine.
+  const vendor: Vendor = body.transcript
+    ? ((body.vendor as Vendor) ?? clientVendorForEngine(engine.vendor))
+    : 'mock';
 
   try {
     if (body.transcript) {
-      const result = await persistClientSession({ store, scenario, vendor, tier, userId, transcript: body.transcript });
+      const result = await persistClientSession({ store, scenario, vendor, tier, modelId, userId, transcript: body.transcript });
       return NextResponse.json(result, { status: 201 });
     }
-    const result = await runVoiceSession({ store, scenario, vendor, tier, userId });
+    const result = await runVoiceSession({ store, scenario, vendor, tier, modelId, userId });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

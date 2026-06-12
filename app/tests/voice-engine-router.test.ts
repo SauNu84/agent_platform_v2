@@ -13,9 +13,10 @@ import { MemoryStore } from '@/db/memory-store';
 import { createScenarioFromMarkdown } from '@/services/scenarios';
 import { runVoiceSession } from '@/voice/session-service';
 import {
-  resolveVoiceTier, resolveVoiceEngine, resolveTierForUser,
+  resolveVoiceTier, resolveVoiceEngine, resolveTierForUser, resolveSessionEngine,
   voiceKbCharBudget, tierMinuteBudget, DEFAULT_VOICE_KB_CHAR_BUDGET,
 } from '@/voice/engine-router';
+import { isModelSelectableForTier } from '@/lib/ai-models';
 import { KB_CONTEXT_CHAR_BUDGET } from '@/domain/scenario';
 
 const MD = `---
@@ -110,6 +111,90 @@ test('voiceUsageByTier aggregates blended usage by tier + engine', async () => {
   assert.equal(free?.sessions, 2);
   assert.equal(paid?.sessions, 1);
   assert.ok((free?.totalTokens ?? 0) > 0);
+});
+
+// ── SAU-258: multi-model picker — selection + tier gating ────────────────────
+
+test('resolveSessionEngine honors the scenario author choice for a paid viewer', () => {
+  withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined, VOICE_ENGINE_GEMINI: undefined }, () => {
+    const gem = resolveSessionEngine({ modelId: 'google-gemini', tier: 'paid' });
+    assert.equal(gem.vendor, 'gemini');
+    assert.equal(gem.model, 'gemini-2.5-flash-preview-native-audio-dialog');
+    assert.equal(gem.downgraded, false);
+
+    const premium = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'paid' });
+    assert.equal(premium.vendor, 'openai');
+    assert.equal(premium.model, 'gpt-realtime');
+    assert.equal(premium.engineClass, 'premium');
+
+    const mini = resolveSessionEngine({ modelId: 'openai-realtime-mini', tier: 'paid' });
+    assert.equal(mini.model, 'gpt-realtime-mini');
+    assert.equal(mini.engineClass, 'cost');
+  });
+});
+
+test('tier gating: a free viewer of a PREMIUM scenario is downgraded to a same-vendor cost engine', () => {
+  withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
+    const downgraded = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'free' });
+    assert.equal(downgraded.downgraded, true);
+    assert.equal(downgraded.modelId, 'openai-realtime-mini');
+    assert.equal(downgraded.model, 'gpt-realtime-mini');
+    assert.equal(downgraded.vendor, 'openai');
+    // A free viewer of a Gemini (cost) scenario keeps Gemini — no downgrade.
+    const gem = resolveSessionEngine({ modelId: 'google-gemini', tier: 'free' });
+    assert.equal(gem.downgraded, false);
+    assert.equal(gem.vendor, 'gemini');
+  });
+});
+
+test('unknown / not-yet-runnable engine falls back to the default (then tier-gated)', () => {
+  withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
+    // 'anthropic-claude' is available:false → default openai-realtime → free downgrade to mini.
+    const soon = resolveSessionEngine({ modelId: 'anthropic-claude', tier: 'free' });
+    assert.equal(soon.model, 'gpt-realtime-mini');
+    // bogus id → default → paid keeps the premium engine.
+    const bogus = resolveSessionEngine({ modelId: 'nope', tier: 'paid' });
+    assert.equal(bogus.model, 'gpt-realtime');
+  });
+});
+
+test('Gemini engine id is config-driven (VOICE_ENGINE_GEMINI overridable)', () => {
+  withEnv({ VOICE_ENGINE_GEMINI: 'gemini-live-x' }, () => {
+    assert.equal(resolveSessionEngine({ modelId: 'google-gemini', tier: 'paid' }).model, 'gemini-live-x');
+  });
+});
+
+test('isModelSelectableForTier: premium is paid-only, cost engines are open to all', () => {
+  assert.equal(isModelSelectableForTier('google-gemini', 'free'), true);
+  assert.equal(isModelSelectableForTier('openai-realtime-mini', 'free'), true);
+  assert.equal(isModelSelectableForTier('openai-realtime', 'free'), false); // premium → locked for free
+  assert.equal(isModelSelectableForTier('openai-realtime', 'paid'), true);
+  assert.equal(isModelSelectableForTier('anthropic-claude', 'paid'), false); // not yet available
+});
+
+test('per-engine metering: a Gemini-selected session records the gemini engine (mock fail-soft, no key)', async () => {
+  const store = new MemoryStore();
+  const { scenario } = await createScenarioFromMarkdown(store, MD);
+  await withEnvAsync({ GEMINI_API_KEY: undefined, VOICE_ENGINE_GEMINI: undefined }, async () => {
+    // vendor 'gemini' with no key falls back to the mock transport (no crash),
+    // but the resolved ENGINE id is still recorded for cost observability.
+    const result = await runVoiceSession({ store, scenario, vendor: 'gemini', tier: 'paid', modelId: 'google-gemini', userId: 'g1' });
+    const usage = await store.getVoiceUsage(result.sessionId);
+    assert.equal(usage!.engine, 'gemini-2.5-flash-preview-native-audio-dialog');
+    assert.equal(usage!.tier, 'paid');
+    const byTier = await store.voiceUsageByTier();
+    assert.ok(byTier.some((r) => r.engine === 'gemini-2.5-flash-preview-native-audio-dialog'));
+  });
+});
+
+test('free viewer of a premium scenario is metered on the downgraded cost engine', async () => {
+  const store = new MemoryStore();
+  const { scenario } = await createScenarioFromMarkdown(store, MD);
+  await withEnvAsync({ VOICE_ENGINE_FREE: undefined }, async () => {
+    const result = await runVoiceSession({ store, scenario, vendor: 'mock', tier: 'free', modelId: 'openai-realtime', userId: 'f1' });
+    const usage = await store.getVoiceUsage(result.sessionId);
+    assert.equal(usage!.engine, 'gpt-realtime-mini'); // downgraded, never billed at premium
+  });
 });
 
 async function withEnvAsync(vars: Record<string, string | undefined>, fn: () => Promise<void>) {
