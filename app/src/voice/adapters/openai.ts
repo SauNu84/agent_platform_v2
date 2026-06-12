@@ -14,8 +14,7 @@ import {
   SessionEvent, Transcript, ToolDefinition, ToolHandler, TurnUsage, SessionUsage,
 } from '../realtime-interface';
 
-const MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
-const REALTIME_WS = `wss://api.openai.com/v1/realtime?model=${MODEL}`;
+const DEFAULT_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
 const OPENAI_VOICE = process.env.OPENAI_VOICE || 'alloy'; // scenario voice 'Aoede' is a Gemini voice
 
 class Bridge {
@@ -114,6 +113,11 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
       );
     }
 
+    // Tiered router (SAU-256): the platform passes the tier-resolved engine id;
+    // fall back to the configured default for single-engine deployments.
+    const model = opts?.model || DEFAULT_MODEL;
+    const realtimeWs = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
+
     const bridge = new Bridge();
     const handlers = new Map<string, ToolHandler>();
     const tTurns: Transcript['turns'] = [];
@@ -126,7 +130,7 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
     // GA Realtime API (SAU-176): the beta protocol was sunset. No `OpenAI-Beta`
     // header; session config is restructured (audio nested under input/output,
     // PCM format is an object, `output_modalities` replaces `modalities`).
-    const ws = new WebSocket(REALTIME_WS, {
+    const ws = new WebSocket(realtimeWs, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
 
@@ -137,8 +141,16 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
           type: 'session.update',
           session: {
             type: 'realtime',
-            model: MODEL,
+            model,
             output_modalities: ['audio'],
+            // Cost lever #1 (SAU-256): prompt caching. OpenAI Realtime caches the
+            // stable instruction/system prefix automatically and bills it at the
+            // discounted cached rate (`response.done.usage.cached_tokens`, parsed
+            // above). The lever we control is keeping that prefix stable + bounded
+            // — which is why the KB block injected here is capped at the much
+            // tighter VOICE_KB_CHAR_BUDGET (cost lever #2, resolved upstream)
+            // rather than the 150K text budget. Realized cache hits are observable
+            // per session in voice_usage.cached_*_tokens.
             instructions: scenario.aiInstructions,
             audio: {
               input: {
@@ -253,7 +265,7 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
         return {
           sessionId, turns: tTurns, toolCalls: tCalls, startedAt, endedAt: Date.now(),
           usage: perTurnUsage.length ? sumUsage(perTurnUsage) : undefined,
-          model: serverModel ?? MODEL,
+          model: serverModel ?? model,
         };
       },
     };

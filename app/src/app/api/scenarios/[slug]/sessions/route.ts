@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getScenario } from '@/services/scenarios';
 import { runVoiceSession, persistClientSession, defaultVendor, type Vendor } from '@/voice/session-service';
+import { resolveTierForUser } from '@/voice/engine-router';
 import { assertWithinCap, CapExceededError } from '@/services/meter';
 import { getActor } from '@/services/current-user';
 import type { Transcript } from '@/voice/realtime-interface';
@@ -63,12 +64,16 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     throw e;
   }
 
+  // Tiered voice router (SAU-256): free-tier users get the cheaper engine, paid
+  // tiers get the "Super" engine — resolved from the user's billing plan_tier.
+  const tier = await resolveTierForUser(store, userId);
+
   try {
     if (body.transcript) {
-      const result = await persistClientSession({ store, scenario, vendor, userId, transcript: body.transcript });
+      const result = await persistClientSession({ store, scenario, vendor, tier, userId, transcript: body.transcript });
       return NextResponse.json(result, { status: 201 });
     }
-    const result = await runVoiceSession({ store, scenario, vendor, userId });
+    const result = await runVoiceSession({ store, scenario, vendor, tier, userId });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

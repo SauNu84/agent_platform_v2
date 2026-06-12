@@ -20,6 +20,7 @@ import type {
   RealtimeVoiceProvider, RealtimeSession, SessionEvent, Transcript, SessionUsage,
 } from './realtime-interface';
 import { MockProvider } from './adapters/mock';
+import { resolveVoiceEngine, voiceKbCharBudget, type VoiceTier } from './engine-router';
 import type { Store, SessionTranscript, VoiceUsageRecord } from '@/db/store';
 
 export type Vendor = 'openai' | 'mock';
@@ -70,7 +71,10 @@ function eventToRow(ev: SessionEvent): { type: string; payload: Record<string, u
 }
 
 function usageToRecord(
-  base: { sessionId: string; userId: string | null; scenarioId: string; vendor: string },
+  base: {
+    sessionId: string; userId: string | null; scenarioId: string; vendor: string;
+    tier: VoiceTier; engine: string;
+  },
   transcript: Transcript,
 ): VoiceUsageRecord {
   const durationMs = Math.max(0, transcript.endedAt - transcript.startedAt);
@@ -98,6 +102,8 @@ export interface RunVoiceSessionOptions {
   store: Store;
   scenario: ScenarioRecord;
   vendor: Vendor;
+  /** voice tier (SAU-256): selects the engine + the metered tier. Default 'free'. */
+  tier?: VoiceTier;
   userId?: string | null;
   /** tag the session as coach-driven / in-course (Slice 3 compositions) */
   coachId?: string | null;
@@ -122,15 +128,18 @@ export interface VoiceSessionResult {
  * Returns once the session ends (or `maxMs` elapses).
  */
 export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
+  const { store, scenario, vendor, tier = 'free', userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
   const provider = await getProvider(vendor);
-  // Fold any linked Knowledge Base (SAU-243) into the voice agent's instructions.
-  const kb = await resolveKnowledgeContext(store, scenario.id);
+  // Tiered router (SAU-256): resolve the config-driven engine for this tier.
+  const engine = resolveVoiceEngine(tier);
+  // Fold any linked Knowledge Base (SAU-243) into the voice agent's instructions,
+  // bounded by the tighter VOICE budget (cost lever #2) for a small, cacheable prefix.
+  const kb = await resolveKnowledgeContext(store, scenario.id, voiceKbCharBudget());
   const compiled = toCompiledScenario(scenario, { knowledgeBaseText: kb.text });
   if (instructions) compiled.aiInstructions = instructions;
   const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
 
-  const session = await provider.startSession(compiled);
+  const session = await provider.startSession(compiled, { model: engine.model });
   // Register no-op UI tool handlers so a tool call mid-session resolves + is logged.
   for (const tool of compiled.tools) {
     session.registerTool(tool, async () => ({ ack: true, tool: tool.name }));
@@ -162,7 +171,7 @@ export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<Voi
   });
 
   const usage = usageToRecord(
-    { sessionId: sessionRow.id, userId, scenarioId: scenario.id, vendor },
+    { sessionId: sessionRow.id, userId, scenarioId: scenario.id, vendor, tier, engine: engine.model },
     transcript,
   );
   await store.recordVoiceUsage(usage);
@@ -183,12 +192,15 @@ export async function persistClientSession(opts: {
   store: Store;
   scenario: ScenarioRecord;
   vendor: Vendor;
+  /** voice tier (SAU-256): the engine the browser ran + the metered tier. Default 'free'. */
+  tier?: VoiceTier;
   userId?: string | null;
   coachId?: string | null;
   courseId?: string | null;
   transcript: Transcript;
 }): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, userId = null, coachId = null, courseId = null, transcript } = opts;
+  const { store, scenario, vendor, tier = 'free', userId = null, coachId = null, courseId = null, transcript } = opts;
+  const engine = resolveVoiceEngine(tier);
   const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
   const sessionTranscript = toSessionTranscript(transcript);
   // Persist transcript turns/tool-calls as events for the Sessions tab + Analyst.
@@ -199,7 +211,7 @@ export async function persistClientSession(opts: {
     await store.appendSessionEvent({ sessionId: sessionRow.id, ts: call.at, type: 'tool.call', payload: { name: call.name, args: call.args, result: call.result } });
   }
   await store.completeSession(sessionRow.id, { status: 'completed', startedAt: transcript.startedAt, endedAt: transcript.endedAt, transcript: sessionTranscript });
-  const usage = usageToRecord({ sessionId: sessionRow.id, userId, scenarioId: scenario.id, vendor }, transcript);
+  const usage = usageToRecord({ sessionId: sessionRow.id, userId, scenarioId: scenario.id, vendor, tier, engine: engine.model }, transcript);
   await store.recordVoiceUsage(usage);
   return { sessionId: sessionRow.id, transcript: sessionTranscript, usage, firstAudioMs: null };
 }

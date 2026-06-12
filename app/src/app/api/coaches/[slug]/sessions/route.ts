@@ -10,6 +10,7 @@ import { getStore } from '@/db';
 import { getCoach, resolveCoachScenario } from '@/services/coaches';
 import { runCoachSession } from '@/voice/coach-session';
 import { defaultVendor, type Vendor } from '@/voice/session-service';
+import { resolveTierForUser } from '@/voice/engine-router';
 import type { Transcript } from '@/voice/realtime-interface';
 import { getActor } from '@/services/current-user';
 
@@ -47,9 +48,10 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     ? ((body.vendor as Vendor) ?? (process.env.OPENAI_API_KEY ? configured : 'mock'))
     : 'mock';
   const userId = actor.userId;
+  const tier = await resolveTierForUser(store, userId); // SAU-256 tiered router
 
   try {
-    const result = await runCoachSession({ store, coach, scenario, vendor, userId, transcript: body.transcript });
+    const result = await runCoachSession({ store, coach, scenario, vendor, tier, userId, transcript: body.transcript });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

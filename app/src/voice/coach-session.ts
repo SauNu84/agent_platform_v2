@@ -12,6 +12,7 @@
  * So session N+1 demonstrably picks up what session N learned.
  */
 import { runVoiceSession, persistClientSession, type Vendor, type VoiceSessionResult } from './session-service';
+import type { VoiceTier } from './engine-router';
 import type { Transcript } from './realtime-interface';
 import type { CoachMemoryRecord, Store } from '@/db/store';
 import type { CoachRecord } from '@/domain/coach';
@@ -35,6 +36,8 @@ export interface RunCoachSessionOptions {
   coach: CoachRecord;
   scenario: ScenarioRecord;        // resolved from coach.scenarioId by the caller
   vendor: Vendor;
+  /** voice tier (SAU-256): selects the engine + metered tier. Default 'free'. */
+  tier?: VoiceTier;
   userId: string | null;
   /** client-driven path: a transcript the browser already produced */
   transcript?: Transcript;
@@ -45,7 +48,7 @@ export interface RunCoachSessionOptions {
 }
 
 export async function runCoachSession(opts: RunCoachSessionOptions): Promise<CoachSessionResult> {
-  const { store, coach, scenario, vendor, userId, transcript, nowMs, k } = opts;
+  const { store, coach, scenario, vendor, tier = 'free', userId, transcript, nowMs, k } = opts;
 
   // 1) Retrieve + inject memory (only for an identified user).
   let injectedMemories: CoachMemoryRecord[] = [];
@@ -72,8 +75,8 @@ export async function runCoachSession(opts: RunCoachSessionOptions): Promise<Coa
 
   // 2) Run the session, tagged with coach_id.
   const result: VoiceSessionResult = transcript
-    ? await persistClientSession({ store, scenario, vendor, userId, coachId: coach.id, transcript })
-    : await runVoiceSession({ store, scenario, vendor, userId, coachId: coach.id, instructions: injectedInstructions });
+    ? await persistClientSession({ store, scenario, vendor, tier, userId, coachId: coach.id, transcript })
+    : await runVoiceSession({ store, scenario, vendor, tier, userId, coachId: coach.id, instructions: injectedInstructions });
 
   // 3) Write derived memories (consent-gated; ADR-004).
   let wroteMemories = 0;

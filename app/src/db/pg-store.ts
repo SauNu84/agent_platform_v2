@@ -24,7 +24,7 @@ import type {
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
-  UserRecord, UserSettingRecord, VoiceUsageRecord, WebhookRecord,
+  UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { getActorContext } from '@/auth/actor';
@@ -565,12 +565,13 @@ export class PgStore implements Store {
 
   async recordVoiceUsage(u: VoiceUsageRecord): Promise<void> {
     await this.q(
-      `INSERT INTO voice_usage (session_id, user_id, scenario_id, vendor, model, duration_ms, voice_minutes,
+      `INSERT INTO voice_usage (session_id, user_id, scenario_id, vendor, model, tier, engine, duration_ms, voice_minutes,
         input_text_tokens, input_audio_tokens, cached_text_tokens, cached_audio_tokens,
         output_text_tokens, output_audio_tokens, total_tokens)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (session_id) DO NOTHING`,
-      [u.sessionId, u.userId ?? null, u.scenarioId, u.vendor, u.model, u.durationMs, u.voiceMinutes,
+      [u.sessionId, u.userId ?? null, u.scenarioId, u.vendor, u.model, u.tier ?? null, u.engine ?? null,
+        u.durationMs, u.voiceMinutes,
         u.inputTextTokens, u.inputAudioTokens, u.cachedTextTokens, u.cachedAudioTokens,
         u.outputTextTokens, u.outputAudioTokens, u.totalTokens],
     );
@@ -582,12 +583,34 @@ export class PgStore implements Store {
     const r = rows[0];
     return {
       sessionId: r.session_id, userId: r.user_id ?? null, scenarioId: r.scenario_id, vendor: r.vendor,
-      model: r.model ?? null, durationMs: Number(r.duration_ms), voiceMinutes: Number(r.voice_minutes),
+      model: r.model ?? null, tier: r.tier ?? null, engine: r.engine ?? null,
+      durationMs: Number(r.duration_ms), voiceMinutes: Number(r.voice_minutes),
       inputTextTokens: Number(r.input_text_tokens), inputAudioTokens: Number(r.input_audio_tokens),
       cachedTextTokens: Number(r.cached_text_tokens), cachedAudioTokens: Number(r.cached_audio_tokens),
       outputTextTokens: Number(r.output_text_tokens), outputAudioTokens: Number(r.output_audio_tokens),
       totalTokens: Number(r.total_tokens),
     };
+  }
+
+  async voiceUsageByTier(): Promise<VoiceUsageByTierRow[]> {
+    const { rows } = await this.q(
+      `SELECT tier, engine,
+              COUNT(*)::int AS sessions,
+              COALESCE(SUM(voice_minutes), 0) AS voice_minutes,
+              COALESCE(SUM(total_tokens), 0) AS total_tokens,
+              COALESCE(SUM(cached_text_tokens + cached_audio_tokens), 0) AS cached_tokens
+       FROM voice_usage
+       GROUP BY tier, engine
+       ORDER BY tier NULLS LAST, engine NULLS LAST`,
+    );
+    return rows.map((r) => ({
+      tier: r.tier ?? null,
+      engine: r.engine ?? null,
+      sessions: Number(r.sessions),
+      voiceMinutes: Number(Number(r.voice_minutes).toFixed(4)),
+      totalTokens: Number(r.total_tokens),
+      cachedTokens: Number(r.cached_tokens),
+    }));
   }
 
   // ── Slice 2: Analyst projection ───────────────────────────────────────────────
@@ -662,6 +685,19 @@ export class PgStore implements Store {
     const { rows } = await this.q(
       'SELECT COALESCE(SUM(voice_minutes), 0) AS total FROM voice_usage WHERE user_id = $1',
       [userId],
+    );
+    return Number(Number(rows[0].total).toFixed(4));
+  }
+
+  async sumVoiceMinutesByUserSince(userId: string, sinceMs: number): Promise<number> {
+    // Scope by the SESSION start time (not voice_usage.created_at) so a session
+    // is counted in the month it began — matches how History/analytics window.
+    const { rows } = await this.q(
+      `SELECT COALESCE(SUM(vu.voice_minutes), 0) AS total
+         FROM voice_usage vu
+         JOIN session s ON s.id = vu.session_id
+        WHERE vu.user_id = $1 AND s.started_at >= $2`,
+      [userId, new Date(sinceMs).toISOString()],
     );
     return Number(Number(rows[0].total).toFixed(4));
   }

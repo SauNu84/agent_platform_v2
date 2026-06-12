@@ -80,6 +80,13 @@ export interface SessionOptions {
   vadSilenceMs?: number;
   /** prefer native speech-to-speech vs cascade (where the vendor supports both) */
   mode?: 's2s' | 'cascade';
+  /**
+   * Override the realtime model id for this session (SAU-256 tiered router).
+   * The platform resolves this from the user's tier via the engine-router seam;
+   * the adapter falls back to its configured default when absent. Vendors that
+   * don't support model selection ignore it (vendor-neutral).
+   */
+  model?: string;
 }
 
 // ── The session handle ───────────────────────────────────────────────────────

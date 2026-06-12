@@ -108,6 +108,10 @@ export interface VoiceUsageRecord {
   scenarioId: string;
   vendor: string;
   model: string | null;
+  /** voice tier this session was routed at (SAU-256). */
+  tier?: 'free' | 'paid' | null;
+  /** the config-driven engine model id selected by the tiered router (SAU-256). */
+  engine?: string | null;
   durationMs: number;
   voiceMinutes: number;
   inputTextTokens: number;
@@ -152,6 +156,16 @@ export interface CreatorAnalyticsRow {
   sessions: number;
   avgDurationMs: number;
   totalVoiceMinutes: number;
+}
+
+/** Blended voice usage aggregated by tier + engine (SAU-256 observability). */
+export interface VoiceUsageByTierRow {
+  tier: string | null;
+  engine: string | null;
+  sessions: number;
+  voiceMinutes: number;
+  totalTokens: number;
+  cachedTokens: number;
 }
 
 /** Per-user voice-minute entitlement (plan + caps). */
@@ -394,6 +408,8 @@ export interface Store {
   // ── Voice usage metering ──────────────────────────────────────────────────────
   recordVoiceUsage(usage: VoiceUsageRecord): Promise<void>;
   getVoiceUsage(sessionId: string): Promise<VoiceUsageRecord | null>;
+  /** Blended voice usage grouped by tier + engine (SAU-256 cost observability). */
+  voiceUsageByTier(): Promise<VoiceUsageByTierRow[]>;
 
   // ── Slice 2: Analyst projection ───────────────────────────────────────────────
   upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord>;
@@ -405,6 +421,12 @@ export interface Store {
 
   // ── Slice 2: credit meter + entitlement ───────────────────────────────────────
   sumVoiceMinutesByUser(userId: string): Promise<number>;
+  /**
+   * Voice minutes a user has used since `sinceMs` (epoch ms), by session start
+   * time. Backs the SAU-257 monthly cap: passing the start of the current month
+   * gives the month-to-date usage that the free allotment resets against.
+   */
+  sumVoiceMinutesByUserSince(userId: string, sinceMs: number): Promise<number>;
   getEntitlement(userId: string): Promise<EntitlementRecord | null>;
   upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord>;
 

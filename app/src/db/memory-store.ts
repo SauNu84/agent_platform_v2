@@ -14,7 +14,7 @@ import type {
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
-  UserRecord, UserSettingRecord, VoiceUsageRecord, WebhookRecord,
+  UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { ROLE_CAPABILITIES } from '@/auth/rbac';
@@ -494,6 +494,24 @@ export class MemoryStore implements Store {
     return this.usage.get(sessionId) ?? null;
   }
 
+  async voiceUsageByTier(): Promise<VoiceUsageByTierRow[]> {
+    const groups = new Map<string, VoiceUsageByTierRow>();
+    for (const u of this.usage.values()) {
+      const tier = u.tier ?? null;
+      const engine = u.engine ?? null;
+      const key = `${tier ?? '∅'}|${engine ?? '∅'}`;
+      const row = groups.get(key) ?? { tier, engine, sessions: 0, voiceMinutes: 0, totalTokens: 0, cachedTokens: 0 };
+      row.sessions += 1;
+      row.voiceMinutes += u.voiceMinutes;
+      row.totalTokens += u.totalTokens;
+      row.cachedTokens += u.cachedTextTokens + u.cachedAudioTokens;
+      groups.set(key, row);
+    }
+    return [...groups.values()]
+      .map((r) => ({ ...r, voiceMinutes: Number(r.voiceMinutes.toFixed(4)) }))
+      .sort((a, b) => (a.tier ?? '~').localeCompare(b.tier ?? '~') || (a.engine ?? '~').localeCompare(b.engine ?? '~'));
+  }
+
   // ── Slice 2: Analyst projection ───────────────────────────────────────────────
   async upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord> {
     const existing = this.analyses.get(rec.sessionId);
@@ -560,6 +578,18 @@ export class MemoryStore implements Store {
     let sum = 0;
     for (const u of this.usage.values()) {
       if (u.userId === userId) sum += u.voiceMinutes;
+    }
+    return Number(sum.toFixed(4));
+  }
+
+  async sumVoiceMinutesByUserSince(userId: string, sinceMs: number): Promise<number> {
+    let sum = 0;
+    for (const u of this.usage.values()) {
+      if (u.userId !== userId) continue;
+      // Scope by the owning session's start time (mirrors the PG join).
+      const session = this.sessions.get(u.sessionId);
+      const startedMs = session ? new Date(session.startedAt).getTime() : 0;
+      if (startedMs >= sinceMs) sum += u.voiceMinutes;
     }
     return Number(sum.toFixed(4));
   }

@@ -98,16 +98,25 @@ export interface ResolvedKnowledge extends AssembledKnowledge {
 
 /**
  * Resolve + assemble the linked-KB block for a scenario at session start.
- * Logs a notice when the global budget truncates (AC #4 — no silent overflow).
+ * Logs a notice when the budget truncates (AC #4 — no silent overflow).
  * Returns the bounded text to pass into `modelInstructions`/`toCompiledScenario`.
+ *
+ * `budget` overrides the default char cap. Text chat uses the full
+ * `KB_CONTEXT_CHAR_BUDGET` (150K); VOICE sessions pass the much tighter
+ * `voiceKbCharBudget()` (SAU-256 cost lever #2) so the realtime prompt prefix
+ * stays small + cacheable.
  */
-export async function resolveKnowledgeContext(store: Store, scenarioId: string): Promise<ResolvedKnowledge> {
+export async function resolveKnowledgeContext(
+  store: Store,
+  scenarioId: string,
+  budget: number = KB_CONTEXT_CHAR_BUDGET,
+): Promise<ResolvedKnowledge> {
   const docs = await store.listKnowledgeForScenario(scenarioId);
-  const asm = assembleKnowledgeBaseContext(docs);
+  const asm = assembleKnowledgeBaseContext(docs, budget);
   if (asm.truncated) {
     console.warn(
-      `[kb] scenario=${scenarioId}: linked knowledge (${docs.length} docs) exceeded KB_CONTEXT_CHAR_BUDGET ` +
-        `(${KB_CONTEXT_CHAR_BUDGET} chars) — truncated with a visible marker (no silent overflow).`,
+      `[kb] scenario=${scenarioId}: linked knowledge (${docs.length} docs) exceeded the ${budget}-char ` +
+        `budget — truncated with a visible marker (no silent overflow).`,
     );
   }
   return { ...asm, docs: docs.length };
