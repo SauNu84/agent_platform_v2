@@ -745,13 +745,13 @@ export class PgStore implements Store {
       const before = await client.query('SELECT id FROM course WHERE slug = $1', [rec.slug]);
       const created = before.rowCount === 0;
       const { rows } = await client.query(
-        `INSERT INTO course (slug, name, visibility, coach_id, owner_user_id)
-         VALUES ($1,$2,$3,$4,$5)
+        `INSERT INTO course (slug, name, visibility, coach_id, cover_image_url, owner_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (slug) DO UPDATE SET
            name = EXCLUDED.name, visibility = EXCLUDED.visibility, coach_id = EXCLUDED.coach_id,
-           updated_at = now()
+           cover_image_url = EXCLUDED.cover_image_url, updated_at = now()
          RETURNING id`,
-        [rec.slug, rec.name, rec.isPublic ? 'public' : 'private', coachId, owner?.ownerUserId ?? null],
+        [rec.slug, rec.name, rec.isPublic ? 'public' : 'private', coachId, rec.coverImageUrl ?? null, owner?.ownerUserId ?? null],
       );
       const courseId = rows[0].id as string;
       // Replace the ordered join wholesale (positions are authoritative from the file).
@@ -985,6 +985,7 @@ function rowToCourse(r: Row): CourseRecord {
     isPublic: r.visibility === 'public',
     coachId: r.coach_id ?? null,
     scenarioIds: (r.scenario_ids ?? []) as string[],
+    coverImageUrl: r.cover_image_url ?? null,
     ownerUserId: r.owner_user_id ?? null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),

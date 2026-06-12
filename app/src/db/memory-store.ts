@@ -341,13 +341,13 @@ export class MemoryStore implements Store {
     let course: CourseRecord;
     let created: boolean;
     if (existing) {
-      course = { ...existing, name: rec.name, isPublic: rec.isPublic, coachId, scenarioIds, updatedAt: nowIso() };
+      course = { ...existing, name: rec.name, isPublic: rec.isPublic, coachId, scenarioIds, coverImageUrl: rec.coverImageUrl ?? null, updatedAt: nowIso() };
       created = false;
     } else {
       const ts = nowIso();
       course = {
         id: randomUUID(), slug: rec.slug, name: rec.name, isPublic: rec.isPublic,
-        coachId, scenarioIds, ownerUserId: owner?.ownerUserId ?? null, createdAt: ts, updatedAt: ts,
+        coachId, scenarioIds, coverImageUrl: rec.coverImageUrl ?? null, ownerUserId: owner?.ownerUserId ?? null, createdAt: ts, updatedAt: ts,
       };
       created = true;
     }
@@ -412,7 +412,7 @@ export class MemoryStore implements Store {
       const ts = nowIso();
       this.courses.set(record.slug, {
         id, slug: record.slug, name: record.name, isPublic: record.isPublic,
-        coachId, scenarioIds, ownerUserId: null, createdAt: ts, updatedAt: ts,
+        coachId, scenarioIds, coverImageUrl: record.coverImageUrl ?? null, ownerUserId: null, createdAt: ts, updatedAt: ts,
       });
       this.courseIdToSlug.set(id, record.slug);
       this.sources.set(`course:${id}`, { entityType: 'course', entityId: id, repoPath, contentHash, revision: null, compiledAt: ts });

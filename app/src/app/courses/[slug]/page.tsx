@@ -7,6 +7,7 @@ import { notFound } from 'next/navigation';
 import { getStore } from '@/db';
 import { getCourse, getCourseProgress } from '@/services/courses';
 import CoursePlayer from '@/components/CoursePlayer';
+import { CourseCover } from '@/components/CourseCover';
 import { requirePageActor } from '@/services/current-user';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,9 @@ export default async function CourseDetailPage({ params }: { params: { slug: str
 
   return (
     <div>
+      <div style={{ marginBottom: 16 }}>
+        <CourseCover name={course.name} slug={course.slug} coverImageUrl={course.coverImageUrl} height={200} />
+      </div>
       <h1>{course.name}</h1>
       <p className="subtitle">
         {course.scenarioIds.length} scenarios · {course.isPublic ? 'Public' : 'Private'}

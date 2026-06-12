@@ -14,6 +14,7 @@
 import { useEffect, useId, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { CourseCover } from '@/components/CourseCover';
 
 interface ScenarioOpt { slug: string; name: string; }
 interface CoachOpt { slug: string; name: string; }
@@ -30,6 +31,7 @@ export default function CreateCoursePage() {
   const [slug, setSlug] = useState('');
   const [slugEdited, setSlugEdited] = useState(false);
   const [description, setDescription] = useState('');
+  const [coverImageUrl, setCoverImageUrl] = useState('');
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const [coachSlug, setCoachSlug] = useState('');
 
@@ -114,6 +116,7 @@ export default function CreateCoursePage() {
           id: slug,
           name: name || slug,
           description: description || undefined,
+          cover_image_url: coverImageUrl.trim() || undefined,
           scenarios: selected.map((s) => s.slug),
           visibility,
           ...(coachSlug ? { coach_ref: coachSlug } : {}),
@@ -201,6 +204,20 @@ export default function CreateCoursePage() {
               />
             </div>
 
+            {/* Cover Image */}
+            <div className="form-group">
+              <label htmlFor={`${uid}-cover`} className="form-label">Cover Image URL <span className="form-optional">(Optional)</span></label>
+              <p className="form-hint-block">A public HTTPS image shown as the course banner in the library. Leave blank to use an auto-generated gradient cover.</p>
+              <input
+                id={`${uid}-cover`}
+                type="url"
+                className="form-input form-input-mono"
+                placeholder="https://…/course-cover.jpg"
+                value={coverImageUrl}
+                onChange={(e) => setCoverImageUrl(e.target.value)}
+              />
+            </div>
+
             {/* Scenarios (ordered) */}
             <div className="form-group">
               <label className="form-label">Scenarios <span className="form-required">*</span></label>
@@ -266,8 +283,8 @@ export default function CreateCoursePage() {
           <p className="preview-sub">Updates when you fill in the fields.</p>
           {preview ? (
             <div className="preview-card">
-              <div className="preview-avatar" style={{ background: 'linear-gradient(135deg, #6366f1, #4f46e5)' }} />
-              <h3 className="preview-name">{preview.name}</h3>
+              <CourseCover name={preview.name} slug={slug || 'course'} coverImageUrl={coverImageUrl.trim() || null} height={120} />
+              <h3 className="preview-name" style={{ marginTop: 10 }}>{preview.name}</h3>
               <p className="preview-desc">{preview.description}</p>
               <div className="badges">
                 <span className="badge">{visibility === 'public' ? 'Public' : 'Private'}</span>

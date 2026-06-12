@@ -41,6 +41,9 @@ export const courseFrontmatterSchema = z
     slug: z.string().regex(slugPattern, 'id/slug must be kebab-case').optional(),
     name: z.string().min(1),
     description: z.string().optional(),
+    /** optional cover image URL (https) shown on course cards + detail (SAU-247) */
+    cover_image_url: z.string().url().optional(),
+    cover_image: z.string().url().optional(),
     // The ordered scenarios that make up the course (the Play All sequence).
     // `scenarios` is canonical; `scenario_ids` is accepted as an alias.
     scenarios: z.array(courseScenarioRefSchema).optional(),
@@ -80,6 +83,8 @@ export interface CourseRecord {
   coachId: string | null;
   /** ordered scenario ids, resolved from the join (position-sorted) */
   scenarioIds: string[];
+  /** optional cover image URL (null = render a deterministic gradient cover) */
+  coverImageUrl: string | null;
   /** owning user (null = platform/seeded content); enforced by RLS (SAU-229) */
   ownerUserId: string | null;
   createdAt: string;
@@ -91,6 +96,8 @@ export interface CompiledCourseRecord {
   slug: string;
   name: string;
   description: string | null;
+  /** optional cover image URL (https) */
+  coverImageUrl: string | null;
   isPublic: boolean;
   /** coach slug (resolved to id at upsert) */
   coachRef: string | null;
@@ -124,6 +131,7 @@ export function normalizeCourseFrontmatter(fm: CourseFrontmatter): CompiledCours
     slug: (fm.id ?? fm.slug)!,
     name: fm.name,
     description: fm.description ?? null,
+    coverImageUrl: (fm.cover_image_url ?? fm.cover_image) ?? null,
     isPublic: fm.visibility === 'public',
     coachRef: (fm.coach_ref ?? fm.coach) ?? null,
     scenarioRefs,

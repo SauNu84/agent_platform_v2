@@ -12,6 +12,7 @@ import { listCourses } from '@/services/courses';
 import { getActor } from '@/services/current-user';
 import type { CourseRecord } from '@/domain/course';
 import CoursesSearch from './CoursesSearch';
+import { CourseCover } from '@/components/CourseCover';
 
 export const dynamic = 'force-dynamic';
 
@@ -86,7 +87,8 @@ export default async function CoursesPage({
         <div className="grid">
           {courses.map((c) => (
             <Link key={c.slug} href={`/courses/${c.slug}`} className="card">
-              <h3>{c.name}</h3>
+              <CourseCover name={c.name} slug={c.slug} coverImageUrl={c.coverImageUrl} height={120} />
+              <h3 style={{ marginTop: 10 }}>{c.name}</h3>
               <div className="badges">
                 <span className={`badge ${c.isPublic ? 'public' : ''}`}>{c.isPublic ? 'Public' : 'Private'}</span>
                 <span className="badge">{c.scenarioIds.length} scenario{c.scenarioIds.length === 1 ? '' : 's'}</span>
