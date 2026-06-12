@@ -286,6 +286,13 @@ export default function LiveDemo({
       body: JSON.stringify({}),
     });
     const data = await res.json();
+    // Voice-minute cap reached (SAU-257): block gracefully and steer to text Chat
+    // instead of throwing a raw error — no hard paywall, no silent failure.
+    if (res.status === 402) {
+      throw new Error(
+        'You’ve used your voice minutes this month. Close this and continue in text Chat (unlimited), or upgrade for more voice time.',
+      );
+    }
     if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
     const allTurns: Turn[] = (data.transcript?.turns ?? []).filter(Boolean);
     setVendor(data.usage?.vendor ?? 'mock');

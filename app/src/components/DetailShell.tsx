@@ -8,13 +8,25 @@
  * takes serializable content + a sessions endpoint — so Slice 3 (Coach/Course)
  * reuses it without change.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
 import LiveDemo from './LiveDemo';
 import { aiModelLabel } from '@/lib/ai-models';
+
+/** Subset of the SAU-257 voice meter the detail surface renders. */
+interface VoiceMeter {
+  remainingMinutes: number;
+  capMinutes: number;
+  sessionMaxMinutes: number | null;
+  overCap: boolean;
+  resetsAt: string;
+  tier: 'free' | 'paid';
+}
+
+const fmtMin = (m: number) => (Number.isInteger(m) ? `${m}` : m.toFixed(1));
 
 /**
  * Render a learner-facing field as formatted Markdown (SAU-246). The reference
@@ -91,6 +103,11 @@ export default function DetailShell(props: DetailShellProps) {
   const [chatOpen, setChatOpen] = useState(false);
   // Live demo flow (SAU-238) — camera/mic verify → live interaction window.
   const [liveDemoOpen, setLiveDemoOpen] = useState(false);
+  // Voice-minute cap (SAU-257): the live meter + a graceful "cap reached" state.
+  // When the monthly voice budget is spent, voice is blocked and we steer the
+  // learner into unlimited text Chat + an upgrade CTA — never a crash/silent fail.
+  const [voiceMeter, setVoiceMeter] = useState<VoiceMeter | null>(null);
+  const [capReached, setCapReached] = useState(false);
   // SAU-238: the human learner's brief (UI only, never sent to the model).
   const userInstructions = typeof props.metadata?._userInstructions === 'string' ? props.metadata._userInstructions : '';
   // SAU-238 ask #5: the AI persona identity ("Description for AI"), prepended to
@@ -125,6 +142,17 @@ export default function DetailShell(props: DetailShellProps) {
     });
   }
 
+  // Live voice-minute meter for the remaining-minutes hint (SAU-257). Best-effort:
+  // a failed/anon read just hides the hint — it never blocks the page.
+  useEffect(() => {
+    let live = true;
+    fetch('/api/voice/usage')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d?.meter) { setVoiceMeter(d.meter); setCapReached(!!d.meter.overCap); } })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
   async function join() {
     setJoining(true);
     setError(null);
@@ -135,6 +163,13 @@ export default function DetailShell(props: DetailShellProps) {
         body: JSON.stringify({}),
       });
       const data = await res.json();
+      // Voice-minute cap reached (SAU-257): block voice gracefully → text Chat
+      // fallback + upgrade CTA. The 402 carries the meter so we can explain it.
+      if (res.status === 402) {
+        if (data.meter) setVoiceMeter(data.meter);
+        setCapReached(true);
+        return;
+      }
       if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
       const turns: SessionSummary['turns'] = data.transcript?.turns ?? [];
       setLiveSession({
@@ -292,7 +327,14 @@ export default function DetailShell(props: DetailShellProps) {
             // default, live OpenAI Realtime when keyed (real end-user audio at scale
             // stays gated by SAU-193/SAU-208).
             <>
-              <button className="btn btn-secondary" onClick={() => { setError(null); setLiveDemoOpen(true); }} title="Verify your camera & mic, then join a live roleplay">
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setError(null); if (capReached) { setChatOpen(true); } else { setLiveDemoOpen(true); } }}
+                disabled={capReached}
+                title={capReached
+                  ? 'You’ve used your voice minutes this month — continue in text Chat'
+                  : 'Verify your camera & mic, then join a live roleplay'}
+              >
                 🎙 Live demo
               </button>
               <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>
@@ -300,12 +342,32 @@ export default function DetailShell(props: DetailShellProps) {
               </button>
             </>
           ) : (
-            <button className="btn join" onClick={join} disabled={joining}>
-              {joining ? 'Connecting…' : 'Join'}
+            <button className="btn join" onClick={join} disabled={joining || capReached}>
+              {joining ? 'Connecting…' : capReached ? 'Voice cap reached' : 'Join'}
             </button>
           )}
         </div>
       </div>
+      {/* Remaining-minutes hint (SAU-257) — free tier only, when not yet capped. */}
+      {voiceMeter && voiceMeter.tier === 'free' && !capReached && (
+        <p className="voice-minutes-hint billing-muted">
+          🎙 {fmtMin(voiceMeter.remainingMinutes)} of {fmtMin(voiceMeter.capMinutes)} voice minutes left this month
+          {voiceMeter.sessionMaxMinutes != null ? ` · up to ${fmtMin(voiceMeter.sessionMaxMinutes)} min/session` : ''}.
+          {' '}Text Chat is always unlimited.
+        </p>
+      )}
+      {/* Voice cap reached (SAU-257) — graceful fallback, no hard paywall. */}
+      {capReached && (
+        <div className="notice voice-cap-notice" role="status">
+          <strong>You&apos;ve used your voice minutes this month.</strong>{' '}
+          {voiceMeter ? <>Your free allowance ({fmtMin(voiceMeter.capMinutes)} min) resets {new Date(voiceMeter.resetsAt).toLocaleDateString()}. </> : null}
+          Keep practicing in unlimited text Chat — or upgrade for more voice time.
+          <div className="voice-cap-actions">
+            <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>💬 Continue in Chat</button>
+            <a className="btn btn-secondary" href="/billing">Upgrade for more voice</a>
+          </div>
+        </div>
+      )}
       {error && <div className="notice" role="alert">Join failed: {error}</div>}
       {shareError && <div className="notice" role="alert">Share failed: {shareError}</div>}
       {shareInfo && (

@@ -995,6 +995,21 @@ td.warn { color: #d97706; font-weight: 600; }
   display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px;
   border: 1px solid var(--border-strong); border-radius: 999px; color: var(--muted); margin-right: 8px;
 }
+
+/* Voice-minutes hint + cap fallback on the detail surface (SAU-257) */
+.voice-minutes-hint { margin: 10px 0 0; font-size: 13px; }
+.voice-cap-notice { display: block; }
+.voice-cap-actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+
+/* Voice-minutes usage (SAU-257) */
+.settings-subhead { margin: 28px 0 6px; font-size: 15px; font-weight: 700; }
+.settings-meter-bar {
+  height: 8px; border-radius: 999px; background: var(--border); overflow: hidden; margin: 10px 0 4px;
+}
+.settings-meter-fill {
+  display: block; height: 100%; background: var(--accent, #06b6d4); border-radius: 999px;
+  transition: width .2s ease;
+}
 .settings-badge.connected, .settings-badge.pending { color: var(--accent-2); border-color: var(--accent); }
 
 .settings-status-card, .settings-pending-note {

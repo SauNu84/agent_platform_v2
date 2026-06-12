@@ -26,6 +26,7 @@ import {
   getAccountInfo,
 } from '@/services/settings';
 import { listOwnedKnowledgeBases } from '@/services/knowledge-base';
+import { getMeterState } from '@/services/meter';
 import LanguageSettings from '../LanguageSettings';
 import VoiceSettings from '../VoiceSettings';
 import IntegrationsSettings from '../IntegrationsSettings';
@@ -57,9 +58,14 @@ export default async function SettingsTabPage({ params }: { params: { tab: strin
 
 // ── Account ────────────────────────────────────────────────────────────────--
 async function AccountPanel(store: ReturnType<typeof getStore>, userId: string) {
-  const info = await getAccountInfo(store, userId);
+  const [info, meter] = await Promise.all([
+    getAccountInfo(store, userId),
+    getMeterState(store, userId),
+  ]);
   if (!info) return <p className="billing-muted">Account information is unavailable.</p>;
   const tierLabel = info.planTier.charAt(0).toUpperCase() + info.planTier.slice(1);
+  const fmtMin = (m: number) => (Number.isInteger(m) ? `${m}` : m.toFixed(1));
+  const usedPct = meter.capMinutes > 0 ? Math.min(100, Math.round((meter.usedMinutes / meter.capMinutes) * 100)) : 0;
   return (
     <div className="settings-section">
       <h2>Account Info</h2>
@@ -82,6 +88,25 @@ async function AccountPanel(store: ReturnType<typeof getStore>, userId: string) 
           <dt>Organizations</dt>
           <dd>{info.organizations.length ? info.organizations.join(', ') : 'No organizations'}</dd>
         </div>
+      </dl>
+
+      {/* Voice minutes (SAU-257) — the remaining-minutes read. Free tier gets a
+          monthly voice budget on the cheap engine; when it's spent, practice
+          continues in unlimited text Chat (no hard paywall). */}
+      <h3 className="settings-subhead">Voice minutes</h3>
+      <p className="billing-muted">
+        {meter.overCap
+          ? <>You&apos;ve used your <strong>{fmtMin(meter.capMinutes)}</strong> voice minutes this month. Keep practicing in <strong>text Chat</strong> (unlimited) or <a href="/billing">upgrade</a> for more voice time.</>
+          : <><strong>{fmtMin(meter.remainingMinutes)}</strong> of {fmtMin(meter.capMinutes)} voice minutes left this month.</>}
+      </p>
+      <div className="settings-meter-bar" aria-hidden="true">
+        <span className="settings-meter-fill" style={{ width: `${usedPct}%` }} />
+      </div>
+      <dl className="settings-facts">
+        <div><dt>Used this month</dt><dd>{fmtMin(meter.usedMinutes)} min</dd></div>
+        <div><dt>Monthly allowance</dt><dd>{fmtMin(meter.capMinutes)} min</dd></div>
+        <div><dt>Per-session limit</dt><dd>{meter.sessionMaxMinutes == null ? 'None' : `${fmtMin(meter.sessionMaxMinutes)} min`}</dd></div>
+        <div><dt>Resets</dt><dd>{fmtDate(meter.resetsAt)}</dd></div>
       </dl>
     </div>
   );
