@@ -13,7 +13,7 @@ import { Suspense, useEffect, useState, useId } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { buildRemixConfig } from '@/services/remix';
-import { AI_MODELS, DEFAULT_AI_MODEL, aiModelById, isModelSelectableForTier } from '@/lib/ai-models';
+import { AI_MODELS, DEFAULT_AI_MODEL, aiModelById } from '@/lib/ai-models';
 import { OPENAI_VOICES, DEFAULT_VOICE, isOpenAiVoice } from '@/lib/voices';
 
 interface RubricRow { topic: string; weight: number; note: string; }
@@ -220,13 +220,7 @@ function CreateScenarioForm() {
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled || !data?.meter?.tier) return;
-        const tier = data.meter.tier === 'paid' ? 'paid' : 'free';
-        setViewerTier(tier);
-        // A free author can't select the premium default — start them on the
-        // Recommended cost engine (Gemini). Don't clobber a remix's carried model.
-        if (tier === 'free' && !remixFrom) {
-          setAiModel((cur) => (isModelSelectableForTier(cur, 'free') ? cur : 'google-gemini'));
-        }
+        setViewerTier(data.meter.tier === 'paid' ? 'paid' : 'free');
       } catch { /* non-fatal — default free */ }
     })();
     return () => { cancelled = true; };
@@ -794,36 +788,26 @@ function CreateScenarioForm() {
           {/* AI Model (SAU-238 ask #6 → SAU-258 multi-vendor picker) */}
           <div className="form-group">
             <label htmlFor={`${uid}-model`} className="form-label">AI Model <span className="form-optional">(Optional)</span></label>
-            <p className="form-hint-block">The voice engine that powers this scenario. <strong>Google Gemini 2.5 Flash Live</strong> and <strong>OpenAI gpt-realtime</strong> are both live — pick for speed, cost, or quality. {viewerTier === 'free' ? <>Premium engines are <strong>paid plans only</strong>; on the free plan your scenarios run on a cost engine within your voice-minute cap.</> : <>You have <strong>full choice</strong> on your paid plan. Free viewers of your scenario are automatically routed to a cost engine.</>}</p>
+            <p className="form-hint-block">The voice provider that powers this scenario. Pick a vendor — <strong>Google Gemini 2.5 Flash Live</strong> (fastest, lowest cost) or <strong>OpenAI Realtime</strong> — and the viewer&apos;s plan sets the quality tier automatically (free → standard, paid → premium).</p>
             <select
               id={`${uid}-model`}
               className="form-input"
               value={aiModel}
               onChange={(e) => setAiModel(e.target.value)}
             >
-              {AI_MODELS.map((m) => {
-                const lockedForTier = m.available && !isModelSelectableForTier(m.id, viewerTier);
-                const suffix = !m.available
-                  ? ' — coming soon'
-                  : lockedForTier
-                    ? ' — Premium (upgrade to select)'
-                    : m.badge
-                      ? ` — ${m.badge}`
-                      : '';
-                return (
-                  <option key={m.id} value={m.id} disabled={!m.available || lockedForTier}>
-                    {m.label}{suffix}
-                  </option>
-                );
-              })}
+              {AI_MODELS.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.label}{m.badge ? ` — ${m.available ? m.badge : 'coming soon'}` : (!m.available ? ' — coming soon' : '')}
+                </option>
+              ))}
             </select>
-            {/* Speed/cost/quality hint for the selected engine + tier behaviour. */}
+            {/* Speed/cost/quality hint + tier note for the selected engine. */}
             {aiModelById(aiModel).hint && (
               <p className="form-hint-block" style={{ marginTop: 6, opacity: 0.85 }}>{aiModelById(aiModel).hint}</p>
             )}
-            {viewerTier === 'free' && aiModelById(aiModel).engineClass === 'premium' && (
+            {viewerTier === 'free' && aiModelById(aiModel).engineClass === 'tiered' && (
               <p className="form-hint-block" style={{ marginTop: 4, color: 'var(--accent, #0aa)' }}>
-                This is a premium engine. On the free plan it falls back to a cost engine — <a href="/billing">upgrade</a> to run it at full quality.
+                On the free plan this runs at standard quality — <a href="/billing">upgrade for premium quality</a>.
               </p>
             )}
           </div>

@@ -16,7 +16,6 @@ import {
   resolveVoiceTier, resolveVoiceEngine, resolveTierForUser, resolveSessionEngine,
   voiceKbCharBudget, tierMinuteBudget, DEFAULT_VOICE_KB_CHAR_BUDGET,
 } from '@/voice/engine-router';
-import { isModelSelectableForTier } from '@/lib/ai-models';
 import { KB_CONTEXT_CHAR_BUDGET } from '@/domain/scenario';
 
 const MD = `---
@@ -113,46 +112,45 @@ test('voiceUsageByTier aggregates blended usage by tier + engine', async () => {
   assert.ok((free?.totalTokens ?? 0) > 0);
 });
 
-// ── SAU-258: multi-model picker — selection + tier gating ────────────────────
+// ── SAU-258: multi-vendor picker — vendor choice + tiered OpenAI ─────────────
 
-test('resolveSessionEngine honors the scenario author choice for a paid viewer', () => {
+test('resolveSessionEngine honors the scenario author vendor choice for a paid viewer', () => {
   withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined, VOICE_ENGINE_GEMINI: undefined }, () => {
     const gem = resolveSessionEngine({ modelId: 'google-gemini', tier: 'paid' });
     assert.equal(gem.vendor, 'gemini');
     assert.equal(gem.model, 'gemini-2.5-flash-preview-native-audio-dialog');
+    assert.equal(gem.engineClass, 'cost');
     assert.equal(gem.downgraded, false);
 
-    const premium = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'paid' });
-    assert.equal(premium.vendor, 'openai');
-    assert.equal(premium.model, 'gpt-realtime');
-    assert.equal(premium.engineClass, 'premium');
-
-    const mini = resolveSessionEngine({ modelId: 'openai-realtime-mini', tier: 'paid' });
-    assert.equal(mini.model, 'gpt-realtime-mini');
-    assert.equal(mini.engineClass, 'cost');
+    // OpenAI Realtime is a single tiered vendor entry — paid → premium engine.
+    const oai = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'paid' });
+    assert.equal(oai.vendor, 'openai');
+    assert.equal(oai.model, 'gpt-realtime');
+    assert.equal(oai.engineClass, 'tiered');
+    assert.equal(oai.downgraded, false);
   });
 });
 
-test('tier gating: a free viewer of a PREMIUM scenario is downgraded to a same-vendor cost engine', () => {
+test('tiered OpenAI: a free viewer runs the standard engine (downgraded), never premium', () => {
   withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
-    const downgraded = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'free' });
-    assert.equal(downgraded.downgraded, true);
-    assert.equal(downgraded.modelId, 'openai-realtime-mini');
-    assert.equal(downgraded.model, 'gpt-realtime-mini');
-    assert.equal(downgraded.vendor, 'openai');
-    // A free viewer of a Gemini (cost) scenario keeps Gemini — no downgrade.
+    const free = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'free' });
+    assert.equal(free.downgraded, true);          // free runs standard, not premium
+    assert.equal(free.modelId, 'openai-realtime'); // single vendor entry, no separate mini row
+    assert.equal(free.model, 'gpt-realtime-mini');
+    assert.equal(free.vendor, 'openai');
+    // Gemini is one cost engine on every plan — no tiering.
     const gem = resolveSessionEngine({ modelId: 'google-gemini', tier: 'free' });
     assert.equal(gem.downgraded, false);
     assert.equal(gem.vendor, 'gemini');
   });
 });
 
-test('unknown / not-yet-runnable engine falls back to the default (then tier-gated)', () => {
+test('unknown / not-yet-runnable engine falls back to the default (then tiered by plan)', () => {
   withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
-    // 'anthropic-claude' is available:false → default openai-realtime → free downgrade to mini.
+    // 'anthropic-claude' is available:false → default openai-realtime → free standard engine.
     const soon = resolveSessionEngine({ modelId: 'anthropic-claude', tier: 'free' });
     assert.equal(soon.model, 'gpt-realtime-mini');
-    // bogus id → default → paid keeps the premium engine.
+    // bogus id → default → paid gets the premium engine.
     const bogus = resolveSessionEngine({ modelId: 'nope', tier: 'paid' });
     assert.equal(bogus.model, 'gpt-realtime');
   });
@@ -162,14 +160,6 @@ test('Gemini engine id is config-driven (VOICE_ENGINE_GEMINI overridable)', () =
   withEnv({ VOICE_ENGINE_GEMINI: 'gemini-live-x' }, () => {
     assert.equal(resolveSessionEngine({ modelId: 'google-gemini', tier: 'paid' }).model, 'gemini-live-x');
   });
-});
-
-test('isModelSelectableForTier: premium is paid-only, cost engines are open to all', () => {
-  assert.equal(isModelSelectableForTier('google-gemini', 'free'), true);
-  assert.equal(isModelSelectableForTier('openai-realtime-mini', 'free'), true);
-  assert.equal(isModelSelectableForTier('openai-realtime', 'free'), false); // premium → locked for free
-  assert.equal(isModelSelectableForTier('openai-realtime', 'paid'), true);
-  assert.equal(isModelSelectableForTier('anthropic-claude', 'paid'), false); // not yet available
 });
 
 test('per-engine metering: a Gemini-selected session records the gemini engine (mock fail-soft, no key)', async () => {
@@ -187,13 +177,13 @@ test('per-engine metering: a Gemini-selected session records the gemini engine (
   });
 });
 
-test('free viewer of a premium scenario is metered on the downgraded cost engine', async () => {
+test('free viewer of the tiered OpenAI engine is metered on the standard cost engine', async () => {
   const store = new MemoryStore();
   const { scenario } = await createScenarioFromMarkdown(store, MD);
   await withEnvAsync({ VOICE_ENGINE_FREE: undefined }, async () => {
     const result = await runVoiceSession({ store, scenario, vendor: 'mock', tier: 'free', modelId: 'openai-realtime', userId: 'f1' });
     const usage = await store.getVoiceUsage(result.sessionId);
-    assert.equal(usage!.engine, 'gpt-realtime-mini'); // downgraded, never billed at premium
+    assert.equal(usage!.engine, 'gpt-realtime-mini'); // standard, never billed at premium
   });
 });
 

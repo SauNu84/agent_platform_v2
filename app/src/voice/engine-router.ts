@@ -23,7 +23,7 @@
  */
 import type { Store } from '@/db/store';
 import {
-  AI_MODELS, DEFAULT_AI_MODEL, aiModelById, type AiModelOption, type EngineClass, type VoiceVendor,
+  DEFAULT_AI_MODEL, aiModelById, type AiModelOption, type EngineClass, type VoiceVendor,
 } from '@/lib/ai-models';
 
 export type VoiceTier = 'free' | 'paid';
@@ -41,11 +41,11 @@ export interface VoiceEngine {
   model: string;
   /** which adapter behind the seam serves this engine */
   vendor: VoiceVendor;
-  /** cost vs premium (drives tier gating) */
+  /** cost (one engine for all) vs tiered (free→standard, paid→premium) */
   engineClass: EngineClass;
   /** human label for logs/observability + UI */
   label: string;
-  /** true when tier gating downgraded the requested engine (premium → cost for free) */
+  /** true when a free viewer of a TIERED engine runs the standard (not premium) engine */
   downgraded: boolean;
 }
 
@@ -57,30 +57,23 @@ const DEFAULT_PAID_ENGINE = 'gpt-realtime';
 const DEFAULT_GEMINI_ENGINE = 'gemini-2.5-flash-preview-native-audio-dialog';
 
 /**
- * Resolve the concrete realtime model id an option maps to, from config (env),
- * never hard-coded at a call site. Each vendor/class has its own override so a
+ * Resolve the concrete realtime model id an option maps to for a tier, from config
+ * (env), never hard-coded at a call site. Each lever has its own override so a
  * deployment can point an engine at a different model without new code:
- *   - OpenAI cost (mini)  → VOICE_ENGINE_FREE
- *   - OpenAI premium      → VOICE_ENGINE_PAID (or legacy OPENAI_REALTIME_MODEL)
- *   - Gemini Flash Live   → VOICE_ENGINE_GEMINI
+ *   - OpenAI free (standard) → VOICE_ENGINE_FREE   (default gpt-realtime-mini)
+ *   - OpenAI paid (premium)  → VOICE_ENGINE_PAID    (or legacy OPENAI_REALTIME_MODEL)
+ *   - Gemini Flash Live      → VOICE_ENGINE_GEMINI
+ * Gemini is the same cheap engine on every plan; OpenAI Realtime is tiered.
  */
-function concreteModelFor(opt: AiModelOption): string {
+function concreteModelFor(opt: AiModelOption, tier: VoiceTier): string {
   if (opt.vendor === 'gemini') return process.env.VOICE_ENGINE_GEMINI || DEFAULT_GEMINI_ENGINE;
   if (opt.vendor === 'openai') {
-    return opt.engineClass === 'premium'
-      ? process.env.VOICE_ENGINE_PAID || process.env.OPENAI_REALTIME_MODEL || DEFAULT_PAID_ENGINE
-      : process.env.VOICE_ENGINE_FREE || DEFAULT_FREE_ENGINE;
+    return tier === 'free'
+      ? process.env.VOICE_ENGINE_FREE || DEFAULT_FREE_ENGINE
+      : process.env.VOICE_ENGINE_PAID || process.env.OPENAI_REALTIME_MODEL || DEFAULT_PAID_ENGINE;
   }
   // Unknown vendor (e.g. a future provider not yet runnable) → safest cost engine.
   return process.env.VOICE_ENGINE_FREE || DEFAULT_FREE_ENGINE;
-}
-
-/** The cost-tier fallback engine for a vendor (free downgrade target). */
-function freeFallbackFor(vendor: VoiceVendor): AiModelOption {
-  const sameVendorCost = AI_MODELS.find((m) => m.available && m.vendor === vendor && m.engineClass === 'cost');
-  if (sameVendorCost) return sameVendorCost;
-  // No same-vendor cost engine → the cheapest globally-available cost engine.
-  return AI_MODELS.find((m) => m.available && m.engineClass === 'cost') ?? aiModelById(DEFAULT_AI_MODEL);
 }
 
 /** Map the billing plan_tier → a voice tier. Unknown/absent ⇒ free (safe default). */
@@ -100,11 +93,12 @@ export async function resolveTierForUser(store: Store, userId: string | null): P
 
 /**
  * SAU-258 — resolve the engine for a session from the scenario's chosen model id
- * (author default, persisted in metadata._model) AND the viewer's tier, enforcing
- * tier gating:
+ * (author default = a VENDOR, persisted in metadata._model) AND the viewer's tier.
+ * The picker offers a vendor; the plan sets the quality tier automatically:
  *   - an unknown / not-yet-runnable id falls back to the default engine;
- *   - a PREMIUM engine requested by a FREE viewer is transparently downgraded to a
- *     same-vendor cost engine (never billed at the premium rate, never a hard fail).
+ *   - a `cost` engine (Gemini) runs the same model on every plan;
+ *   - a `tiered` engine (OpenAI Realtime) runs the standard model for free viewers
+ *     and the premium model for paid — the free viewer is never billed at premium.
  * This is the single place selection + entitlement are reconciled.
  */
 export function resolveSessionEngine(opts: { modelId?: string | null; tier: VoiceTier }): VoiceEngine {
@@ -112,28 +106,23 @@ export function resolveSessionEngine(opts: { modelId?: string | null; tier: Voic
   let opt = aiModelById(opts.modelId ?? undefined);
   // Not-yet-wired engine (e.g. "coming soon") → default runnable engine.
   if (!opt.available) opt = aiModelById(DEFAULT_AI_MODEL);
-  let downgraded = false;
-  // Tier gating (CPO policy): free → cost engines only; paid → full choice.
-  if (opt.engineClass === 'premium' && tier === 'free') {
-    opt = freeFallbackFor(opt.vendor);
-    downgraded = true;
-  }
   return {
     tier,
     modelId: opt.id,
-    model: concreteModelFor(opt),
+    model: concreteModelFor(opt, tier),
     vendor: opt.vendor,
     engineClass: opt.engineClass,
     label: opt.label,
-    downgraded,
+    // A free viewer of a tiered engine runs the standard (not premium) engine.
+    downgraded: opt.engineClass === 'tiered' && tier === 'free',
   };
 }
 
 /**
  * The config-driven engine for a voice tier when no scenario model is specified.
  * Backward-compatible with SAU-256: resolves the default scenario engine
- * (`openai-realtime`, premium) for the tier — free downgrades to gpt-realtime-mini,
- * paid gets gpt-realtime — so existing single-engine callers are unchanged.
+ * (`openai-realtime`, tiered) for the tier — free runs gpt-realtime-mini, paid
+ * gets gpt-realtime — so existing single-engine callers are unchanged.
  */
 export function resolveVoiceEngine(tier: VoiceTier): VoiceEngine {
   return resolveSessionEngine({ modelId: DEFAULT_AI_MODEL, tier });

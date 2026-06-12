@@ -25,12 +25,17 @@ export type ModelBadge = 'Recommended' | 'New' | 'Soon';
 export type VoiceVendor = 'openai' | 'gemini' | 'anthropic';
 
 /**
- * Cost class drives tier gating: `cost` engines are free-tier eligible (cheap),
- * `premium` engines require a paid plan (the "Super" engine). A free viewer of a
- * scenario whose default is a premium engine is transparently downgraded to a
- * same-vendor cost engine by the router — never billed at the premium rate.
+ * Engine class describes how an engine maps to plan tiers (the picker offers a
+ * VENDOR; the viewer's plan sets the quality tier automatically — CPO decision on
+ * SAU-258):
+ *   - `cost`   — one cheap engine on every plan (e.g. Gemini Flash Live).
+ *   - `tiered` — free → standard engine, paid → premium engine, SAME vendor
+ *                (OpenAI Realtime: free → gpt-realtime-mini, paid → gpt-realtime).
+ * There is no separately-selectable premium row to "lock"; free-tier protection is
+ * the router's automatic downgrade (a free viewer of a tiered engine runs the
+ * standard engine and is never billed at the premium rate).
  */
-export type EngineClass = 'cost' | 'premium';
+export type EngineClass = 'cost' | 'tiered';
 
 export interface AiModelOption {
   /** stable id stored in scenario metadata._model and resolved by the router */
@@ -64,23 +69,15 @@ export const AI_MODELS: AiModelOption[] = [
     engineClass: 'cost',
     available: true,
     badge: 'Recommended',
-    hint: 'Fastest, lowest cost — about ⅓ the price of gpt-realtime. Great for high-volume practice. Available on every plan.',
-  },
-  {
-    id: 'openai-realtime-mini',
-    label: 'OpenAI gpt-realtime mini',
-    vendor: 'openai',
-    engineClass: 'cost',
-    available: true,
-    hint: 'Low cost, strong quality. The default engine for the free tier. Available on every plan.',
+    hint: 'Fastest, lowest cost — about ⅓ the price of OpenAI Realtime. Great for high-volume practice. Available on every plan.',
   },
   {
     id: 'openai-realtime',
-    label: 'OpenAI gpt-realtime (Premium)',
+    label: 'OpenAI Realtime',
     vendor: 'openai',
-    engineClass: 'premium',
+    engineClass: 'tiered',
     available: true,
-    hint: 'Highest-quality OpenAI voice. Paid plans only — free viewers run on gpt-realtime-mini.',
+    hint: 'Tiered by plan: free runs standard quality, paid unlocks premium (gpt-realtime).',
     note: OPENAI_REALTIME_TIER_NOTE,
   },
   {
@@ -95,9 +92,9 @@ export const AI_MODELS: AiModelOption[] = [
 
 /**
  * Default scenario engine. Kept as `openai-realtime` for backward compatibility
- * with scenarios authored before SAU-258 (it stays the premium OpenAI engine, so
- * paid viewers still get gpt-realtime and free viewers are auto-downgraded to
- * gpt-realtime-mini — exactly the pre-existing SAU-256 tiered behaviour).
+ * with scenarios authored before SAU-258 and consistency with the single
+ * "OpenAI Realtime (tiered)" entry the board accepted in SAU-256 — free viewers
+ * run the standard engine, paid get the premium one (the router handles tiering).
  */
 export const DEFAULT_AI_MODEL = 'openai-realtime';
 
@@ -114,17 +111,4 @@ export function aiModelLabel(id?: string): string {
 /** True when the id names a currently-runnable engine. */
 export function isAvailableModel(id?: string): boolean {
   return !!AI_MODELS.find((x) => x.id === id)?.available;
-}
-
-/**
- * Whether a tier may SELECT this engine directly (authoring-time gating). Premium
- * engines are paid-only; cost engines are available on every plan. Unknown ids
- * resolve to the default option. (Runtime never hard-fails a free viewer of a
- * premium scenario — the router downgrades — but the picker should not let a free
- * author pick an engine their own sessions can't run at full quality.)
- */
-export function isModelSelectableForTier(id: string | undefined, tier: 'free' | 'paid'): boolean {
-  const opt = AI_MODELS.find((x) => x.id === id);
-  if (!opt || !opt.available) return false;
-  return tier === 'paid' || opt.engineClass === 'cost';
 }
