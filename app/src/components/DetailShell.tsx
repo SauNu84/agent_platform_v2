@@ -14,7 +14,7 @@ import remarkGfm from 'remark-gfm';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
 import LiveDemo from './LiveDemo';
-import { aiModelLabel } from '@/lib/ai-models';
+import { aiModelLabel, OPENAI_REALTIME_TIER_NOTE } from '@/lib/ai-models';
 
 /** Subset of the SAU-257 voice meter the detail surface renders. */
 interface VoiceMeter {
@@ -415,7 +415,7 @@ export default function DetailShell(props: DetailShellProps) {
                   <div style={{ display: 'contents' }}><dt>Visibility</dt><dd>{props.isPublic ? 'Public' : 'Private'}</dd></div>
                   {role && <div style={{ display: 'contents' }}><dt>Role</dt><dd>{role}</dd></div>}
                   {difficulty && <div style={{ display: 'contents' }}><dt>Difficulty</dt><dd>{difficulty}</dd></div>}
-                  {aiModel && <div style={{ display: 'contents' }}><dt>AI model</dt><dd>{aiModel}</dd></div>}
+                  {aiModel && <div style={{ display: 'contents' }}><dt>AI model</dt><dd>{aiModel}<span className="setup-hint"> — {OPENAI_REALTIME_TIER_NOTE}</span></dd></div>}
                   <div style={{ display: 'contents' }}><dt>Voice</dt><dd>{props.voice.name} ({props.voice.languageCode})</dd></div>
                   {Object.entries(props.metadata)
                     .filter(([k]) => !k.startsWith('_') && k !== 'role' && k !== 'difficulty')

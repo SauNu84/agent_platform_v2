@@ -768,7 +768,7 @@ function CreateScenarioForm() {
           {/* AI Model (SAU-238 ask #6) — OpenAI today; registry-extensible */}
           <div className="form-group">
             <label htmlFor={`${uid}-model`} className="form-label">AI Model <span className="form-optional">(Optional)</span></label>
-            <p className="form-hint-block">Which model powers this scenario. We run on <strong>OpenAI</strong> today; more providers are coming.</p>
+            <p className="form-hint-block">Which provider powers this scenario. We run on <strong>OpenAI Realtime</strong> today; more providers are coming. The exact engine is chosen automatically by the viewer&apos;s plan — <strong>free → gpt-realtime-mini</strong>, <strong>paid → gpt-realtime</strong> — so cost scales with tier.</p>
             <select
               id={`${uid}-model`}
               className="form-input"
@@ -781,6 +781,9 @@ function CreateScenarioForm() {
                 </option>
               ))}
             </select>
+            {AI_MODELS.find((m) => m.id === aiModel)?.note && (
+              <p className="form-hint-block" style={{ marginTop: 6, opacity: 0.85 }}>{AI_MODELS.find((m) => m.id === aiModel)!.note}</p>
+            )}
           </div>
 
           {/* Additional Context for AI (SAU-238 ask #7) — grounding folded into the prompt */}
