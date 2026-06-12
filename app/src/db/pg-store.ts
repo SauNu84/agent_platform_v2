@@ -19,7 +19,7 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  AuditEvent, AuthSessionRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -146,6 +146,19 @@ function rowToMemory(r: Row): CoachMemoryRecord {
 
 function rowToShareLink(r: Row): ShareLinkRecord {
   return { code: r.code, scenarioId: r.scenario_id, createdAt: new Date(r.created_at).toISOString() };
+}
+
+function rowToCheckout(r: Row): CheckoutRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    planId: r.plan_id,
+    billingCycle: r.billing_cycle,
+    provider: r.provider,
+    amountCents: Number(r.amount_cents),
+    status: r.status,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
 }
 
 function rowToKnowledgeBase(r: Row): KnowledgeBaseRecord {
@@ -624,19 +637,57 @@ export class PgStore implements Store {
     const { rows } = await this.q('SELECT * FROM user_entitlement WHERE user_id = $1', [userId]);
     if (!rows[0]) return null;
     const r = rows[0];
-    return { userId: r.user_id, plan: r.plan, freeMinutes: Number(r.free_minutes), paidMinutes: Number(r.paid_minutes) };
+    return {
+      userId: r.user_id,
+      plan: r.plan,
+      freeMinutes: Number(r.free_minutes),
+      paidMinutes: Number(r.paid_minutes),
+      planTier: r.plan_tier ?? 'free',
+    };
   }
 
   async upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord> {
     await this.q(
-      `INSERT INTO user_entitlement (user_id, plan, free_minutes, paid_minutes)
-       VALUES ($1,$2,$3,$4)
+      `INSERT INTO user_entitlement (user_id, plan, free_minutes, paid_minutes, plan_tier)
+       VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (user_id) DO UPDATE SET
          plan = EXCLUDED.plan, free_minutes = EXCLUDED.free_minutes,
-         paid_minutes = EXCLUDED.paid_minutes, updated_at = now()`,
-      [rec.userId, rec.plan, rec.freeMinutes, rec.paidMinutes],
+         paid_minutes = EXCLUDED.paid_minutes, plan_tier = EXCLUDED.plan_tier,
+         updated_at = now()`,
+      [rec.userId, rec.plan, rec.freeMinutes, rec.paidMinutes, rec.planTier ?? 'free'],
     );
     return rec;
+  }
+
+  // ── Billing checkout (SAU-250) ──────────────────────────────────────────────
+  async createCheckout(rec: CheckoutRecord): Promise<CheckoutRecord> {
+    await this.q(
+      `INSERT INTO billing_checkout (id, user_id, plan_id, billing_cycle, provider, amount_cents, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [rec.id, rec.userId, rec.planId, rec.billingCycle, rec.provider, rec.amountCents, rec.status, rec.createdAt],
+    );
+    return rec;
+  }
+
+  async getCheckout(id: string): Promise<CheckoutRecord | null> {
+    const { rows } = await this.q('SELECT * FROM billing_checkout WHERE id = $1', [id]);
+    return rows[0] ? rowToCheckout(rows[0]) : null;
+  }
+
+  async setCheckoutStatus(id: string, status: 'completed' | 'canceled'): Promise<CheckoutRecord | null> {
+    const { rows } = await this.q(
+      `UPDATE billing_checkout SET status = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+      [id, status],
+    );
+    return rows[0] ? rowToCheckout(rows[0]) : null;
+  }
+
+  async listCheckouts(userId: string): Promise<CheckoutRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM billing_checkout WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId],
+    );
+    return rows.map(rowToCheckout);
   }
   // ── Coach CRUD ──────────────────────────────────────────────────────────────
   async listCoaches(): Promise<CoachRecord[]> {

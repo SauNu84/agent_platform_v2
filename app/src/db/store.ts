@@ -160,6 +160,20 @@ export interface EntitlementRecord {
   plan: 'free' | 'paid';
   freeMinutes: number;
   paidMinutes: number;
+  /** Named subscription tier for the Billing UI (SAU-250). Defaults to 'free'. */
+  planTier?: 'free' | 'standard' | 'premium';
+}
+
+/** A checkout intent — the hand-off to an external payment provider (SAU-250). */
+export interface CheckoutRecord {
+  id: string;
+  userId: string;
+  planId: string;
+  billingCycle: 'monthly' | 'annual';
+  provider: string;
+  amountCents: number;
+  status: 'pending' | 'completed' | 'canceled';
+  createdAt: string;
 }
 
 /** A shareable short link mapping a URL-safe code → scenario (SAU-225). */
@@ -356,6 +370,14 @@ export interface Store {
   sumVoiceMinutesByUser(userId: string): Promise<number>;
   getEntitlement(userId: string): Promise<EntitlementRecord | null>;
   upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord>;
+
+  // ── Billing checkout (SAU-250): provider hand-off intent ──────────────────────
+  createCheckout(rec: CheckoutRecord): Promise<CheckoutRecord>;
+  getCheckout(id: string): Promise<CheckoutRecord | null>;
+  /** Mark a checkout completed/canceled. Idempotent on the terminal state. */
+  setCheckoutStatus(id: string, status: 'completed' | 'canceled'): Promise<CheckoutRecord | null>;
+  /** A user's recent checkout intents, newest first (Billing "Purchases" table). */
+  listCheckouts(userId: string): Promise<CheckoutRecord[]>;
   // ── Coach memory (ADR-004): per-(coach,user), RLS-scoped in Postgres ────────
   writeCoachMemory(rec: NewCoachMemory): Promise<CoachMemoryRecord>;
   /** All non-expired memories for (coach,user), recency desc. Ranking is app-layer. */

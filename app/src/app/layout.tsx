@@ -60,7 +60,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 </li>
               ))}
             </ul>
-            <div className="balance">Balance · {balance}</div>
+            {/* Bottom group — account/billing, mirrors the reference left rail (SAU-250). */}
+            <ul className="side-nav-bottom">
+              <li>
+                <Link href="/billing">Billing</Link>
+              </li>
+            </ul>
+            <Link href="/billing" className="balance">Balance · {balance}</Link>
           </nav>
           <main className="content">
             <TopBar

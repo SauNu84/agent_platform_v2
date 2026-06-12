@@ -9,7 +9,7 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  AuditEvent, AuthSessionRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -37,6 +37,7 @@ export class MemoryStore implements Store {
   private usage = new Map<string, VoiceUsageRecord>();        // by sessionId
   private analyses = new Map<string, AnalysisRecord>();       // by sessionId
   private entitlements = new Map<string, EntitlementRecord>(); // by userId
+  private checkouts = new Map<string, CheckoutRecord>();       // by id (SAU-250)
   // ── Slice 3 ──
   private coaches = new Map<string, CoachRecord>();           // by slug
   private coachIdToSlug = new Map<string, string>();
@@ -567,6 +568,30 @@ export class MemoryStore implements Store {
   async upsertEntitlement(rec: EntitlementRecord): Promise<EntitlementRecord> {
     this.entitlements.set(rec.userId, rec);
     return rec;
+  }
+
+  // ── Billing checkout (SAU-250) ──────────────────────────────────────────────
+  async createCheckout(rec: CheckoutRecord): Promise<CheckoutRecord> {
+    this.checkouts.set(rec.id, rec);
+    return rec;
+  }
+
+  async getCheckout(id: string): Promise<CheckoutRecord | null> {
+    return this.checkouts.get(id) ?? null;
+  }
+
+  async setCheckoutStatus(id: string, status: 'completed' | 'canceled'): Promise<CheckoutRecord | null> {
+    const rec = this.checkouts.get(id);
+    if (!rec) return null;
+    const next = { ...rec, status };
+    this.checkouts.set(id, next);
+    return next;
+  }
+
+  async listCheckouts(userId: string): Promise<CheckoutRecord[]> {
+    return [...this.checkouts.values()]
+      .filter((c) => c.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   // ── Coach memory (ADR-004) — (coach,user)-scoped in-memory analogue of RLS ──
