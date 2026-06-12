@@ -41,11 +41,14 @@ const NAV_GROUPS: {
     ],
   },
   {
-    // Resources — first-party help content. Documentation ships first (SAU-251);
-    // Developer Tools is a planned sibling, intentionally NOT linked yet so we
-    // never surface a dead destination (design rule, SAU-216).
+    // Resources — first-party help content. Documentation (SAU-251) sits beside
+    // Developer Tools (SAU-252), which the board asked to live under Documentation
+    // rather than in the Billing footer.
     heading: 'Resources',
-    items: [{ href: '/docs', label: 'Documentation', icon: '📖' }],
+    items: [
+      { href: '/docs', label: 'Documentation', icon: '📖' },
+      { href: '/developer-tools', label: 'Developer Tools', icon: '🧰' },
+    ],
   },
   {
     heading: 'Admin',
@@ -111,13 +114,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 <li>
                   <Link href="/billing">
                     <span className="side-nav-ico" aria-hidden="true">💳</span> Billing
-                  </Link>
-                </li>
-                {/* Developer Tools sits directly under Billing per the board ask
-                    (SAU-252): API keys, webhooks, and the API reference. */}
-                <li>
-                  <Link href="/developer-tools">
-                    <span className="side-nav-ico" aria-hidden="true">🧰</span> Developer Tools
                   </Link>
                 </li>
               </ul>
