@@ -9,6 +9,10 @@ import {
   getVoiceProfile,
   saveVoiceProfile,
   deleteVoiceProfile,
+  getGeminiLiveKeyView,
+  getGeminiLiveKeyRaw,
+  saveGeminiLiveKey,
+  deleteGeminiLiveKey,
   listIntegrations,
   configureIntegration,
   disconnectIntegration,
@@ -64,6 +68,40 @@ test('AC: an empty voice name is rejected; a removed profile reverts to none', a
   await saveVoiceProfile(store, USER, 'Voice A');
   await deleteVoiceProfile(store, USER);
   assert.equal((await getVoiceProfile(store, USER)).status, 'none');
+});
+
+// ── Live-voice (Gemini) API key (SAU-259) ──────────────────────────────────────
+test('AC: no Gemini key configured by default; raw read is null', async () => {
+  const store = new MemoryStore();
+  const view = await getGeminiLiveKeyView(store, USER);
+  assert.equal(view.configured, false);
+  assert.equal(view.last4, null);
+  assert.equal(await getGeminiLiveKeyRaw(store, USER), null);
+});
+
+test('AC: saving a Gemini key stores it server-side; view is masked to last 4', async () => {
+  const store = new MemoryStore();
+  const key = 'AIzaSyExampleKey0123456789ABCDEF';
+  const view = await saveGeminiLiveKey(store, USER, `  ${key}  `);
+  assert.equal(view.configured, true);
+  assert.equal(view.last4, key.slice(-4));
+  // raw read returns the trimmed key (server-only); own-scoped
+  assert.equal(await getGeminiLiveKeyRaw(store, USER), key);
+  assert.equal(await getGeminiLiveKeyRaw(store, OTHER), null);
+});
+
+test('AC: an obviously-invalid Gemini key is rejected; removal clears it', async () => {
+  const store = new MemoryStore();
+  await assert.rejects(() => saveGeminiLiveKey(store, USER, 'short'), SettingsError);
+  await saveGeminiLiveKey(store, USER, 'AIzaSyExampleKey0123456789ABCDEF');
+  await deleteGeminiLiveKey(store, USER);
+  assert.equal((await getGeminiLiveKeyView(store, USER)).configured, false);
+  assert.equal(await getGeminiLiveKeyRaw(store, USER), null);
+});
+
+test('getGeminiLiveKeyRaw with an empty userId is null (never leaks across no-actor)', async () => {
+  const store = new MemoryStore();
+  assert.equal(await getGeminiLiveKeyRaw(store, ''), null);
 });
 
 // ── Integrations ───────────────────────────────────────────────────────────--

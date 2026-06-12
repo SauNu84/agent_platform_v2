@@ -22,6 +22,7 @@ import {
   SUPPORTED_LANGUAGES,
   getPreferredLanguage,
   getVoiceProfile,
+  getGeminiLiveKeyView,
   listIntegrations,
   getAccountInfo,
 } from '@/services/settings';
@@ -183,8 +184,14 @@ async function KnowledgeBasesPanel(store: ReturnType<typeof getStore>, userId: s
 
 // ── My Voice ───────────────────────────────────────────────────────────────--
 async function VoicePanel(store: ReturnType<typeof getStore>, userId: string) {
-  const profile = await getVoiceProfile(store, userId);
-  return <VoiceSettings initial={profile} />;
+  const [profile, geminiKey] = await Promise.all([
+    getVoiceProfile(store, userId),
+    getGeminiLiveKeyView(store, userId),
+  ]);
+  // The env key (app/.env.local) wins over a stored one; surface that so the
+  // board knows a Settings key is moot when env is already provisioned.
+  const envKeyPresent = Boolean(process.env.GEMINI_API_KEY);
+  return <VoiceSettings initial={profile} geminiKey={geminiKey} envKeyPresent={envKeyPresent} />;
 }
 
 // ── Integrations ─────────────────────────────────────────────────────────────

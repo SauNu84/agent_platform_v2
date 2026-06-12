@@ -13,9 +13,16 @@
  *                        and MCP tools (persisted; live execution is a follow-up).
  *
  * Language / My Voice / Integrations all persist through the generic per-user
- * key/value `user_setting` table (migration 0012). No secrets/PII are stored —
- * values are small config blobs. Everything is scoped to the authenticated
- * actor's userId at the application layer (same model as billing/dev-tools).
+ * key/value `user_setting` table (migration 0012). Values are small config blobs
+ * scoped to the authenticated actor's userId at the application layer (same model
+ * as billing/dev-tools).
+ *
+ * ONE exception stores a secret: the live-voice (Gemini) API key (SAU-259), so
+ * the board can self-provision the key from Settings → My Voice without editing
+ * env files ("Check the setting"). It is POC-grade: the raw key is read ONLY
+ * server-side (the realtime token route, which mints an ephemeral browser token —
+ * the key never reaches the client) and is NEVER echoed back to any client (only
+ * a masked last-4 view). Production should move this to env / a secret manager.
  */
 import type { Store, UserSettingRecord } from '@/db/store';
 
@@ -31,6 +38,7 @@ export class SettingsError extends Error {
 // ── Setting keys ─────────────────────────────────────────────────────────────
 const KEY_LANGUAGE = 'preferred_language';
 const KEY_VOICE = 'voice_profile';
+const KEY_GEMINI_LIVE_KEY = 'voice_gemini_live_key';
 const integrationKey = (id: string) => `integration:${id}`;
 
 // ── Language ───────────────────────────────────────────────────────────────--
@@ -98,6 +106,54 @@ export async function saveVoiceProfile(store: Store, userId: string, rawName: st
 
 export async function deleteVoiceProfile(store: Store, userId: string): Promise<void> {
   await store.deleteUserSetting(userId, KEY_VOICE);
+}
+
+// ── Live-voice (Gemini) API key (SAU-259) ────────────────────────────────────
+// Self-service provisioning of the Gemini Live key from Settings → My Voice, so
+// the board can "check the setting" and drop in a key without touching env files.
+// The raw key is read ONLY server-side (realtime token route); clients only ever
+// see the masked view below. POC-grade — see file header.
+
+/** Masked, client-safe view of the configured live-voice key (never the raw key). */
+export interface GeminiLiveKeyView {
+  configured: boolean;
+  /** Last 4 chars for confirmation ("…last4"); null when not configured. */
+  last4: string | null;
+  updatedAt: string | null;
+}
+
+const NO_GEMINI_KEY: GeminiLiveKeyView = { configured: false, last4: null, updatedAt: null };
+
+export async function getGeminiLiveKeyView(store: Store, userId: string): Promise<GeminiLiveKeyView> {
+  const rec = await store.getUserSetting(userId, KEY_GEMINI_LIVE_KEY);
+  const key = typeof rec?.value?.key === 'string' ? (rec!.value.key as string) : '';
+  if (!key) return NO_GEMINI_KEY;
+  return { configured: true, last4: key.slice(-4), updatedAt: rec!.updatedAt };
+}
+
+/**
+ * The raw key for server-side use only (the realtime token route). Returns null
+ * when the user hasn't configured one. NEVER return this to a client.
+ */
+export async function getGeminiLiveKeyRaw(store: Store, userId: string): Promise<string | null> {
+  if (!userId) return null;
+  const rec = await store.getUserSetting(userId, KEY_GEMINI_LIVE_KEY);
+  const key = typeof rec?.value?.key === 'string' ? (rec.value.key as string).trim() : '';
+  return key || null;
+}
+
+export async function saveGeminiLiveKey(store: Store, userId: string, rawKey: string): Promise<GeminiLiveKeyView> {
+  const key = rawKey.trim();
+  // Google API keys look like `AIza…` (~39 chars). Be forgiving on exact length
+  // but reject obvious junk so we never store a non-key.
+  if (key.length < 20) throw new SettingsError('That does not look like a valid Gemini API key.');
+  if (key.length > 200) throw new SettingsError('Gemini API key is too long.');
+  const rec = await store.putUserSetting(userId, KEY_GEMINI_LIVE_KEY, { key });
+  return { configured: true, last4: key.slice(-4), updatedAt: rec.updatedAt };
+}
+
+export async function deleteGeminiLiveKey(store: Store, userId: string): Promise<void> {
+  await store.deleteUserSetting(userId, KEY_GEMINI_LIVE_KEY);
 }
 
 // ── Integrations ───────────────────────────────────────────────────────────--

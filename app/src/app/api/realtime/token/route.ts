@@ -23,6 +23,7 @@ import { toCompiledScenario } from '@/domain/scenario';
 import { resolveOpenAiVoice } from '@/lib/voices';
 import { getActor } from '@/services/current-user';
 import { resolveTierForUser, resolveSessionEngine, voiceKbCharBudget } from '@/voice/engine-router';
+import { getGeminiLiveKeyRaw } from '@/services/settings';
 import {
   geminiAuthTokenUrl, geminiAuthTokenBody, geminiLiveWsUrl, resolveGeminiVoice, geminiSetupFrame,
   GEMINI_INPUT_SAMPLE_RATE, GEMINI_OUTPUT_SAMPLE_RATE,
@@ -54,12 +55,14 @@ export async function POST(req: NextRequest) {
   // reaches the client); the browser opens its own BidiGenerateContent WebSocket
   // with `?access_token=<token>`. No key ⇒ 501 → graceful mock fallback (unchanged).
   if (engine.vendor === 'gemini') {
-    const geminiKey = process.env.GEMINI_API_KEY;
+    // Resolve the key from env first (board's app/.env.local pattern), then fall
+    // back to the key the board self-provisioned in Settings → My Voice (SAU-259).
+    const geminiKey = process.env.GEMINI_API_KEY ?? (await getGeminiLiveKeyRaw(getStore(), actor?.userId ?? ''));
     if (!geminiKey) {
       return NextResponse.json(
         {
-          error: `GEMINI_API_KEY not configured — live ${engine.label} is blocked on credential ` +
-            'provisioning (CPO). Falling back to the simulated session.',
+          error: `GEMINI_API_KEY not configured — add a Gemini key in Settings → My Voice ` +
+            `(or app/.env.local) to run live ${engine.label}. Falling back to the simulated session.`,
           vendor: 'gemini',
           model,
           tier,
