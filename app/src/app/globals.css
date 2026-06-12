@@ -782,3 +782,102 @@ td.warn { color: #d97706; font-weight: 600; }
   .billing-cards { grid-template-columns: 1fr; }
   .billing-plan-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Documentation (SAU-251 — Resources › Documentation) ─────────────────────
+   A two-column reading layout: a sticky in-page sidebar listing every section +
+   article, and the article/landing content column. Reuses the `.brief` Markdown
+   typography (SAU-246) and the `.card`/`.grid`/`.subtitle` primitives. */
+.docs-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+.docs-sidebar {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  border-right: 1px solid var(--border);
+  padding-right: 20px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+.docs-side-home {
+  display: block;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+.docs-side-home:hover { text-decoration: none; background: var(--panel-2); }
+.docs-side-home.active { background: var(--panel-2); }
+.docs-side-group { margin-bottom: 18px; }
+.docs-side-heading {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 6px 8px;
+}
+.docs-sidebar ul { list-style: none; margin: 0; padding: 0; }
+.docs-sidebar li { margin: 1px 0; }
+.docs-sidebar li a {
+  display: block;
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 5px 8px;
+  border-radius: 6px;
+  line-height: 1.35;
+}
+.docs-sidebar li a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+.docs-sidebar li a.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-left: 2px solid var(--accent);
+  font-weight: 600;
+}
+.docs-content { min-width: 0; max-width: 760px; }
+.docs-hero h1 { margin-bottom: 4px; }
+.docs-home-section { margin-top: 28px; }
+.docs-home-section h2 { font-family: var(--mono); font-size: 16px; margin: 0 0 12px; }
+.docs-breadcrumb { font-size: 13px; color: var(--muted); margin-bottom: 16px; font-family: var(--mono); }
+.docs-breadcrumb a { color: var(--muted); }
+.docs-breadcrumb a:hover { color: var(--text); }
+.docs-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 36px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.docs-pager-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 48%;
+}
+.docs-pager-link:hover { border-color: var(--accent); text-decoration: none; }
+.docs-pager-link.next { text-align: right; margin-left: auto; }
+.docs-pager-dir { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+.docs-pager-title { font-size: 14px; color: var(--text); font-weight: 600; }
+
+@media (max-width: 860px) {
+  .docs-shell { grid-template-columns: 1fr; }
+  .docs-sidebar {
+    position: static;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 16px;
+    margin-bottom: 8px;
+  }
+}

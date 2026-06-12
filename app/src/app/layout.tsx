@@ -41,6 +41,13 @@ const NAV_GROUPS: {
     ],
   },
   {
+    // Resources — first-party help content. Documentation ships first (SAU-251);
+    // Developer Tools is a planned sibling, intentionally NOT linked yet so we
+    // never surface a dead destination (design rule, SAU-216).
+    heading: 'Resources',
+    items: [{ href: '/docs', label: 'Documentation', icon: '📖' }],
+  },
+  {
     heading: 'Admin',
     adminOnly: true,
     items: [{ href: '/admin', label: 'Admin', icon: '🛡' }],
