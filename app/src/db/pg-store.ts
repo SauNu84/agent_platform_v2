@@ -19,12 +19,12 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
-  UserRecord, VoiceUsageRecord,
+  UserRecord, VoiceUsageRecord, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { getActorContext } from '@/auth/actor';
@@ -157,6 +157,31 @@ function rowToCheckout(r: Row): CheckoutRecord {
     provider: r.provider,
     amountCents: Number(r.amount_cents),
     status: r.status,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+function rowToApiKey(r: Row): ApiKeyRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    name: r.name,
+    keyPrefix: r.key_prefix,
+    keyHash: r.key_hash,
+    lastUsedAt: r.last_used_at ? new Date(r.last_used_at).toISOString() : null,
+    revokedAt: r.revoked_at ? new Date(r.revoked_at).toISOString() : null,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+function rowToWebhook(r: Row): WebhookRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    url: r.url,
+    secret: r.secret,
+    events: Array.isArray(r.events) ? r.events : [],
+    enabled: Boolean(r.enabled),
     createdAt: new Date(r.created_at).toISOString(),
   };
 }
@@ -688,6 +713,58 @@ export class PgStore implements Store {
       [userId],
     );
     return rows.map(rowToCheckout);
+  }
+
+  // ── Developer Tools (SAU-252) — per-user API keys + webhooks ─────────────────
+  async createApiKey(rec: ApiKeyRecord): Promise<ApiKeyRecord> {
+    await this.q(
+      `INSERT INTO api_key (id, user_id, name, key_prefix, key_hash, last_used_at, revoked_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [rec.id, rec.userId, rec.name, rec.keyPrefix, rec.keyHash, rec.lastUsedAt, rec.revokedAt, rec.createdAt],
+    );
+    return rec;
+  }
+
+  async listApiKeys(userId: string): Promise<ApiKeyRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM api_key WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId],
+    );
+    return rows.map(rowToApiKey);
+  }
+
+  async revokeApiKey(userId: string, id: string): Promise<ApiKeyRecord | null> {
+    const { rows } = await this.q(
+      `UPDATE api_key SET revoked_at = COALESCE(revoked_at, now())
+       WHERE id = $1 AND user_id = $2 RETURNING *`,
+      [id, userId],
+    );
+    return rows[0] ? rowToApiKey(rows[0]) : null;
+  }
+
+  async createWebhook(rec: WebhookRecord): Promise<WebhookRecord> {
+    await this.q(
+      `INSERT INTO webhook_endpoint (id, user_id, url, secret, events, enabled, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [rec.id, rec.userId, rec.url, rec.secret, rec.events, rec.enabled, rec.createdAt],
+    );
+    return rec;
+  }
+
+  async listWebhooks(userId: string): Promise<WebhookRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM webhook_endpoint WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId],
+    );
+    return rows.map(rowToWebhook);
+  }
+
+  async deleteWebhook(userId: string, id: string): Promise<boolean> {
+    const { rowCount } = await this.q(
+      'DELETE FROM webhook_endpoint WHERE id = $1 AND user_id = $2',
+      [id, userId],
+    );
+    return (rowCount ?? 0) > 0;
   }
   // ── Coach CRUD ──────────────────────────────────────────────────────────────
   async listCoaches(): Promise<CoachRecord[]> {

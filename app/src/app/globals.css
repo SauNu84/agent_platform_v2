@@ -881,3 +881,75 @@ td.warn { color: #d97706; font-weight: 600; }
     margin-bottom: 8px;
   }
 }
+
+/* ── Developer Tools (SAU-252) ──────────────────────────────────────────── */
+.devtools { max-width: 920px; }
+.devtools .subtitle { color: var(--muted); margin: 2px 0 8px; }
+.devtools-section { margin-top: 28px; }
+
+.btn-secondary {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 14px; font-size: 13.5px; font-family: var(--mono);
+  cursor: pointer; transition: border-color 0.15s ease;
+}
+.btn-secondary:hover { border-color: var(--accent); }
+.btn-remove-text {
+  background: none; border: none; color: var(--muted); font-size: 13.5px;
+  cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+.btn-remove-text:hover { color: #ef4444; }
+
+.devtools-input {
+  flex: 1; min-width: 220px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-size: 14px;
+}
+.devtools-input:focus { outline: none; border-color: var(--accent); }
+
+.devtools-create-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+
+.devtools-reveal {
+  margin-top: 14px; padding: 14px 16px; border: 1px solid var(--accent);
+  background: var(--accent-soft); border-radius: 10px;
+}
+.devtools-reveal-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.devtools-secret { font-family: var(--mono); font-size: 13.5px; word-break: break-all; flex: 1; }
+
+.devtools-table td code { font-family: var(--mono); font-size: 13px; }
+.devtools-revoked td { opacity: 0.5; }
+.devtools-badge {
+  display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px; color: var(--muted); margin: 2px 4px 2px 0;
+}
+.devtools-badge.revoked { color: #b91c1c; border-color: #fca5a5; }
+
+.devtools-hook-form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; align-items: flex-start; }
+.devtools-events { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; width: 100%; box-sizing: border-box; }
+.devtools-events legend { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); padding: 0 6px; }
+.devtools-event { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; font-size: 13.5px; }
+.devtools-event code { font-family: var(--mono); }
+
+.devtools-hook-list { list-style: none; padding: 0; margin: 14px 0 0; display: flex; flex-direction: column; gap: 10px; }
+.devtools-hook { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.devtools-hook-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.devtools-hook-url { font-family: var(--mono); font-size: 13.5px; word-break: break-all; }
+.devtools-hook-meta { margin-top: 6px; }
+.devtools-hook-secret { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.devtools-hook-secret code { font-family: var(--mono); word-break: break-all; }
+
+.devtools-reference { margin-top: 36px; }
+.devtools-ref-group { margin-top: 20px; }
+.devtools-ref-group h3 { font-size: 15.5px; margin: 0 0 2px; }
+.devtools-ref-list { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.devtools-ref-endpoint { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.devtools-ref-sig { display: flex; gap: 10px; align-items: center; }
+.devtools-method { font-family: var(--mono); font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; color: #fff; }
+.devtools-method.get { background: #0891b2; }
+.devtools-method.post { background: #16a34a; }
+.devtools-method.delete { background: #dc2626; }
+.devtools-path { font-family: var(--mono); font-size: 14px; }
+.devtools-ref-summary { color: var(--muted); font-size: 13.5px; margin: 8px 0; }
+.devtools-ref-example {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; overflow-x: auto; font-size: 12.5px; margin: 0;
+}
+.devtools-ref-example code { font-family: var(--mono); }

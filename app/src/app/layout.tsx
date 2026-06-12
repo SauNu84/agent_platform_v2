@@ -113,6 +113,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                     <span className="side-nav-ico" aria-hidden="true">💳</span> Billing
                   </Link>
                 </li>
+                {/* Developer Tools sits directly under Billing per the board ask
+                    (SAU-252): API keys, webhooks, and the API reference. */}
+                <li>
+                  <Link href="/developer-tools">
+                    <span className="side-nav-ico" aria-hidden="true">🧰</span> Developer Tools
+                  </Link>
+                </li>
               </ul>
             </div>
           </nav>

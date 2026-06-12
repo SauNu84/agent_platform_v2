@@ -183,6 +183,34 @@ export interface ShareLinkRecord {
   createdAt: string;
 }
 
+// ── Developer Tools (SAU-252): programmatic access keys + webhooks ───────────
+/** A minted API key. The full secret is returned ONCE at creation, never stored. */
+export interface ApiKeyRecord {
+  id: string;
+  userId: string;
+  name: string;
+  /** Non-secret display stub, e.g. "ak_live_8fA2c1…". */
+  keyPrefix: string;
+  /** SHA-256 of the full key (the secret itself is never persisted). */
+  keyHash: string;
+  lastUsedAt: string | null;
+  /** null = active; set = revoked (soft delete). */
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+/** A registered webhook endpoint that receives event callbacks. */
+export interface WebhookRecord {
+  id: string;
+  userId: string;
+  url: string;
+  /** Signing secret (whsec_…) shown to the user to verify callback authenticity. */
+  secret: string;
+  events: string[];
+  enabled: boolean;
+  createdAt: string;
+}
+
 // ── Coach memory (ADR-004) ─────────────────────────────────────────────────
 export type MemoryKind = 'summary' | 'fact' | 'preference' | 'goal';
 
@@ -378,6 +406,19 @@ export interface Store {
   setCheckoutStatus(id: string, status: 'completed' | 'canceled'): Promise<CheckoutRecord | null>;
   /** A user's recent checkout intents, newest first (Billing "Purchases" table). */
   listCheckouts(userId: string): Promise<CheckoutRecord[]>;
+
+  // ── Developer Tools (SAU-252): API keys + webhook endpoints, per-user ─────────
+  createApiKey(rec: ApiKeyRecord): Promise<ApiKeyRecord>;
+  /** A user's API keys, newest first (revoked keys included, flagged via revokedAt). */
+  listApiKeys(userId: string): Promise<ApiKeyRecord[]>;
+  /** Soft-revoke a key the user owns. Returns null if not found / not theirs. */
+  revokeApiKey(userId: string, id: string): Promise<ApiKeyRecord | null>;
+  createWebhook(rec: WebhookRecord): Promise<WebhookRecord>;
+  /** A user's webhook endpoints, newest first. */
+  listWebhooks(userId: string): Promise<WebhookRecord[]>;
+  /** Delete a webhook the user owns. Returns false if not found / not theirs. */
+  deleteWebhook(userId: string, id: string): Promise<boolean>;
+
   // ── Coach memory (ADR-004): per-(coach,user), RLS-scoped in Postgres ────────
   writeCoachMemory(rec: NewCoachMemory): Promise<CoachMemoryRecord>;
   /** All non-expired memories for (coach,user), recency desc. Ranking is app-layer. */

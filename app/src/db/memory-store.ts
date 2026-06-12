@@ -9,12 +9,12 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
-  UserRecord, VoiceUsageRecord,
+  UserRecord, VoiceUsageRecord, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { ROLE_CAPABILITIES } from '@/auth/rbac';
@@ -38,6 +38,8 @@ export class MemoryStore implements Store {
   private analyses = new Map<string, AnalysisRecord>();       // by sessionId
   private entitlements = new Map<string, EntitlementRecord>(); // by userId
   private checkouts = new Map<string, CheckoutRecord>();       // by id (SAU-250)
+  private apiKeys = new Map<string, ApiKeyRecord>();           // by id (SAU-252)
+  private webhooks = new Map<string, WebhookRecord>();         // by id (SAU-252)
   // ── Slice 3 ──
   private coaches = new Map<string, CoachRecord>();           // by slug
   private coachIdToSlug = new Map<string, string>();
@@ -592,6 +594,43 @@ export class MemoryStore implements Store {
     return [...this.checkouts.values()]
       .filter((c) => c.userId === userId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  // ── Developer Tools (SAU-252) — per-user API keys + webhooks ─────────────────
+  async createApiKey(rec: ApiKeyRecord): Promise<ApiKeyRecord> {
+    this.apiKeys.set(rec.id, rec);
+    return rec;
+  }
+
+  async listApiKeys(userId: string): Promise<ApiKeyRecord[]> {
+    return [...this.apiKeys.values()]
+      .filter((k) => k.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async revokeApiKey(userId: string, id: string): Promise<ApiKeyRecord | null> {
+    const rec = this.apiKeys.get(id);
+    if (!rec || rec.userId !== userId) return null;
+    const next = { ...rec, revokedAt: rec.revokedAt ?? nowIso() };
+    this.apiKeys.set(id, next);
+    return next;
+  }
+
+  async createWebhook(rec: WebhookRecord): Promise<WebhookRecord> {
+    this.webhooks.set(rec.id, rec);
+    return rec;
+  }
+
+  async listWebhooks(userId: string): Promise<WebhookRecord[]> {
+    return [...this.webhooks.values()]
+      .filter((w) => w.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async deleteWebhook(userId: string, id: string): Promise<boolean> {
+    const rec = this.webhooks.get(id);
+    if (!rec || rec.userId !== userId) return false;
+    return this.webhooks.delete(id);
   }
 
   // ── Coach memory (ADR-004) — (coach,user)-scoped in-memory analogue of RLS ──
