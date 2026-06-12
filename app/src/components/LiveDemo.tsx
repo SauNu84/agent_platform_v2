@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from './Avatar';
 import type { SessionSummary } from './DetailShell';
+import { GeminiLiveSession, type GeminiLiveToken } from '@/lib/gemini-live-client';
 
 type Turn = SessionSummary['turns'][number];
 type Phase = 'verify' | 'live';
@@ -72,9 +73,13 @@ export default function LiveDemo({
   const rafRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Real live voice (browser WebRTC → OpenAI Realtime) — set when a vendor key is present.
+  // Real live voice — set when a vendor key is present. OpenAI uses WebRTC (pc/dc);
+  // Gemini uses its own WebSocket transport (geminiRef). `liveVendorRef` records
+  // which one actually ran so teardown + persistence target the right transport.
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
+  const geminiRef = useRef<GeminiLiveSession | null>(null);
+  const liveVendorRef = useRef<'openai' | 'gemini' | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const liveTurnsRef = useRef<Turn[]>([]);
   const liveStartedAtRef = useRef<number>(0);
@@ -87,6 +92,8 @@ export default function LiveDemo({
     dcRef.current = null;
     try { pcRef.current?.close(); } catch { /* noop */ }
     pcRef.current = null;
+    try { geminiRef.current?.stop(); } catch { /* noop */ }
+    geminiRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
@@ -151,15 +158,20 @@ export default function LiveDemo({
   async function endSession() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (revealRef.current) clearTimeout(revealRef.current);
-    // Real live session: tear down WebRTC and persist the captured transcript so it
-    // shows under Sessions and gets metered (same client-driven path as the bench).
-    const livePc = pcRef.current;
-    if (livePc) {
+    // Real live session: tear down the transport (OpenAI WebRTC or Gemini WS) and
+    // persist the captured transcript so it shows under Sessions and gets metered on
+    // the right engine (same client-driven path as the bench). `vendor` flows through
+    // so per-engine metering attributes gemini vs gpt-realtime/-mini correctly.
+    const liveVendor = liveVendorRef.current;
+    if (liveVendor) {
       const turnsToSave = liveTurnsRef.current;
       try { dcRef.current?.close(); } catch { /* noop */ }
-      try { livePc.close(); } catch { /* noop */ }
+      try { pcRef.current?.close(); } catch { /* noop */ }
+      try { geminiRef.current?.stop(); } catch { /* noop */ }
       dcRef.current = null;
       pcRef.current = null;
+      geminiRef.current = null;
+      liveVendorRef.current = null;
       if (turnsToSave.length) {
         const startedAt = liveStartedAtRef.current || Date.now();
         const endedAt = Date.now();
@@ -168,7 +180,7 @@ export default function LiveDemo({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              vendor: 'openai',
+              vendor: liveVendor,
               transcript: { sessionId: `live-${slug}-${startedAt}`, turns: turnsToSave, toolCalls: [], startedAt, endedAt },
             }),
           });
@@ -200,6 +212,7 @@ export default function LiveDemo({
   // session config + event names (src/voice/adapters/openai.ts).
   async function startLive(tok: { clientSecret: string; model: string; scenario?: { instructions?: string; voice?: unknown } }) {
     setVendor('openai');
+    liveVendorRef.current = 'openai';
     liveTurnsRef.current = [];
     liveStartedAtRef.current = Date.now();
     // OpenAI's `voice` must be a plain string; coerce defensively (the route already
@@ -277,6 +290,32 @@ export default function LiveDemo({
     setConnected(true); // open-ended call — user talks, ends with "End session"
   }
 
+  // Real live voice — Gemini Live (SAU-259): browser WebSocket ↔ Gemini via an
+  // ephemeral auth token (the GEMINI_API_KEY never reaches the browser). Mirrors the
+  // OpenAI path above but over the BidiGenerateContent WS transport; finalized
+  // transcript turns stream into the same buffer and persist as a 'gemini' session.
+  async function startGeminiLive(tok: GeminiLiveToken) {
+    setVendor('gemini');
+    liveVendorRef.current = 'gemini';
+    liveTurnsRef.current = [];
+    liveStartedAtRef.current = Date.now();
+    const stream = streamRef.current ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
+    streamRef.current = stream;
+    const session = new GeminiLiveSession(tok, stream, {
+      onUserTurn: (t) => appendLiveTurn({ role: 'user', text: t.text, at: t.at }),
+      onAgentTurn: (t) => appendLiveTurn({ role: 'agent', text: t.text, at: t.at }),
+      onOpen: () => setConnected(true),
+      onError: (msg) => setError((prev) => prev ?? msg),
+      onClose: () => {
+        if (geminiRef.current === session) {
+          setError((prev) => prev ?? 'Live connection closed — your transcript is saved on End session.');
+        }
+      },
+    });
+    geminiRef.current = session;
+    session.start(); // open-ended call — user talks, ends with "End session"
+  }
+
   // Simulated fallback: run the server session (mock vendor) and reveal turns
   // progressively so the right-hand transcript reads like a live conversation.
   async function startSimulated() {
@@ -338,7 +377,9 @@ export default function LiveDemo({
       }
       const tok = await tokenRes.json();
       if (!tokenRes.ok) throw new Error(tok.error ?? `token mint failed (${tokenRes.status})`);
-      await startLive(tok);
+      // Route the right browser transport for the resolved engine's vendor.
+      if (tok.vendor === 'gemini') await startGeminiLive(tok);
+      else await startLive(tok);
     } catch (e) {
       setError((e as Error).message);
       setRunning(false);
@@ -429,9 +470,9 @@ export default function LiveDemo({
             )}
             {running && !connected && <span className="ld-listening">● Connecting…</span>}
             {running && connected && (
-              <span className="ld-listening">{vendor === 'openai' ? '● Live — speak now' : '● Listening…'}</span>
+              <span className="ld-listening">{vendor === 'mock' ? '● Listening…' : '● Live — speak now'}</span>
             )}
-            {(finished || (running && connected && vendor === 'openai')) && (
+            {(finished || (running && connected && vendor !== 'mock')) && (
               <button className="btn ld-end" onClick={endSession}>End session</button>
             )}
           </div>
