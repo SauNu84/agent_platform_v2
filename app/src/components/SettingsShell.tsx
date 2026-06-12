@@ -21,6 +21,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   { id: 'memory', label: 'Memory', icon: '🧠' },
   { id: 'knowledge-bases', label: 'Knowledge Bases', icon: '📚' },
   { id: 'my-voice', label: 'My Voice', icon: '🎙' },
+  { id: 'ai-model', label: 'AI Model', icon: '🤖' },
   { id: 'integrations', label: 'Integrations', icon: '🔌' },
 ];
 

@@ -22,7 +22,7 @@ import {
   SUPPORTED_LANGUAGES,
   getPreferredLanguage,
   getVoiceProfile,
-  getGeminiLiveKeyView,
+  listModelApiKeys,
   listIntegrations,
   getAccountInfo,
 } from '@/services/settings';
@@ -30,6 +30,7 @@ import { listOwnedKnowledgeBases } from '@/services/knowledge-base';
 import { getMeterState } from '@/services/meter';
 import LanguageSettings from '../LanguageSettings';
 import VoiceSettings from '../VoiceSettings';
+import ModelKeysSettings from '../ModelKeysSettings';
 import IntegrationsSettings from '../IntegrationsSettings';
 import KnowledgeBaseSettings from '../KnowledgeBaseSettings';
 
@@ -52,6 +53,7 @@ export default async function SettingsTabPage({ params }: { params: { tab: strin
       {tab === 'memory' && (await MemoryPanel(store, actor.userId))}
       {tab === 'knowledge-bases' && (await KnowledgeBasesPanel(store, actor.userId, actor.isAdmin))}
       {tab === 'my-voice' && (await VoicePanel(store, actor.userId))}
+      {tab === 'ai-model' && (await ModelKeysPanel(store, actor.userId))}
       {tab === 'integrations' && (await IntegrationsPanel(store, actor.userId))}
     </SettingsShell>
   );
@@ -184,14 +186,14 @@ async function KnowledgeBasesPanel(store: ReturnType<typeof getStore>, userId: s
 
 // ── My Voice ───────────────────────────────────────────────────────────────--
 async function VoicePanel(store: ReturnType<typeof getStore>, userId: string) {
-  const [profile, geminiKey] = await Promise.all([
-    getVoiceProfile(store, userId),
-    getGeminiLiveKeyView(store, userId),
-  ]);
-  // The env key (app/.env.local) wins over a stored one; surface that so the
-  // board knows a Settings key is moot when env is already provisioned.
-  const envKeyPresent = Boolean(process.env.GEMINI_API_KEY);
-  return <VoiceSettings initial={profile} geminiKey={geminiKey} envKeyPresent={envKeyPresent} />;
+  const profile = await getVoiceProfile(store, userId);
+  return <VoiceSettings initial={profile} />;
+}
+
+// ── AI Model (provider API keys) ───────────────────────────────────────────--
+async function ModelKeysPanel(store: ReturnType<typeof getStore>, userId: string) {
+  const keys = await listModelApiKeys(store, userId);
+  return <ModelKeysSettings initial={keys} />;
 }
 
 // ── Integrations ─────────────────────────────────────────────────────────────

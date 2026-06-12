@@ -23,7 +23,7 @@ import { toCompiledScenario } from '@/domain/scenario';
 import { resolveOpenAiVoice } from '@/lib/voices';
 import { getActor } from '@/services/current-user';
 import { resolveTierForUser, resolveSessionEngine, voiceKbCharBudget } from '@/voice/engine-router';
-import { getGeminiLiveKeyRaw } from '@/services/settings';
+import { getModelApiKeyRaw } from '@/services/settings';
 import {
   geminiAuthTokenUrl, geminiAuthTokenBody, geminiLiveWsUrl, resolveGeminiVoice, geminiSetupFrame,
   GEMINI_INPUT_SAMPLE_RATE, GEMINI_OUTPUT_SAMPLE_RATE,
@@ -56,12 +56,12 @@ export async function POST(req: NextRequest) {
   // with `?access_token=<token>`. No key ⇒ 501 → graceful mock fallback (unchanged).
   if (engine.vendor === 'gemini') {
     // Resolve the key from env first (board's app/.env.local pattern), then fall
-    // back to the key the board self-provisioned in Settings → My Voice (SAU-259).
-    const geminiKey = process.env.GEMINI_API_KEY ?? (await getGeminiLiveKeyRaw(getStore(), actor?.userId ?? ''));
+    // back to the key the board self-provisioned in Settings → AI Model (SAU-259).
+    const geminiKey = process.env.GEMINI_API_KEY ?? (await getModelApiKeyRaw(getStore(), actor?.userId ?? '', 'gemini'));
     if (!geminiKey) {
       return NextResponse.json(
         {
-          error: `GEMINI_API_KEY not configured — add a Gemini key in Settings → My Voice ` +
+          error: `GEMINI_API_KEY not configured — add a Gemini key in Settings → AI Model ` +
             `(or app/.env.local) to run live ${engine.label}. Falling back to the simulated session.`,
           vendor: 'gemini',
           model,
@@ -96,10 +96,15 @@ export async function POST(req: NextRequest) {
   }
 
   // ── OpenAI Realtime browser transport (WebRTC) ─────────────────────────────
-  const apiKey = process.env.OPENAI_API_KEY;
+  // env first, then the key self-provisioned in Settings → AI Model (SAU-259).
+  const apiKey = process.env.OPENAI_API_KEY ?? (await getModelApiKeyRaw(getStore(), actor?.userId ?? '', 'openai'));
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'OPENAI_API_KEY not configured. Use the server-driven Join (mock vendor) for dev/demo.', vendor: 'openai' },
+      {
+        error: 'OPENAI_API_KEY not configured — add an OpenAI key in Settings → AI Model (or app/.env.local). ' +
+          'Use the server-driven Join (mock vendor) for dev/demo.',
+        vendor: 'openai',
+      },
       { status: 501 },
     );
   }

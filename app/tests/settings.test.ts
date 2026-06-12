@@ -9,10 +9,10 @@ import {
   getVoiceProfile,
   saveVoiceProfile,
   deleteVoiceProfile,
-  getGeminiLiveKeyView,
-  getGeminiLiveKeyRaw,
-  saveGeminiLiveKey,
-  deleteGeminiLiveKey,
+  listModelApiKeys,
+  getModelApiKeyRaw,
+  saveModelApiKey,
+  deleteModelApiKey,
   listIntegrations,
   configureIntegration,
   disconnectIntegration,
@@ -70,38 +70,63 @@ test('AC: an empty voice name is rejected; a removed profile reverts to none', a
   assert.equal((await getVoiceProfile(store, USER)).status, 'none');
 });
 
-// ── Live-voice (Gemini) API key (SAU-259) ──────────────────────────────────────
-test('AC: no Gemini key configured by default; raw read is null', async () => {
+// ── Scenario AI Model API keys (SAU-259) ────────────────────────────────────────
+const okValidator = async () => ({ status: 'valid' as const });
+const GEMINI_KEY = 'AIzaSyExampleKey0123456789ABCDEF';
+const OPENAI_KEY = 'sk-proj-ExampleKey0123456789ABCDEF';
+
+test('AC: no model keys configured by default; raw reads are null', async () => {
   const store = new MemoryStore();
-  const view = await getGeminiLiveKeyView(store, USER);
-  assert.equal(view.configured, false);
-  assert.equal(view.last4, null);
-  assert.equal(await getGeminiLiveKeyRaw(store, USER), null);
+  const views = await listModelApiKeys(store, USER);
+  assert.deepEqual(views.map((v) => v.provider).sort(), ['gemini', 'openai']);
+  assert.ok(views.every((v) => v.configured === false && v.last4 === null));
+  assert.equal(await getModelApiKeyRaw(store, USER, 'gemini'), null);
+  assert.equal(await getModelApiKeyRaw(store, USER, 'openai'), null);
 });
 
-test('AC: saving a Gemini key stores it server-side; view is masked to last 4', async () => {
+test('AC: saving a validated key stores it server-side, masked to last 4, own-scoped', async () => {
   const store = new MemoryStore();
-  const key = 'AIzaSyExampleKey0123456789ABCDEF';
-  const view = await saveGeminiLiveKey(store, USER, `  ${key}  `);
+  const { view, validation } = await saveModelApiKey(store, USER, 'gemini', `  ${GEMINI_KEY}  `, okValidator);
   assert.equal(view.configured, true);
-  assert.equal(view.last4, key.slice(-4));
-  // raw read returns the trimmed key (server-only); own-scoped
-  assert.equal(await getGeminiLiveKeyRaw(store, USER), key);
-  assert.equal(await getGeminiLiveKeyRaw(store, OTHER), null);
+  assert.equal(view.last4, GEMINI_KEY.slice(-4));
+  assert.equal(validation.status, 'valid');
+  assert.equal(await getModelApiKeyRaw(store, USER, 'gemini'), GEMINI_KEY); // trimmed, server-only
+  assert.equal(await getModelApiKeyRaw(store, OTHER, 'gemini'), null);
+  // both providers are independent slots
+  await saveModelApiKey(store, USER, 'openai', OPENAI_KEY, okValidator);
+  assert.equal(await getModelApiKeyRaw(store, USER, 'openai'), OPENAI_KEY);
 });
 
-test('AC: an obviously-invalid Gemini key is rejected; removal clears it', async () => {
+test('AC: a provider-rejected key is NOT stored; an obviously-invalid key is rejected by format', async () => {
   const store = new MemoryStore();
-  await assert.rejects(() => saveGeminiLiveKey(store, USER, 'short'), SettingsError);
-  await saveGeminiLiveKey(store, USER, 'AIzaSyExampleKey0123456789ABCDEF');
-  await deleteGeminiLiveKey(store, USER);
-  assert.equal((await getGeminiLiveKeyView(store, USER)).configured, false);
-  assert.equal(await getGeminiLiveKeyRaw(store, USER), null);
+  const rejectValidator = async () => ({ status: 'invalid' as const, message: 'bad key' });
+  await assert.rejects(() => saveModelApiKey(store, USER, 'gemini', GEMINI_KEY, rejectValidator), SettingsError);
+  assert.equal(await getModelApiKeyRaw(store, USER, 'gemini'), null); // not stored
+  await assert.rejects(() => saveModelApiKey(store, USER, 'gemini', 'short', okValidator), SettingsError);
+  await assert.rejects(() => saveModelApiKey(store, USER, 'bogus', GEMINI_KEY, okValidator), SettingsError);
 });
 
-test('getGeminiLiveKeyRaw with an empty userId is null (never leaks across no-actor)', async () => {
+test('a key that could not be validated (unreachable) is still saved, with a warning', async () => {
   const store = new MemoryStore();
-  assert.equal(await getGeminiLiveKeyRaw(store, ''), null);
+  const unreachable = async () => ({ status: 'unreachable' as const, message: 'offline' });
+  const { view, validation } = await saveModelApiKey(store, USER, 'openai', OPENAI_KEY, unreachable);
+  assert.equal(view.configured, true);
+  assert.equal(validation.status, 'unreachable');
+  assert.equal(await getModelApiKeyRaw(store, USER, 'openai'), OPENAI_KEY);
+});
+
+test('removing a key clears it; gemini falls back to the legacy slot then is fully cleared', async () => {
+  const store = new MemoryStore();
+  // legacy single-purpose Gemini slot is still readable for back-compat
+  await store.putUserSetting(USER, 'voice_gemini_live_key', { key: GEMINI_KEY });
+  assert.equal(await getModelApiKeyRaw(store, USER, 'gemini'), GEMINI_KEY);
+  await deleteModelApiKey(store, USER, 'gemini'); // clears both new + legacy slots
+  assert.equal(await getModelApiKeyRaw(store, USER, 'gemini'), null);
+});
+
+test('getModelApiKeyRaw with an empty userId is null (never leaks across no-actor)', async () => {
+  const store = new MemoryStore();
+  assert.equal(await getModelApiKeyRaw(store, '', 'gemini'), null);
 });
 
 // ── Integrations ───────────────────────────────────────────────────────────--
