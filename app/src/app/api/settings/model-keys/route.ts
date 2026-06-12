@@ -6,17 +6,20 @@
  * Raw keys are stored server-side and read ONLY by the realtime token route to
  * mint an ephemeral browser token; they are NEVER returned to a client. Responses
  * carry only the masked view (configured + last4) plus the validation result.
- * Own-scoped by userId.
+ *
+ * ADMIN-ONLY (board, SAU-259): provider keys are platform credentials, so both
+ * verbs require the admin role (403 otherwise). The AI Model settings tab is
+ * likewise hidden + 404'd for non-admins.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
-import { actorOr401 } from '@/auth/api-guard';
+import { adminOr403 } from '@/auth/api-guard';
 import { saveModelApiKey, deleteModelApiKey, SettingsError } from '@/services/settings';
 
 export const dynamic = 'force-dynamic';
 
 export async function PUT(req: NextRequest) {
-  const gate = await actorOr401();
+  const gate = await adminOr403();
   if ('response' in gate) return gate.response;
   try {
     const body = await req.json().catch(() => ({}));
@@ -34,7 +37,7 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const gate = await actorOr401();
+  const gate = await adminOr403();
   if ('response' in gate) return gate.response;
   try {
     const body = await req.json().catch(() => ({}));

@@ -19,6 +19,16 @@ export async function actorOr401(): Promise<Gate> {
   return { actor };
 }
 
+/** Require an authenticated actor with the admin role (403 otherwise). */
+export async function adminOr403(): Promise<Gate> {
+  const gate = await actorOr401();
+  if ('response' in gate) return gate;
+  if (!gate.actor.isAdmin) {
+    return { response: NextResponse.json({ error: 'admin role required' }, { status: 403 }) };
+  }
+  return gate;
+}
+
 /** Require an authenticated actor holding `cap` (admin holds all). */
 export async function actorWithCapability(cap: Capability): Promise<Gate> {
   const gate = await actorOr401();

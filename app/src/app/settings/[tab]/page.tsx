@@ -41,13 +41,13 @@ const fmtDate = (iso: string) =>
 
 export default async function SettingsTabPage({ params }: { params: { tab: string } }) {
   const { tab } = params;
-  if (!isSettingsTab(tab)) notFound();
-
   const store = getStore();
   const actor = await requirePageActor();
+  // Unknown tabs 404; admin-only tabs (AI Model) 404 for non-admins (board, SAU-259).
+  if (!isSettingsTab(tab, actor.isAdmin)) notFound();
 
   return (
-    <SettingsShell active={tab}>
+    <SettingsShell active={tab} isAdmin={actor.isAdmin}>
       {tab === 'account' && (await AccountPanel(store, actor.userId))}
       {tab === 'language' && (await LanguagePanel(store, actor.userId))}
       {tab === 'memory' && (await MemoryPanel(store, actor.userId))}

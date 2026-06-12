@@ -11,6 +11,8 @@ export interface SettingsTab {
   id: string;
   label: string;
   icon: string;
+  /** When true, the tab is only shown/accessible to admins (board, SAU-259). */
+  adminOnly?: boolean;
 }
 
 // Order mirrors the board's reference (Account → Language → Memory → Knowledge
@@ -21,21 +23,30 @@ export const SETTINGS_TABS: SettingsTab[] = [
   { id: 'memory', label: 'Memory', icon: '🧠' },
   { id: 'knowledge-bases', label: 'Knowledge Bases', icon: '📚' },
   { id: 'my-voice', label: 'My Voice', icon: '🎙' },
-  { id: 'ai-model', label: 'AI Model', icon: '🤖' },
+  { id: 'ai-model', label: 'AI Model', icon: '🤖', adminOnly: true },
   { id: 'integrations', label: 'Integrations', icon: '🔌' },
 ];
 
-export function isSettingsTab(id: string): boolean {
-  return SETTINGS_TABS.some((t) => t.id === id);
+/** Tabs visible to the given viewer (admin-only tabs are hidden for non-admins). */
+export function visibleSettingsTabs(isAdmin: boolean): SettingsTab[] {
+  return SETTINGS_TABS.filter((t) => !t.adminOnly || isAdmin);
+}
+
+/** A known tab id. Pass `isAdmin` to also enforce admin-only access. */
+export function isSettingsTab(id: string, isAdmin = true): boolean {
+  return visibleSettingsTabs(isAdmin).some((t) => t.id === id);
 }
 
 export default function SettingsShell({
   active,
+  isAdmin = false,
   children,
 }: {
   active: string;
+  isAdmin?: boolean;
   children: React.ReactNode;
 }) {
+  const tabs = visibleSettingsTabs(isAdmin);
   return (
     <div className="settings">
       <header className="settings-head">
@@ -46,7 +57,7 @@ export default function SettingsShell({
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
           <ul>
-            {SETTINGS_TABS.map((t) => (
+            {tabs.map((t) => (
               <li key={t.id}>
                 <Link
                   href={`/settings/${t.id}`}
