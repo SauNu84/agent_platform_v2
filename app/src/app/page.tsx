@@ -37,7 +37,7 @@ const CAPABILITIES: Capability[] = [
   {
     href: '/coaches',
     title: 'Coaches',
-    blurb: 'A persistent coach with consent-gated memory and scheduling that carries context from one session to the next.',
+    blurb: 'An AI coach that remembers every session, adapts to you, and tracks your progress over time — practice on a recurring cadence, not just once.',
     count: (c) => `${c.coaches} live`,
   },
   {
