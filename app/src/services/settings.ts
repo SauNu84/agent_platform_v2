@@ -23,9 +23,11 @@
  * the raw key is read ONLY server-side (the realtime token route, which mints an
  * ephemeral browser token — the key never reaches the client) and is NEVER echoed
  * back to any client (only a masked last-4 view). A provider's env var, when set,
- * takes precedence. Production should move these to env / a secret manager.
+ * takes precedence. Keys are encrypted at rest (AES-256-GCM, see lib/crypto.ts,
+ * SAU-261) — no plaintext key survives a round-trip through the DB.
  */
 import type { Store, UserSettingRecord } from '@/db/store';
+import { encrypt, decryptIfEncrypted } from '@/lib/crypto';
 
 export class SettingsError extends Error {
   status: number;
@@ -215,8 +217,19 @@ export async function validateModelApiKey(provider: ModelProvider, key: string):
   }
 }
 
+/**
+ * Read the raw provider key from a stored record, decrypting at rest (SAU-261).
+ * Values written by {@link saveModelApiKey} are AES-256-GCM ciphertext; legacy /
+ * not-yet-migrated rows may still be plaintext, which we pass through unchanged so
+ * the read path stays back-compatible until migration 0014 runs.
+ */
+function readStoredKey(rec: UserSettingRecord | null): string {
+  const raw = typeof rec?.value?.key === 'string' ? (rec.value.key as string) : '';
+  return raw ? decryptIfEncrypted(raw) : '';
+}
+
 function toModelKeyView(spec: ModelProviderSpec, rec: UserSettingRecord | null): ModelKeyView {
-  const key = typeof rec?.value?.key === 'string' ? (rec.value.key as string) : '';
+  const key = readStoredKey(rec);
   return {
     provider: spec.id,
     label: spec.label,
@@ -246,11 +259,9 @@ export async function getModelApiKeyRaw(
   provider: ModelProvider,
 ): Promise<string | null> {
   if (!userId) return null;
-  const rec = await store.getUserSetting(userId, modelKeyKey(provider));
-  let key = typeof rec?.value?.key === 'string' ? (rec.value.key as string).trim() : '';
+  let key = readStoredKey(await store.getUserSetting(userId, modelKeyKey(provider))).trim();
   if (!key && provider === 'gemini') {
-    const legacy = await store.getUserSetting(userId, LEGACY_GEMINI_KEY);
-    key = typeof legacy?.value?.key === 'string' ? (legacy.value.key as string).trim() : '';
+    key = readStoredKey(await store.getUserSetting(userId, LEGACY_GEMINI_KEY)).trim();
   }
   return key || null;
 }
@@ -280,7 +291,8 @@ export async function saveModelApiKey(
   if (validation.status === 'invalid') {
     throw new SettingsError(validation.message ?? `${spec.label} rejected this key.`, 400);
   }
-  const rec = await store.putUserSetting(userId, modelKeyKey(spec.id), { key });
+  // Encrypt at rest (SAU-261): plaintext provider keys never touch the DB.
+  const rec = await store.putUserSetting(userId, modelKeyKey(spec.id), { key: encrypt(key) });
   return { view: toModelKeyView(spec, rec), validation };
 }
 
