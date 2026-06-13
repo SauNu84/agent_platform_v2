@@ -23,6 +23,7 @@ import { toCompiledScenario } from '@/domain/scenario';
 import { resolveOpenAiVoice } from '@/lib/voices';
 import { getActor } from '@/services/current-user';
 import { resolveTierForUser, resolveSessionEngine, voiceKbCharBudget } from '@/voice/engine-router';
+import { isPhiScenario, resolvePhiVoiceCredential } from '@/voice/phi-path';
 import { getModelApiKeyRaw } from '@/services/settings';
 import {
   geminiAuthTokenUrl, geminiAuthTokenBody, geminiLiveWsUrl, resolveGeminiVoice, geminiSetupFrame,
@@ -44,6 +45,22 @@ export async function POST(req: NextRequest) {
   const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
   const engine = resolveSessionEngine({ modelId, tier });
   const model = engine.model;
+
+  // ── PHI-path gate (SAU-277, WS5 / go-live gate SAU-272) ────────────────────
+  // A scenario flagged `metadata._phi` carries REAL patient data. PHI may ONLY
+  // mint a Realtime session against the dedicated OpenAI BAA + Zero-Data-Retention
+  // prod org key — never the consumer OPENAI_API_KEY, never a per-user Settings
+  // key, and never the Gemini consumer endpoint (not BAA-covered; CEO-ratified
+  // single voice path). Synthetic/training scenarios are unaffected. Fail-closed:
+  // missing key or unconfirmed ZDR refuses the session rather than downgrading.
+  const phi = isPhiScenario(scenario.metadata);
+  const phiCred = phi ? resolvePhiVoiceCredential(engine.vendor) : null;
+  if (phiCred && !phiCred.ok) {
+    return NextResponse.json(
+      { error: phiCred.error, vendor: engine.vendor, phiPath: true },
+      { status: phiCred.status },
+    );
+  }
 
   // Fold any linked Knowledge Base (SAU-243) into the live agent's prompt, bounded
   // by the tighter VOICE budget (cost lever #2) for a small, cacheable prefix.
@@ -96,8 +113,12 @@ export async function POST(req: NextRequest) {
   }
 
   // ── OpenAI Realtime browser transport (WebRTC) ─────────────────────────────
-  // env first, then the key self-provisioned in Settings → AI Model (SAU-259).
-  const apiKey = process.env.OPENAI_API_KEY ?? (await getModelApiKeyRaw(getStore(), actor?.userId ?? '', 'openai'));
+  // PHI path: use ONLY the dedicated BAA+ZDR prod key resolved above (gate already
+  // refused missing-key / unconfirmed-ZDR). Non-PHI: env first, then the key
+  // self-provisioned in Settings → AI Model (SAU-259).
+  const apiKey = phi
+    ? phiCred!.apiKey!
+    : (process.env.OPENAI_API_KEY ?? (await getModelApiKeyRaw(getStore(), actor?.userId ?? '', 'openai')));
   if (!apiKey) {
     return NextResponse.json(
       {
