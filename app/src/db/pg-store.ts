@@ -27,6 +27,7 @@ import type {
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
+import { encryptJson, decryptJson } from '@/lib/phi';
 import { getActorContext } from '@/auth/actor';
 
 // pg returns untyped rows; `Row` documents that we map them explicitly below.
@@ -65,7 +66,9 @@ function rowToClinicOutcome(r: Row): ClinicOutcomeRecord {
     slotEnd: r.slot_end ? new Date(r.slot_end).toISOString() : null,
     calendar: r.calendar ?? null,
     simulated: r.simulated ?? true,
-    intake: (r.intake ?? {}) as Record<string, unknown>,
+    // PHI at rest (SAU-274): `intake` is stored as an AES-256-GCM envelope; decrypt
+    // on read. Legacy pre-0017 plaintext rows pass through unchanged.
+    intake: decryptJson<Record<string, unknown>>(r.intake) ?? {},
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
   };
 }
@@ -81,7 +84,9 @@ function rowToSession(r: Row): SessionRecord {
     status: r.status,
     startedAt: new Date(r.started_at).toISOString(),
     endedAt: r.ended_at ? new Date(r.ended_at).toISOString() : null,
-    transcript: (r.transcript ?? null) as SessionTranscript | null,
+    // PHI at rest (SAU-274): the call transcript is stored as an AES-256-GCM
+    // envelope; decrypt on read. Legacy pre-0017 plaintext rows pass through.
+    transcript: decryptJson<SessionTranscript | null>(r.transcript ?? null),
   };
 }
 
@@ -535,7 +540,8 @@ export class PgStore implements Store {
   async appendSessionEvent(row: SessionEventRow): Promise<void> {
     await this.q(
       `INSERT INTO session_event (session_id, ts, type, payload) VALUES ($1, to_timestamp($2/1000.0), $3, $4::jsonb)`,
-      [row.sessionId, row.ts, row.type, JSON.stringify(row.payload)],
+      // PHI at rest (SAU-274): event payloads carry live transcript text — encrypt.
+      [row.sessionId, row.ts, row.type, JSON.stringify(encryptJson(row.payload))],
     );
   }
 
@@ -549,7 +555,8 @@ export class PgStore implements Store {
          started_at = COALESCE(to_timestamp($5/1000.0), started_at),
          ended_at = to_timestamp($3/1000.0), transcript = $4::jsonb
        WHERE id = $1 RETURNING *`,
-      [sessionId, update.status, update.endedAt, JSON.stringify(update.transcript), update.startedAt ?? null],
+      // PHI at rest (SAU-274): encrypt the transcript into an envelope before write.
+      [sessionId, update.status, update.endedAt, JSON.stringify(encryptJson(update.transcript)), update.startedAt ?? null],
     );
     return rows[0] ? rowToSession(rows[0]) : null;
   }
@@ -579,7 +586,13 @@ export class PgStore implements Store {
 
   async listSessionEvents(sessionId: string): Promise<SessionEventRow[]> {
     const { rows } = await this.q('SELECT * FROM session_event WHERE session_id = $1 ORDER BY ts', [sessionId]);
-    return rows.map((r: Row) => ({ sessionId: r.session_id, ts: new Date(r.ts).getTime(), type: r.type, payload: r.payload ?? {} }));
+    return rows.map((r: Row) => ({
+      sessionId: r.session_id,
+      ts: new Date(r.ts).getTime(),
+      type: r.type,
+      // PHI at rest (SAU-274): decrypt the event payload envelope on read.
+      payload: decryptJson<Record<string, unknown>>(r.payload) ?? {},
+    }));
   }
 
   async recordVoiceUsage(u: VoiceUsageRecord): Promise<void> {
@@ -669,9 +682,11 @@ export class PgStore implements Store {
          doctor_name = EXCLUDED.doctor_name, slot_start = EXCLUDED.slot_start, slot_end = EXCLUDED.slot_end,
          calendar = EXCLUDED.calendar, simulated = EXCLUDED.simulated, intake = EXCLUDED.intake
        RETURNING *`,
+      // PHI at rest (SAU-274): `intake` carries patient identifiers (name/DOB/
+      // reason/insurance) — encrypt it into an envelope before write.
       [rec.sessionId, rec.scenarioId, rec.userId, rec.outcome, rec.eventId, rec.eventLink,
         rec.doctorId, rec.doctorName, rec.slotStart, rec.slotEnd, rec.calendar, rec.simulated,
-        JSON.stringify(rec.intake ?? {})],
+        JSON.stringify(encryptJson(rec.intake ?? {}))],
     );
     return rowToClinicOutcome(rows[0]);
   }

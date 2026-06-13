@@ -16,6 +16,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encryptModelKeysAtRest } from './migrate-encrypt-model-keys';
+import { encryptPhiAtRest } from './migrate-encrypt-phi';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, '..', '..', 'db', 'migrations');
@@ -28,6 +29,9 @@ const migrationsDir = join(here, '..', '..', 'db', 'migrations');
 const DATA_MIGRATIONS: { name: string; run: (pool: Pool) => Promise<unknown> }[] = [
   // SAU-261: re-encrypt any plaintext BYO provider keys left at rest by SAU-259.
   { name: '0014_encrypt_model_keys', run: encryptModelKeysAtRest },
+  // SAU-274: encrypt PHI-bearing jsonb columns (intake/transcript/event payload)
+  // left as plaintext by the Phase-0 synthetic-only spike.
+  { name: '0017_encrypt_phi', run: encryptPhiAtRest },
 ];
 
 async function runDataMigrations(pool: Pool, applied: Set<string>): Promise<void> {
