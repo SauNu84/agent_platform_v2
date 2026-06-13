@@ -22,12 +22,15 @@ const API = 'https://www.googleapis.com/calendar/v3';
 export interface GoogleCalendarConfig {
   accessToken: string;
   calendarId: string;
+  /** How the token was sourced — drives the human label. Phase-0 env token is a
+   *  'sandbox'; a per-clinic OAuth connection (SAU-271 WS2) is 'oauth'. */
+  source?: 'sandbox' | 'oauth';
 }
 
 export function readGoogleCalendarConfig(): GoogleCalendarConfig | null {
   const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN;
   if (!accessToken) return null;
-  return { accessToken, calendarId: process.env.GOOGLE_CALENDAR_ID ?? 'primary' };
+  return { accessToken, calendarId: process.env.GOOGLE_CALENDAR_ID ?? 'primary', source: 'sandbox' };
 }
 
 const DOCTOR_TAG = (id: string) => `[doctor:${id}]`;
@@ -39,7 +42,8 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
 
   constructor(cfg: GoogleCalendarConfig) {
     this.cfg = cfg;
-    this.label = `Google Calendar (sandbox: ${cfg.calendarId})`;
+    const kind = cfg.source === 'oauth' ? 'connected' : 'sandbox';
+    this.label = `Google Calendar (${kind}: ${cfg.calendarId})`;
   }
 
   private headers(): Record<string, string> {

@@ -27,6 +27,7 @@ import {
   getAccountInfo,
 } from '@/services/settings';
 import { listOwnedKnowledgeBases } from '@/services/knowledge-base';
+import { getCalendarConnectionView } from '@/services/calendar/calendar-connection';
 import { getMeterState } from '@/services/meter';
 import LanguageSettings from '../LanguageSettings';
 import VoiceSettings from '../VoiceSettings';
@@ -198,6 +199,9 @@ async function ModelKeysPanel(store: ReturnType<typeof getStore>, userId: string
 
 // ── Integrations ─────────────────────────────────────────────────────────────
 async function IntegrationsPanel(store: ReturnType<typeof getStore>, userId: string) {
-  const integrations = await listIntegrations(store, userId);
-  return <IntegrationsSettings integrations={integrations} />;
+  const [integrations, calendarOAuth] = await Promise.all([
+    listIntegrations(store, userId),
+    getCalendarConnectionView(store, userId),
+  ]);
+  return <IntegrationsSettings integrations={integrations} calendarOAuth={calendarOAuth} />;
 }
