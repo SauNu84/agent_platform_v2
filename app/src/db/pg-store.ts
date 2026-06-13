@@ -19,7 +19,7 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -48,6 +48,25 @@ function rowToScenario(r: Row): ScenarioRecord {
     ownerUserId: r.owner_user_id ?? null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
+  };
+}
+
+function rowToClinicOutcome(r: Row): ClinicOutcomeRecord {
+  return {
+    sessionId: r.session_id,
+    scenarioId: r.scenario_id,
+    userId: r.user_id ?? null,
+    outcome: r.outcome,
+    eventId: r.event_id ?? null,
+    eventLink: r.event_link ?? null,
+    doctorId: r.doctor_id ?? null,
+    doctorName: r.doctor_name ?? null,
+    slotStart: r.slot_start ? new Date(r.slot_start).toISOString() : null,
+    slotEnd: r.slot_end ? new Date(r.slot_end).toISOString() : null,
+    calendar: r.calendar ?? null,
+    simulated: r.simulated ?? true,
+    intake: (r.intake ?? {}) as Record<string, unknown>,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
   };
 }
 
@@ -636,6 +655,30 @@ export class PgStore implements Store {
   async getAnalysis(sessionId: string): Promise<AnalysisRecord | null> {
     const { rows } = await this.q('SELECT * FROM analysis WHERE session_id = $1', [sessionId]);
     return rows[0] ? rowToAnalysis(rows[0]) : null;
+  }
+
+  // ── Clinic Intake & Booking outcome (SAU-267) — migration 0016 ───────────────
+  async recordClinicOutcome(rec: ClinicOutcomeRecord): Promise<ClinicOutcomeRecord> {
+    const { rows } = await this.q(
+      `INSERT INTO clinic_session_outcome (session_id, scenario_id, user_id, outcome, event_id, event_link,
+         doctor_id, doctor_name, slot_start, slot_end, calendar, simulated, intake)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+       ON CONFLICT (session_id) DO UPDATE SET
+         scenario_id = EXCLUDED.scenario_id, user_id = EXCLUDED.user_id, outcome = EXCLUDED.outcome,
+         event_id = EXCLUDED.event_id, event_link = EXCLUDED.event_link, doctor_id = EXCLUDED.doctor_id,
+         doctor_name = EXCLUDED.doctor_name, slot_start = EXCLUDED.slot_start, slot_end = EXCLUDED.slot_end,
+         calendar = EXCLUDED.calendar, simulated = EXCLUDED.simulated, intake = EXCLUDED.intake
+       RETURNING *`,
+      [rec.sessionId, rec.scenarioId, rec.userId, rec.outcome, rec.eventId, rec.eventLink,
+        rec.doctorId, rec.doctorName, rec.slotStart, rec.slotEnd, rec.calendar, rec.simulated,
+        JSON.stringify(rec.intake ?? {})],
+    );
+    return rowToClinicOutcome(rows[0]);
+  }
+
+  async getClinicOutcome(sessionId: string): Promise<ClinicOutcomeRecord | null> {
+    const { rows } = await this.q('SELECT * FROM clinic_session_outcome WHERE session_id = $1', [sessionId]);
+    return rows[0] ? rowToClinicOutcome(rows[0]) : null;
   }
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────

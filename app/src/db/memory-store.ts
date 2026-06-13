@@ -9,7 +9,7 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -36,6 +36,7 @@ export class MemoryStore implements Store {
   private events: SessionEventRow[] = [];
   private usage = new Map<string, VoiceUsageRecord>();        // by sessionId
   private analyses = new Map<string, AnalysisRecord>();       // by sessionId
+  private clinicOutcomes = new Map<string, ClinicOutcomeRecord>(); // by sessionId (SAU-267)
   private entitlements = new Map<string, EntitlementRecord>(); // by userId
   private checkouts = new Map<string, CheckoutRecord>();       // by id (SAU-250)
   private apiKeys = new Map<string, ApiKeyRecord>();           // by id (SAU-252)
@@ -527,6 +528,17 @@ export class MemoryStore implements Store {
 
   async getAnalysis(sessionId: string): Promise<AnalysisRecord | null> {
     return this.analyses.get(sessionId) ?? null;
+  }
+
+  // ── Clinic outcome (SAU-267) ──────────────────────────────────────────────────
+  async recordClinicOutcome(rec: ClinicOutcomeRecord): Promise<ClinicOutcomeRecord> {
+    const full: ClinicOutcomeRecord = { ...rec, createdAt: rec.createdAt ?? nowIso() };
+    this.clinicOutcomes.set(rec.sessionId, full);
+    return full;
+  }
+
+  async getClinicOutcome(sessionId: string): Promise<ClinicOutcomeRecord | null> {
+    return this.clinicOutcomes.get(sessionId) ?? null;
   }
 
   // ── Slice 2: History + Creator analytics ──────────────────────────────────────

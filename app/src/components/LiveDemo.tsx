@@ -83,6 +83,11 @@ export default function LiveDemo({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const liveTurnsRef = useRef<Turn[]>([]);
   const liveStartedAtRef = useRef<number>(0);
+  // SAU-267: server-side tool calls the agent made during the session (booking
+  // loop). Captured so they persist in the transcript and drive the outcome record.
+  const liveToolCallsRef = useRef<Array<{ name: string; args: unknown; result: unknown; at: number }>>([]);
+  const [booking, setBooking] = useState<{ doctorName: string; start: string; eventId: string; simulated: boolean } | null>(null);
+  const [outcome, setOutcome] = useState<{ outcome: string; eventId?: string | null; simulated?: boolean } | null>(null);
 
   // ── Media teardown (release the camera/mic light) ──────────────────────────
   const stopMedia = useCallback(() => {
@@ -165,6 +170,7 @@ export default function LiveDemo({
     const liveVendor = liveVendorRef.current;
     if (liveVendor) {
       const turnsToSave = liveTurnsRef.current;
+      const toolCallsToSave = liveToolCallsRef.current;
       try { dcRef.current?.close(); } catch { /* noop */ }
       try { pcRef.current?.close(); } catch { /* noop */ }
       try { geminiRef.current?.stop(); } catch { /* noop */ }
@@ -172,7 +178,7 @@ export default function LiveDemo({
       pcRef.current = null;
       geminiRef.current = null;
       liveVendorRef.current = null;
-      if (turnsToSave.length) {
+      if (turnsToSave.length || toolCallsToSave.length) {
         const startedAt = liveStartedAtRef.current || Date.now();
         const endedAt = Date.now();
         try {
@@ -181,11 +187,13 @@ export default function LiveDemo({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               vendor: liveVendor,
-              transcript: { sessionId: `live-${slug}-${startedAt}`, turns: turnsToSave, toolCalls: [], startedAt, endedAt },
+              transcript: { sessionId: `live-${slug}-${startedAt}`, turns: turnsToSave, toolCalls: toolCallsToSave, startedAt, endedAt },
             }),
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
+            // Clinic action-agent (SAU-267): show the task outcome record.
+            if (data.outcome) setOutcome({ outcome: data.outcome.outcome, eventId: data.outcome.eventId, simulated: data.outcome.simulated });
             onSession({
               id: data.sessionId ?? `live-${slug}-${startedAt}`,
               status: 'completed',
@@ -210,11 +218,51 @@ export default function LiveDemo({
   // Real live voice: browser WebRTC ↔ OpenAI Realtime via an ephemeral client secret
   // (the platform API key never reaches the browser). Mirrors the server adapter's GA
   // session config + event names (src/voice/adapters/openai.ts).
-  async function startLive(tok: { clientSecret: string; model: string; scenario?: { instructions?: string; voice?: unknown } }) {
+  // SAU-267: execute a server-side tool the model called, then feed the structured
+  // result back into the realtime session so the agent can speak it. The booking
+  // RULES run on the server (clinic hours / slot length / double-book) — the model
+  // cannot bypass them. Mirrors OpenAI Realtime's function-call protocol.
+  const handleToolCall = useCallback(async (callId: string, name: string, argsJson: string) => {
+    const dc = dcRef.current;
+    let args: unknown = {};
+    try { args = argsJson ? JSON.parse(argsJson) : {}; } catch { args = {}; }
+    let result: unknown;
+    try {
+      const res = await fetch(`/api/scenarios/${slug}/tools`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: name, args }),
+      });
+      const data = await res.json().catch(() => ({}));
+      result = res.ok ? data.result : { error: data.error ?? `tool failed (${res.status})` };
+    } catch (e) {
+      result = { error: (e as Error).message };
+    }
+    liveToolCallsRef.current = [...liveToolCallsRef.current, { name, args, result, at: Date.now() }];
+    // Surface a successful booking live (the strongest demo signal).
+    const r = result as { booked?: boolean; doctorName?: string; start?: string; eventId?: string; simulated?: boolean };
+    if (name === 'create_appointment' && r?.booked && r.eventId) {
+      setBooking({ doctorName: r.doctorName ?? 'the doctor', start: r.start ?? '', eventId: r.eventId, simulated: r.simulated ?? true });
+    }
+    // Return the result to the model + ask it to continue speaking.
+    if (dc && dc.readyState === 'open') {
+      dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    }
+  }, [slug]);
+
+  async function startLive(tok: { clientSecret: string; model: string; scenario?: { instructions?: string; voice?: unknown; tools?: Array<{ name: string; description: string; paramsSchema?: object; sideEffect?: string }> } }) {
     setVendor('openai');
     liveVendorRef.current = 'openai';
     liveTurnsRef.current = [];
+    liveToolCallsRef.current = [];
     liveStartedAtRef.current = Date.now();
+    // Map the scenario's SERVER-side tools (ADR-005) into OpenAI Realtime function
+    // tools. UI-only tools are skipped (no server executor). Empty for ordinary
+    // training scenarios, so this is a no-op there.
+    const serverTools = (tok.scenario?.tools ?? [])
+      .filter((t) => t.sideEffect === 'server' || t.sideEffect === 'both')
+      .map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.paramsSchema ?? { type: 'object', properties: {} } }));
     // OpenAI's `voice` must be a plain string; coerce defensively (the route already
     // sends a string, but a scenario voice object would otherwise be rejected).
     const v = tok.scenario?.voice;
@@ -247,6 +295,7 @@ export default function LiveDemo({
           type: 'realtime',
           instructions: tok.scenario?.instructions ?? instructions,
           output_modalities: ['audio'],
+          ...(serverTools.length ? { tools: serverTools, tool_choice: 'auto' } : {}),
           audio: {
             input: {
               transcription: { model: 'whisper-1' },
@@ -258,7 +307,7 @@ export default function LiveDemo({
       }));
     };
     dc.onmessage = (e) => {
-      let ev: { type?: string; transcript?: string; error?: { message?: string } };
+      let ev: { type?: string; transcript?: string; error?: { message?: string }; name?: string; call_id?: string; arguments?: string };
       try { ev = JSON.parse(e.data); } catch { return; }
       switch (ev.type) {
         case 'conversation.item.input_audio_transcription.completed':
@@ -267,6 +316,10 @@ export default function LiveDemo({
         case 'response.output_audio_transcript.done':
         case 'response.audio_transcript.done': // legacy beta name, kept defensively
           if (ev.transcript) appendLiveTurn({ role: 'agent', text: ev.transcript, at: Date.now() });
+          break;
+        case 'response.function_call_arguments.done':
+          // The agent invoked a server-side tool (SAU-267 booking loop).
+          if (ev.name && ev.call_id) void handleToolCall(ev.call_id, ev.name, ev.arguments ?? '{}');
           break;
         case 'error':
           setError(ev.error?.message ?? 'Realtime session error');
@@ -480,6 +533,18 @@ export default function LiveDemo({
           <audio ref={audioRef} autoPlay hidden />
           {vendor === 'mock' && (running || finished) && (
             <p className="ld-sim">Simulated session — no voice-vendor key is configured for this environment.</p>
+          )}
+          {/* SAU-267: live proof the agent actually created the appointment. */}
+          {booking && (
+            <div className="notice" role="status" style={{ borderColor: 'var(--accent)' }}>
+              ✅ Appointment booked with <strong>{booking.doctorName}</strong>
+              {booking.start ? ` for ${new Date(booking.start).toLocaleString()}` : ''} — event id{' '}
+              <code>{booking.eventId}</code>
+              {booking.simulated ? ' (simulated calendar)' : ' (Google Calendar)'}
+            </div>
+          )}
+          {outcome && !booking && (
+            <div className="notice" role="status">Session outcome: <strong>{outcome.outcome}</strong></div>
           )}
           {error && <div className="notice" role="alert">{error}</div>}
         </div>

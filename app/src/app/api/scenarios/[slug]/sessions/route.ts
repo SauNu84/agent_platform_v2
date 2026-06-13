@@ -15,6 +15,7 @@ import { runVoiceSession, persistClientSession, clientVendorForEngine, type Vend
 import { resolveTierForUser, resolveSessionEngine } from '@/voice/engine-router';
 import { assertWithinCap, CapExceededError } from '@/services/meter';
 import { getActor } from '@/services/current-user';
+import { isClinicScenario, finalizeClinicSession } from '@/services/clinic-session';
 import type { Transcript } from '@/voice/realtime-interface';
 
 export const dynamic = 'force-dynamic';
@@ -76,7 +77,12 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   try {
     if (body.transcript) {
       const result = await persistClientSession({ store, scenario, vendor, tier, modelId, userId, transcript: body.transcript });
-      return NextResponse.json(result, { status: 201 });
+      // Clinic action-agent (SAU-267): derive the task outcome + extract intake
+      // alongside the session (distinct from the analyst scoring projection).
+      const outcome = isClinicScenario(scenario)
+        ? await finalizeClinicSession({ store, scenario, sessionId: result.sessionId, userId, transcript: { turns: body.transcript.turns, toolCalls: body.transcript.toolCalls } })
+        : undefined;
+      return NextResponse.json({ ...result, outcome }, { status: 201 });
     }
     const result = await runVoiceSession({ store, scenario, vendor, tier, modelId, userId });
     return NextResponse.json(result, { status: 201 });

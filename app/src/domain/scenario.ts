@@ -21,6 +21,42 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
   whiteboard: { name: 'whiteboard', description: 'Draw or annotate on a shared whiteboard.', paramsSchema: { type: 'object', properties: { op: { type: 'string' }, shape: { type: 'string' } } }, sideEffect: 'ui' },
   code: { name: 'code', description: 'Open or edit code in a shared editor.', paramsSchema: { type: 'object', properties: { op: { type: 'string' }, content: { type: 'string' } } }, sideEffect: 'ui' },
   cards: { name: 'cards', description: 'Present an informational card to the learner.', paramsSchema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } } }, sideEffect: 'ui' },
+
+  // ── Action-taking (server-side) tools — SAU-267 clinic spike ──────────────
+  // These have real side effects: they read/write a calendar via the adapter seam
+  // and the clinic rules are enforced in the executor, not the prompt. Wired into
+  // the realtime session and dispatched to /api/scenarios/[slug]/tools server-side.
+  check_availability: {
+    name: 'check_availability',
+    description: 'Look up open appointment slots on the clinic calendar. Call this before offering times. Optionally narrow by doctor and/or a date range (ISO 8601).',
+    paramsSchema: {
+      type: 'object',
+      properties: {
+        doctor: { type: 'string', description: 'Doctor name or id to narrow the search (optional).' },
+        from: { type: 'string', description: 'Earliest ISO 8601 datetime to consider (optional; defaults to now).' },
+        to: { type: 'string', description: 'Latest ISO 8601 datetime to consider (optional; defaults to a week out).' },
+      },
+    },
+    sideEffect: 'server',
+  },
+  create_appointment: {
+    name: 'create_appointment',
+    description: 'Create the appointment on the clinic calendar once the patient has confirmed a specific open slot. Returns the created event id. Clinic rules (hours, slot length, no double-booking) are enforced server-side and may reject the request.',
+    paramsSchema: {
+      type: 'object',
+      properties: {
+        patientName: { type: 'string', description: 'Full name of the patient.' },
+        doctor: { type: 'string', description: 'The chosen doctor (name or id).' },
+        slotStart: { type: 'string', description: 'ISO 8601 start time of the confirmed slot.' },
+        slotEnd: { type: 'string', description: 'ISO 8601 end time (optional; defaults to the clinic slot length).' },
+        reason: { type: 'string', description: 'Reason for the visit.' },
+        insurance: { type: 'string', description: 'Insurance plan the patient gave (optional).' },
+        dob: { type: 'string', description: 'Patient date of birth (optional).' },
+      },
+      required: ['patientName', 'doctor', 'slotStart'],
+    },
+    sideEffect: 'server',
+  },
 };
 
 // ── Authoring schema (frontmatter) ───────────────────────────────────────────

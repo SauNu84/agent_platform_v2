@@ -325,6 +325,29 @@ export interface NewKnowledgeBaseDoc {
   byteSize: number;
 }
 
+// ── Clinic Intake & Booking outcome (SAU-267) — task-completion model ────────
+export type ClinicOutcome = 'booked' | 'no_slot' | 'escalated';
+
+/** One per session: did the action-taking agent complete its task? + intake JSON. */
+export interface ClinicOutcomeRecord {
+  sessionId: string;
+  scenarioId: string;
+  userId: string | null;
+  outcome: ClinicOutcome;
+  /** vendor calendar event id — proof of completion when booked. */
+  eventId: string | null;
+  eventLink: string | null;
+  doctorId: string | null;
+  doctorName: string | null;
+  slotStart: string | null;
+  slotEnd: string | null;
+  calendar: string | null;
+  simulated: boolean;
+  /** structured intake JSON extracted from the transcript (AC #4). */
+  intake: Record<string, unknown>;
+  createdAt?: string;
+}
+
 export interface Store {
   // ── Scenario CRUD ──────────────────────────────────────────────────────────
   listScenarios(filter?: ScenarioFilter): Promise<ScenarioRecord[]>;
@@ -414,6 +437,11 @@ export interface Store {
   // ── Slice 2: Analyst projection ───────────────────────────────────────────────
   upsertAnalysis(rec: NewAnalysis): Promise<AnalysisRecord>;
   getAnalysis(sessionId: string): Promise<AnalysisRecord | null>;
+
+  // ── Clinic Intake & Booking outcome (SAU-267) — task-completion projection ────
+  /** Upsert the session's outcome + extracted intake. Idempotent per session. */
+  recordClinicOutcome(rec: ClinicOutcomeRecord): Promise<ClinicOutcomeRecord>;
+  getClinicOutcome(sessionId: string): Promise<ClinicOutcomeRecord | null>;
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
   listSessionHistory(userId: string): Promise<SessionHistoryRow[]>;
