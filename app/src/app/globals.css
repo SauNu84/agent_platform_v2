@@ -298,6 +298,12 @@ a.card:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(15, 23, 
 .brief code { font-family: var(--mono); font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 .brief table { margin: 8px 0 16px; }
 .brief blockquote { margin: 0 0 12px; padding: 4px 14px; border-left: 3px solid var(--accent); color: var(--muted); }
+/* Rendered mermaid diagrams (SAU-269) — flowcharts/sequence diagrams in use-case
+   pages. Boxed + centered so they read as figures; the inner SVG scales to width. */
+.mermaid-diagram { margin: 16px 0 20px; padding: 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; text-align: center; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-diagram.is-loading { min-height: 120px; }
+.mermaid-fallback { margin: 16px 0 20px; }
 /* Collapsed "Scenario setup" disclosure — authoring config, hidden by default (SAU-246) */
 .setup { margin: 28px 0 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
 .setup > summary { cursor: pointer; padding: 12px 16px; font-family: var(--mono); font-size: 14px; color: var(--text); list-style: none; }

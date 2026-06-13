@@ -5,6 +5,7 @@ import { getStore } from '@/db';
 import { getMeterState } from '@/services/meter';
 import { getActor } from '@/services/current-user';
 import TopBar from '@/components/TopBar';
+import { toUseCaseLinks } from '@/services/use-cases';
 
 // Applied before first paint to avoid a light→dark flash on reload (SAU-228).
 const THEME_INIT = `(function(){try{var t=localStorage.getItem('theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=d?'dark':'light';e.dataset.themePref=t;}catch(e){}})();`;
@@ -32,6 +33,18 @@ const NAV_GROUPS: {
       { href: '/courses', label: 'Course', icon: '📚' },
       { href: '/coaches', label: 'Coach', icon: '🧭' },
     ],
+  },
+  {
+    // Use Case (SAU-269) — a top-level catalog of real, action-taking agents the
+    // platform can run (the AI Clinic Call Agent is item #1). The submenu items
+    // are generated from the use-case registry so the catalog grows by adding a
+    // single registry entry — no nav edits, and never a dead link (SAU-216).
+    heading: 'Use Case',
+    items: toUseCaseLinks().map((u) => ({
+      href: `/use-cases/${u.slug}`,
+      label: u.navLabel,
+      icon: u.icon,
+    })),
   },
   {
     heading: 'Sessions',
