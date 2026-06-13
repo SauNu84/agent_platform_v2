@@ -10,9 +10,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE } from '@/auth/constants';
 
-// Public, unauthenticated paths: the login screen, the auth API, and the legal
-// pages linked from the login footer (Terms / AUP / Privacy — SAU-234).
-const PUBLIC_PREFIXES = ['/login', '/api/auth', '/terms', '/privacy-policy'];
+// Public, unauthenticated paths: the login screen, the auth API, the legal
+// pages linked from the login footer (Terms / AUP / Privacy — SAU-234), and the
+// Twilio telephony webhooks (SAU-270). The latter carry no session cookie — they
+// authenticate via the `X-Twilio-Signature` HMAC verified inside the route, so
+// they must bypass the cookie gate or no inbound call could ever connect.
+const PUBLIC_PREFIXES = ['/login', '/api/auth', '/terms', '/privacy-policy', '/api/telephony'];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
