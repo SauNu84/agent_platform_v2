@@ -16,7 +16,7 @@
  * under a guessable key. In dev/test we fall back to a fixed insecure key (with a
  * one-time console.warn) so the test suite and local runs need no extra setup.
  */
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 
 const ALGO = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -113,4 +113,22 @@ export function isEncrypted(value: unknown): value is string {
 /** Decrypt when the stored value is ciphertext; pass through legacy plaintext. */
 export function decryptIfEncrypted(value: string): string {
   return isEncrypted(value) ? decrypt(value) : value;
+}
+
+/**
+ * Keyed integrity tag (HMAC-SHA256, base64) over `message`, under the same
+ * platform key as {@link encrypt}. Used by the PHI access log (SAU-275) to make
+ * each append-only audit row tamper-evident: the row's content is HMAC'd at write
+ * time, so any later edit of a logged field (who/what/when) invalidates the tag,
+ * and a tag cannot be re-forged without the server key. Append-only-ness itself
+ * (no row deletions/reorder) is enforced at the DB by privileges + a trigger
+ * (migration 0018); this tag is the per-row content-integrity half.
+ */
+export function hmac(message: string): string {
+  return createHmac('sha256', resolveKey()).update(message, 'utf8').digest('base64');
+}
+
+/** Constant-time-ish verify that `tag` is the HMAC of `message`. */
+export function verifyHmac(message: string, tag: string): boolean {
+  return hmac(message) === tag;
 }

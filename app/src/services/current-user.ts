@@ -12,20 +12,49 @@ import { redirect } from 'next/navigation';
 import { getStore } from '@/db';
 import { resolveActor, type Actor } from '@/auth/session';
 import { SESSION_COOKIE } from '@/auth/constants';
-import { enterActor } from '@/auth/actor';
+import { enterActor, runWithActor, type ActorContext } from '@/auth/actor';
 
 export type { Actor };
+
+/** The RLS GUC slice carried for an actor (user + admin + clinic). */
+function actorCtx(actor: Actor): ActorContext {
+  return { userId: actor.userId, isAdmin: actor.isAdmin, clinicId: actor.clinicId };
+}
 
 /**
  * Resolve the authenticated actor for the current request (or null). Side effect:
  * on success, binds the actor into ALS so the DB layer enforces RLS for the rest
  * of this request.
+ *
+ * NOTE (SAU-275): this uses `enterActor` (AsyncLocalStorage.enterWith), which is
+ * the best-effort request-wide bind for Server Components. For ROUTE HANDLERS that
+ * read/write PHI or own-private rows under the non-superuser `app_rw` role, prefer
+ * {@link withActor} — `enterWith` is not reliably preserved across the framework's
+ * async-context boundaries, whereas `runWithActor` (AsyncLocalStorage.run) scopes
+ * the GUCs to the handler's own async subtree and always reaches PgStore.
  */
 export async function getActor(): Promise<Actor | null> {
   const token = cookies().get(SESSION_COOKIE)?.value ?? null;
   const actor = await resolveActor(getStore(), token);
-  if (actor) enterActor({ userId: actor.userId, isAdmin: actor.isAdmin });
+  if (actor) enterActor(actorCtx(actor));
   return actor;
+}
+
+/**
+ * Resolve the actor and run `fn` with the RLS context bound for the WHOLE callback
+ * via `AsyncLocalStorage.run` (SAU-275). Unlike {@link getActor}'s `enterWith`,
+ * this guarantees `app.user_id` / `app.is_admin` / `app.clinic_id` reach every
+ * PgStore query inside `fn` — even under `app_rw` where RLS actually engages — so
+ * own-private reads and session/PHI writes succeed instead of silently hitting the
+ * fail-closed (empty-actor) policy path. `fn` receives the actor (or null when the
+ * request is unauthenticated). Use this in route handlers that touch RLS-protected
+ * data; pair with the 401/403 guards for authorization.
+ */
+export async function withActor<T>(fn: (actor: Actor | null) => Promise<T>): Promise<T> {
+  const token = cookies().get(SESSION_COOKIE)?.value ?? null;
+  const actor = await resolveActor(getStore(), token);
+  if (!actor) return fn(null);
+  return runWithActor(actorCtx(actor), () => fn(actor));
 }
 
 /** Page guard: resolve the actor or redirect to the login screen. */

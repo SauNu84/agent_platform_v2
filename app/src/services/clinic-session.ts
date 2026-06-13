@@ -77,9 +77,11 @@ export async function finalizeClinicSession(opts: {
   scenario: ScenarioRecord;
   sessionId: string;
   userId: string | null;
+  /** owning clinic/org for multi-clinic PHI scoping (SAU-275); null = platform. */
+  clinicId?: string | null;
   transcript: SessionTranscript;
 }): Promise<ClinicOutcomeRecord> {
-  const { store, scenario, sessionId, userId, transcript } = opts;
+  const { store, scenario, sessionId, userId, clinicId = null, transcript } = opts;
   const intake = await extractIntake({ turns: transcript.turns, toolCalls: transcript.toolCalls });
   const { outcome, booking } = deriveOutcome(transcript.toolCalls);
 
@@ -87,6 +89,7 @@ export async function finalizeClinicSession(opts: {
     sessionId,
     scenarioId: scenario.id,
     userId,
+    clinicId,
     outcome,
     eventId: booking?.eventId ?? null,
     eventLink: booking?.htmlLink ?? null,

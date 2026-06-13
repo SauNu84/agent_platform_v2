@@ -21,6 +21,8 @@ export interface UserRecord {
   email: string;
   passwordHash: string;
   displayName: string;
+  /** the user's clinic/org (SAU-275); null for platform/consumer users. */
+  clinicId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -75,11 +77,15 @@ export interface NewSession {
   coachId?: string | null;
   /** set when the session was started inside a Course (Slice 3) */
   courseId?: string | null;
+  /** owning clinic/org for multi-clinic PHI scoping (SAU-275); null = platform. */
+  clinicId?: string | null;
 }
 
 export interface SessionRecord {
   id: string;
   userId: string | null;
+  /** owning clinic/org for multi-clinic PHI scoping (SAU-275); null = platform. */
+  clinicId: string | null;
   scenarioId: string;
   coachId: string | null;
   courseId: string | null;
@@ -287,6 +293,47 @@ export interface AuditEvent {
   refs: Record<string, unknown>;   // counts/ids only — NO PII content
 }
 
+// ── PHI access audit log (SAU-275, §164.312(b)) — append-only, tamper-evident ─
+/** The principal touching PHI: a human user, a programmatic agent, or system. */
+export type PhiActorLabel = string; // 'user:<id>' | 'agent:<scenario>' | 'system' | 'anonymous'
+
+/** One PHI read/write to record. `refs` carries counts/ids only — NEVER PHI. */
+export interface PhiAccessInput {
+  action: 'read' | 'write';
+  /** which PHI field, e.g. 'clinic_session_outcome.intake' | 'session.transcript'. */
+  entity: string;
+  /** the PHI subject key (session id), when known. */
+  entityId?: string | null;
+  /** the owning clinic/org, when known. */
+  clinicId?: string | null;
+  /** override the actor label (defaults to the bound actor, else 'system'). */
+  actorLabel?: PhiActorLabel;
+  refs?: Record<string, unknown>;
+}
+
+/** A persisted PHI access record (append-only). */
+export interface PhiAccessRecord {
+  id: string;
+  seq: number;
+  ts: string;
+  actorUserId: string | null;
+  actorLabel: PhiActorLabel;
+  action: 'read' | 'write';
+  entity: string;
+  entityId: string | null;
+  clinicId: string | null;
+  refs: Record<string, unknown>;
+  /** base64 HMAC-SHA256 over the canonical row (tamper-evidence). */
+  integrity: string;
+}
+
+export interface PhiAccessFilter {
+  entityId?: string;
+  clinicId?: string;
+  actorUserId?: string;
+  limit?: number;
+}
+
 // ── Knowledge Base (SAU-243, Phase 1) — reusable multi-doc corpus ────────────
 export interface KnowledgeBaseRecord {
   id: string;
@@ -333,6 +380,8 @@ export interface ClinicOutcomeRecord {
   sessionId: string;
   scenarioId: string;
   userId: string | null;
+  /** owning clinic/org for multi-clinic PHI scoping (SAU-275); null = platform. */
+  clinicId?: string | null;
   outcome: ClinicOutcome;
   /** vendor calendar event id — proof of completion when booked. */
   eventId: string | null;
@@ -505,6 +554,12 @@ export interface Store {
   listConsent(userId: string, scope: string): Promise<ConsentRecord[]>;
   recordAuditEvent(ev: AuditEvent): Promise<void>;
   listAuditEvents(subjectUserId: string): Promise<(AuditEvent & { ts: string })[]>;
+
+  // ── PHI access audit log (SAU-275) — append-only, tamper-evident ────────────
+  /** Append one PHI read/write record (who/what/when), HMAC-stamped at write. */
+  recordPhiAccess(entry: PhiAccessInput): Promise<void>;
+  /** Query the PHI access log (RLS-scoped to the caller's clinic / own access). */
+  listPhiAccess(filter: PhiAccessFilter): Promise<PhiAccessRecord[]>;
 
   // ── AuthN + RBAC (Slice 5, SAU-229) ─────────────────────────────────────────
   createUser(input: NewUser): Promise<UserRecord>;

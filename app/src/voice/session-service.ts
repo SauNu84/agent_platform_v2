@@ -130,6 +130,8 @@ export interface RunVoiceSessionOptions {
   /** scenario's chosen engine id (SAU-258, metadata._model); router gates by tier. */
   modelId?: string | null;
   userId?: string | null;
+  /** owning clinic/org for multi-clinic PHI scoping (SAU-275); null = platform. */
+  clinicId?: string | null;
   /** tag the session as coach-driven / in-course (Slice 3 compositions) */
   coachId?: string | null;
   courseId?: string | null;
@@ -153,7 +155,7 @@ export interface VoiceSessionResult {
  * Returns once the session ends (or `maxMs` elapses).
  */
 export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, tier = 'free', modelId = null, userId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
+  const { store, scenario, vendor, tier = 'free', modelId = null, userId = null, clinicId = null, coachId = null, courseId = null, instructions, maxMs = 30000, drive } = opts;
   const provider = await getProvider(vendor);
   // Tiered router (SAU-256/258): resolve the engine from the scenario's chosen
   // model + the viewer's tier (tier gating downgrades premium → cost for free).
@@ -163,7 +165,7 @@ export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<Voi
   const kb = await resolveKnowledgeContext(store, scenario.id, voiceKbCharBudget());
   const compiled = toCompiledScenario(scenario, { knowledgeBaseText: kb.text });
   if (instructions) compiled.aiInstructions = instructions;
-  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
+  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, clinicId, vendor, coachId, courseId });
 
   const session = await provider.startSession(compiled, { model: engine.model });
   // Register no-op UI tool handlers so a tool call mid-session resolves + is logged.
@@ -223,13 +225,15 @@ export async function persistClientSession(opts: {
   /** scenario's chosen engine id (SAU-258, metadata._model); router gates by tier. */
   modelId?: string | null;
   userId?: string | null;
+  /** owning clinic/org for multi-clinic PHI scoping (SAU-275); null = platform. */
+  clinicId?: string | null;
   coachId?: string | null;
   courseId?: string | null;
   transcript: Transcript;
 }): Promise<VoiceSessionResult> {
-  const { store, scenario, vendor, tier = 'free', modelId = null, userId = null, coachId = null, courseId = null, transcript } = opts;
+  const { store, scenario, vendor, tier = 'free', modelId = null, userId = null, clinicId = null, coachId = null, courseId = null, transcript } = opts;
   const engine = resolveSessionEngine({ modelId, tier });
-  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, vendor, coachId, courseId });
+  const sessionRow = await store.createSession({ scenarioId: scenario.id, userId, clinicId, vendor, coachId, courseId });
   const sessionTranscript = toSessionTranscript(transcript);
   // Persist transcript turns/tool-calls as events for the Sessions tab + Analyst.
   for (const turn of transcript.turns) {

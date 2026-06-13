@@ -25,9 +25,11 @@ import type {
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
+  PhiAccessInput, PhiAccessRecord, PhiAccessFilter,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { encryptJson, decryptJson } from '@/lib/phi';
+import { phiAuditIntegrity } from '@/lib/phi-audit';
 import { getActorContext } from '@/auth/actor';
 
 // pg returns untyped rows; `Row` documents that we map them explicitly below.
@@ -57,6 +59,7 @@ function rowToClinicOutcome(r: Row): ClinicOutcomeRecord {
     sessionId: r.session_id,
     scenarioId: r.scenario_id,
     userId: r.user_id ?? null,
+    clinicId: r.clinic_id ?? null,
     outcome: r.outcome,
     eventId: r.event_id ?? null,
     eventLink: r.event_link ?? null,
@@ -77,6 +80,7 @@ function rowToSession(r: Row): SessionRecord {
   return {
     id: r.id,
     userId: r.user_id ?? null,
+    clinicId: r.clinic_id ?? null,
     scenarioId: r.scenario_id,
     coachId: r.coach_id ?? null,
     courseId: r.course_id ?? null,
@@ -133,6 +137,7 @@ function rowToUser(r: Row): UserRecord {
     email: r.email,
     passwordHash: r.password_hash,
     displayName: r.display_name,
+    clinicId: r.clinic_id ?? null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -165,6 +170,22 @@ function rowToMemory(r: Row): CoachMemoryRecord {
     salience: Number(r.salience),
     expiresAt: new Date(r.expires_at).toISOString(),
     createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+function rowToPhiAccess(r: Row): PhiAccessRecord {
+  return {
+    id: r.id,
+    seq: Number(r.seq),
+    ts: new Date(r.ts).toISOString(),
+    actorUserId: r.actor_user_id ?? null,
+    actorLabel: r.actor_label,
+    action: r.action,
+    entity: r.entity,
+    entityId: r.entity_id ?? null,
+    clinicId: r.clinic_id ?? null,
+    refs: (r.refs ?? {}) as Record<string, unknown>,
+    integrity: r.integrity,
   };
 }
 
@@ -250,9 +271,12 @@ export class PgStore implements Store {
   /** Apply the request-scoped actor's GUCs (transaction-local) for RLS. */
   private async applyActor(client: PoolClient): Promise<void> {
     const ctx = getActorContext();
-    await client.query('SELECT set_config($1,$2,true), set_config($3,$4,true)', [
+    // app.clinic_id (SAU-275) drives the multi-clinic PHI policies; '' (unset) for
+    // platform/consumer users so the clinic clause simply never matches.
+    await client.query('SELECT set_config($1,$2,true), set_config($3,$4,true), set_config($5,$6,true)', [
       'app.user_id', ctx?.userId ?? '',
       'app.is_admin', ctx?.isAdmin ? 'on' : 'off',
+      'app.clinic_id', ctx?.clinicId ?? '',
     ]);
   }
 
@@ -530,9 +554,10 @@ export class PgStore implements Store {
 
   async createSession(input: NewSession): Promise<SessionRecord> {
     const { rows } = await this.q(
-      `INSERT INTO session (scenario_id, user_id, coach_id, course_id, vendor, status)
-       VALUES ($1,$2,$3,$4,$5,'active') RETURNING *`,
-      [input.scenarioId, input.userId ?? null, input.coachId ?? null, input.courseId ?? null, input.vendor],
+      `INSERT INTO session (scenario_id, user_id, coach_id, course_id, vendor, status, clinic_id)
+       VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING *`,
+      [input.scenarioId, input.userId ?? null, input.coachId ?? null, input.courseId ?? null, input.vendor,
+        input.clinicId ?? null],
     );
     return rowToSession(rows[0]);
   }
@@ -543,6 +568,12 @@ export class PgStore implements Store {
       // PHI at rest (SAU-274): event payloads carry live transcript text — encrypt.
       [row.sessionId, row.ts, row.type, JSON.stringify(encryptJson(row.payload))],
     );
+    // PHI audit (SAU-275): a live transcript/tool-call event is PHI — record it.
+    // This is the PROGRAMMATIC-AGENT write path during a call; the bound actor
+    // (e.g. agent:<scenario>) names the principal.
+    await this.recordPhiAccess({
+      action: 'write', entity: 'session_event.payload', entityId: row.sessionId, refs: { type: row.type },
+    });
   }
 
   async completeSession(
@@ -558,12 +589,25 @@ export class PgStore implements Store {
       // PHI at rest (SAU-274): encrypt the transcript into an envelope before write.
       [sessionId, update.status, update.endedAt, JSON.stringify(encryptJson(update.transcript)), update.startedAt ?? null],
     );
-    return rows[0] ? rowToSession(rows[0]) : null;
+    if (!rows[0]) return null;
+    // PHI audit (SAU-275): the call transcript is PHI — record the write.
+    await this.recordPhiAccess({
+      action: 'write', entity: 'session.transcript', entityId: sessionId,
+      clinicId: rows[0].clinic_id ?? null, refs: { turns: update.transcript?.turns?.length ?? 0 },
+    });
+    return rowToSession(rows[0]);
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
     const { rows } = await this.q('SELECT * FROM session WHERE id = $1', [id]);
-    return rows[0] ? rowToSession(rows[0]) : null;
+    if (!rows[0]) return null;
+    // PHI audit (SAU-275): only the transcript is PHI — record a read when present.
+    if (rows[0].transcript != null) {
+      await this.recordPhiAccess({
+        action: 'read', entity: 'session.transcript', entityId: id, clinicId: rows[0].clinic_id ?? null,
+      });
+    }
+    return rowToSession(rows[0]);
   }
 
   async listSessionsByScenario(scenarioId: string): Promise<SessionRecord[]> {
@@ -586,6 +630,12 @@ export class PgStore implements Store {
 
   async listSessionEvents(sessionId: string): Promise<SessionEventRow[]> {
     const { rows } = await this.q('SELECT * FROM session_event WHERE session_id = $1 ORDER BY ts', [sessionId]);
+    // PHI audit (SAU-275): event payloads are PHI — record the read when any exist.
+    if (rows.length) {
+      await this.recordPhiAccess({
+        action: 'read', entity: 'session_event.payload', entityId: sessionId, refs: { events: rows.length },
+      });
+    }
     return rows.map((r: Row) => ({
       sessionId: r.session_id,
       ts: new Date(r.ts).getTime(),
@@ -673,27 +723,40 @@ export class PgStore implements Store {
   // ── Clinic Intake & Booking outcome (SAU-267) — migration 0016 ───────────────
   async recordClinicOutcome(rec: ClinicOutcomeRecord): Promise<ClinicOutcomeRecord> {
     const { rows } = await this.q(
-      `INSERT INTO clinic_session_outcome (session_id, scenario_id, user_id, outcome, event_id, event_link,
+      `INSERT INTO clinic_session_outcome (session_id, scenario_id, user_id, clinic_id, outcome, event_id, event_link,
          doctor_id, doctor_name, slot_start, slot_end, calendar, simulated, intake)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
        ON CONFLICT (session_id) DO UPDATE SET
-         scenario_id = EXCLUDED.scenario_id, user_id = EXCLUDED.user_id, outcome = EXCLUDED.outcome,
-         event_id = EXCLUDED.event_id, event_link = EXCLUDED.event_link, doctor_id = EXCLUDED.doctor_id,
-         doctor_name = EXCLUDED.doctor_name, slot_start = EXCLUDED.slot_start, slot_end = EXCLUDED.slot_end,
-         calendar = EXCLUDED.calendar, simulated = EXCLUDED.simulated, intake = EXCLUDED.intake
+         scenario_id = EXCLUDED.scenario_id, user_id = EXCLUDED.user_id, clinic_id = EXCLUDED.clinic_id,
+         outcome = EXCLUDED.outcome, event_id = EXCLUDED.event_id, event_link = EXCLUDED.event_link,
+         doctor_id = EXCLUDED.doctor_id, doctor_name = EXCLUDED.doctor_name, slot_start = EXCLUDED.slot_start,
+         slot_end = EXCLUDED.slot_end, calendar = EXCLUDED.calendar, simulated = EXCLUDED.simulated,
+         intake = EXCLUDED.intake
        RETURNING *`,
       // PHI at rest (SAU-274): `intake` carries patient identifiers (name/DOB/
       // reason/insurance) — encrypt it into an envelope before write.
-      [rec.sessionId, rec.scenarioId, rec.userId, rec.outcome, rec.eventId, rec.eventLink,
+      [rec.sessionId, rec.scenarioId, rec.userId, rec.clinicId ?? null, rec.outcome, rec.eventId, rec.eventLink,
         rec.doctorId, rec.doctorName, rec.slotStart, rec.slotEnd, rec.calendar, rec.simulated,
         JSON.stringify(encryptJson(rec.intake ?? {}))],
     );
+    // PHI audit (SAU-275): record the write of patient intake.
+    await this.recordPhiAccess({
+      action: 'write', entity: 'clinic_session_outcome.intake', entityId: rec.sessionId,
+      clinicId: rec.clinicId ?? null, refs: { outcome: rec.outcome },
+    });
     return rowToClinicOutcome(rows[0]);
   }
 
   async getClinicOutcome(sessionId: string): Promise<ClinicOutcomeRecord | null> {
     const { rows } = await this.q('SELECT * FROM clinic_session_outcome WHERE session_id = $1', [sessionId]);
-    return rows[0] ? rowToClinicOutcome(rows[0]) : null;
+    if (!rows[0]) return null;
+    const rec = rowToClinicOutcome(rows[0]);
+    // PHI audit (SAU-275): record the read of patient intake.
+    await this.recordPhiAccess({
+      action: 'read', entity: 'clinic_session_outcome.intake', entityId: sessionId,
+      clinicId: rec.clinicId ?? null,
+    });
+    return rec;
   }
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
@@ -1164,6 +1227,47 @@ export class PgStore implements Store {
       coachId: r.coach_id ?? null, refs: (r.refs ?? {}) as Record<string, unknown>,
       ts: new Date(r.ts).toISOString(),
     }));
+  }
+
+  // ── PHI access audit log (SAU-275) — append-only, HMAC tamper-evident ───────
+  /**
+   * Append one PHI read/write record. The acting principal is derived from the
+   * bound actor (ALS) when not supplied — so PROGRAMMATIC AGENT access during a
+   * call is captured by binding an `agent:<scenario>` actor for the call. The row
+   * is HMAC-stamped over its canonical content at write; DB privileges + a trigger
+   * keep the table append-only (migration 0018).
+   */
+  async recordPhiAccess(entry: PhiAccessInput): Promise<void> {
+    const ctx = getActorContext();
+    const actorUserId = ctx?.userId ? ctx.userId : null;
+    const actorLabel = entry.actorLabel ?? (actorUserId ? `user:${actorUserId}` : 'system');
+    const clinicId = entry.clinicId ?? ctx?.clinicId ?? null;
+    const entityId = entry.entityId ?? null;
+    const refs = entry.refs ?? {};
+    const ts = new Date().toISOString();
+    const integrity = phiAuditIntegrity({
+      ts, actorUserId, actorLabel, action: entry.action, entity: entry.entity, entityId, clinicId, refs,
+    });
+    await this.q(
+      `INSERT INTO phi_access_log (ts, actor_user_id, actor_label, action, entity, entity_id, clinic_id, refs, integrity)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,
+      [ts, actorUserId, actorLabel, entry.action, entry.entity, entityId, clinicId, JSON.stringify(refs), integrity],
+    );
+  }
+
+  async listPhiAccess(filter: PhiAccessFilter): Promise<PhiAccessRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.entityId) { params.push(filter.entityId); clauses.push(`entity_id = $${params.length}`); }
+    if (filter.clinicId) { params.push(filter.clinicId); clauses.push(`clinic_id = $${params.length}`); }
+    if (filter.actorUserId) { params.push(filter.actorUserId); clauses.push(`actor_user_id = $${params.length}`); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(Math.min(filter.limit ?? 500, 2000));
+    const { rows } = await this.q(
+      `SELECT * FROM phi_access_log ${where} ORDER BY seq DESC LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map(rowToPhiAccess);
   }
 
   // ── AuthN + RBAC (Slice 5, SAU-229) — no RLS on these tables; pool-direct ───

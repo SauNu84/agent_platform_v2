@@ -15,6 +15,7 @@ import type {
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
+  PhiAccessInput, PhiAccessRecord, PhiAccessFilter,
 } from './store';
 import { genShareCode } from '@/lib/short-code';
 import { ROLE_CAPABILITIES } from '@/auth/rbac';
@@ -50,6 +51,7 @@ export class MemoryStore implements Store {
   private memories = new Map<string, CoachMemoryRecord>();    // by id
   private consents: ConsentRecord[] = [];                     // append-only
   private audit: (AuditEvent & { ts: string })[] = [];        // append-only
+  private phiAccess: PhiAccessRecord[] = [];                  // append-only (SAU-275)
   private shareLinks = new Map<string, ShareLinkRecord>();    // by code
   private scenarioToShareCode = new Map<string, string>();    // scenarioId → code (idempotency)
   // ── Knowledge Base (SAU-243) ──
@@ -429,6 +431,7 @@ export class MemoryStore implements Store {
     const rec: SessionRecord = {
       id,
       userId: input.userId ?? null,
+      clinicId: input.clinicId ?? null,
       scenarioId: input.scenarioId,
       coachId: input.coachId ?? null,
       courseId: input.courseId ?? null,
@@ -769,6 +772,35 @@ export class MemoryStore implements Store {
       .sort((a, b) => (a.ts < b.ts ? 1 : -1));
   }
 
+  // ── PHI access audit log (SAU-275) ──────────────────────────────────────────
+  // Dev/test fallback: keep an in-process append-only list. Tamper-evidence +
+  // DB-enforced append-only are Postgres-only (migration 0018); the real HIPAA
+  // posture is exercised by the PgStore path / RLS test.
+  async recordPhiAccess(entry: PhiAccessInput): Promise<void> {
+    this.phiAccess.push({
+      id: randomUUID(),
+      seq: this.phiAccess.length + 1,
+      ts: nowIso(),
+      actorUserId: null,
+      actorLabel: entry.actorLabel ?? 'system',
+      action: entry.action,
+      entity: entry.entity,
+      entityId: entry.entityId ?? null,
+      clinicId: entry.clinicId ?? null,
+      refs: entry.refs ?? {},
+      integrity: '(memory-store: not signed)',
+    });
+  }
+
+  async listPhiAccess(filter: PhiAccessFilter): Promise<PhiAccessRecord[]> {
+    return this.phiAccess
+      .filter((e) => (!filter.entityId || e.entityId === filter.entityId)
+        && (!filter.clinicId || e.clinicId === filter.clinicId)
+        && (!filter.actorUserId || e.actorUserId === filter.actorUserId))
+      .sort((a, b) => b.seq - a.seq)
+      .slice(0, filter.limit ?? 500);
+  }
+
   // ── Slice 5: auth + RBAC ─────────────────────────────────────────────────
   /** Synchronous user seed (dev only) — populate identity maps without awaiting. */
   seedUsersSync(items: Array<{ email: string; passwordHash: string; displayName: string; role: string }>): void {
@@ -777,7 +809,7 @@ export class MemoryStore implements Store {
       if (this.usersByEmail.has(email)) continue;
       const id = randomUUID();
       const ts = nowIso();
-      this.users.set(id, { id, email, passwordHash: u.passwordHash, displayName: u.displayName, createdAt: ts, updatedAt: ts });
+      this.users.set(id, { id, email, passwordHash: u.passwordHash, displayName: u.displayName, clinicId: null, createdAt: ts, updatedAt: ts });
       this.usersByEmail.set(email, id);
       this.userRoles.set(id, u.role);
     }
@@ -788,7 +820,7 @@ export class MemoryStore implements Store {
     if (this.usersByEmail.has(email)) throw new Error(`user with email "${email}" already exists`);
     const id = input.id ?? randomUUID();
     const ts = nowIso();
-    const rec: UserRecord = { id, email, passwordHash: input.passwordHash, displayName: input.displayName, createdAt: ts, updatedAt: ts };
+    const rec: UserRecord = { id, email, passwordHash: input.passwordHash, displayName: input.displayName, clinicId: null, createdAt: ts, updatedAt: ts };
     this.users.set(id, rec);
     this.usersByEmail.set(email, id);
     return rec;

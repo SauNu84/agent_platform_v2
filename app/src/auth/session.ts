@@ -21,6 +21,8 @@ export interface Actor {
   capabilities: Capability[];
   /** holds platform_admin → unrestricted (admin) */
   isAdmin: boolean;
+  /** the user's clinic/org (SAU-275); null for platform/consumer users. */
+  clinicId: string | null;
 }
 
 export function newSessionToken(): string {
@@ -74,5 +76,6 @@ export async function resolveActor(store: Store, token: string | undefined | nul
     role,
     capabilities,
     isAdmin: isAdminCaps(capabilities),
+    clinicId: user.clinicId ?? null,
   };
 }

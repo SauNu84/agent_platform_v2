@@ -14,23 +14,31 @@ import { getScenario } from '@/services/scenarios';
 import { runVoiceSession, persistClientSession, clientVendorForEngine, type Vendor } from '@/voice/session-service';
 import { resolveTierForUser, resolveSessionEngine } from '@/voice/engine-router';
 import { assertWithinCap, CapExceededError } from '@/services/meter';
-import { getActor } from '@/services/current-user';
+import { withActor } from '@/services/current-user';
 import { isClinicScenario, finalizeClinicSession } from '@/services/clinic-session';
 import type { Transcript } from '@/voice/realtime-interface';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: NextRequest, { params }: { params: { slug: string } }) {
-  const store = getStore();
-  const scenario = await getScenario(store, params.slug);
-  if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  const sessions = await store.listSessionsByScenario(scenario.id);
-  return NextResponse.json({ sessions });
+  // Wrap in withActor (SAU-275): bind the RLS context via AsyncLocalStorage.run so
+  // the session-owner / clinic policies reach PgStore under app_rw (a non-owner
+  // sees only their own / their clinic's sessions instead of a superuser-masked all).
+  return withActor(async () => {
+    const store = getStore();
+    const scenario = await getScenario(store, params.slug);
+    if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    const sessions = await store.listSessionsByScenario(scenario.id);
+    return NextResponse.json({ sessions });
+  });
 }
 
 export async function POST(req: NextRequest, { params }: { params: { slug: string } }) {
+  // withActor (SAU-275): run the whole handler inside the bound RLS context so the
+  // session WRITE (and the clinic-outcome PHI write) succeed under app_rw — the
+  // exact own-write path that silently failed when enterWith didn't reach PgStore.
+  return withActor(async (actor) => {
   const store = getStore();
-  const actor = await getActor();
   if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const scenario = await getScenario(store, params.slug);
   if (!scenario) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -43,6 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   }
 
   const userId = actor.userId;
+  const clinicId = actor.clinicId;
 
   // Monetization guardrail (Slice 2): block Join when the user's voice-minute cap
   // is exhausted. Pre-flight check — mid-session hard-stop is a tracked follow-up.
@@ -76,17 +85,18 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
 
   try {
     if (body.transcript) {
-      const result = await persistClientSession({ store, scenario, vendor, tier, modelId, userId, transcript: body.transcript });
+      const result = await persistClientSession({ store, scenario, vendor, tier, modelId, userId, clinicId, transcript: body.transcript });
       // Clinic action-agent (SAU-267): derive the task outcome + extract intake
       // alongside the session (distinct from the analyst scoring projection).
       const outcome = isClinicScenario(scenario)
-        ? await finalizeClinicSession({ store, scenario, sessionId: result.sessionId, userId, transcript: { turns: body.transcript.turns, toolCalls: body.transcript.toolCalls } })
+        ? await finalizeClinicSession({ store, scenario, sessionId: result.sessionId, userId, clinicId, transcript: { turns: body.transcript.turns, toolCalls: body.transcript.toolCalls } })
         : undefined;
       return NextResponse.json({ ...result, outcome }, { status: 201 });
     }
-    const result = await runVoiceSession({ store, scenario, vendor, tier, modelId, userId });
+    const result = await runVoiceSession({ store, scenario, vendor, tier, modelId, userId, clinicId });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
+  });
 }

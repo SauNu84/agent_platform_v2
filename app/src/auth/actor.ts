@@ -19,6 +19,12 @@ export interface ActorContext {
   userId: string;
   /** holds platform_admin → full RLS bypass (set app.is_admin = 'on') */
   isAdmin: boolean;
+  /**
+   * The acting user's clinic/org (SAU-275). Drives the `app.clinic_id` GUC so the
+   * multi-clinic PHI policies scope rows to the tenant. null for platform/consumer
+   * users (no clinic) — the clinic policies then never match, exactly as before.
+   */
+  clinicId?: string | null;
 }
 
 const storage = new AsyncLocalStorage<ActorContext>();
