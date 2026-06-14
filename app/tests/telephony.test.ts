@@ -170,16 +170,27 @@ test('bridgeServerPort honors env and defaults to 5050', async () => {
 
 // ── OpenAI Realtime session config (transcode-free μ-law bridge) ──────────────
 
-test('openAiSessionUpdate uses g711_ulaw both ways, server VAD, and maps tools', () => {
+test('openAiSessionUpdate uses GA shape: audio/pcmu both ways, server VAD, and maps tools', () => {
   const upd = openAiSessionUpdate({
     instructions: 'be Robin',
     voice: 'alloy',
     tools: [{ name: 'check_availability', description: 'd', paramsSchema: { type: 'object' }, sideEffect: 'server' }],
   });
   const session = (upd as { session: Record<string, unknown> }).session;
-  assert.equal(session.input_audio_format, 'g711_ulaw');
-  assert.equal(session.output_audio_format, 'g711_ulaw');
-  assert.deepEqual(session.turn_detection, { type: 'server_vad' });
+  // GA Realtime API (SAU-293): audio nested under input/output, format is an object
+  // (μ-law = audio/pcmu), output_modalities replaces top-level modalities, and the
+  // old beta fields must be gone (sending them fails with beta_api_shape_disabled).
+  const audio = session.audio as { input: Record<string, unknown>; output: Record<string, unknown> };
+  assert.deepEqual(audio.input.format, { type: 'audio/pcmu' });
+  assert.deepEqual(audio.output.format, { type: 'audio/pcmu' });
+  assert.equal((audio.output as { voice: string }).voice, 'alloy');
+  const td = audio.input.turn_detection as Record<string, unknown>;
+  assert.equal(td.type, 'server_vad');
+  // create_response is essential — without it the GA agent never replies.
+  assert.equal(td.create_response, true);
+  assert.deepEqual(session.output_modalities, ['audio']);
+  assert.equal(session.input_audio_format, undefined);
+  assert.equal(session.modalities, undefined);
   const tools = session.tools as Array<{ type: string; name: string }>;
   assert.equal(tools[0].type, 'function');
   assert.equal(tools[0].name, 'check_availability');
