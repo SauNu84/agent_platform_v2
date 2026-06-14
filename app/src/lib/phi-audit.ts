@@ -20,7 +20,7 @@ export interface PhiAuditContent {
   ts: string;
   actorUserId: string | null;
   actorLabel: string;
-  action: 'read' | 'write';
+  action: 'read' | 'write' | 'purge';
   entity: string;
   entityId: string | null;
   clinicId: string | null;

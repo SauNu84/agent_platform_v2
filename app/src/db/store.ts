@@ -297,9 +297,9 @@ export interface AuditEvent {
 /** The principal touching PHI: a human user, a programmatic agent, or system. */
 export type PhiActorLabel = string; // 'user:<id>' | 'agent:<scenario>' | 'system' | 'anonymous'
 
-/** One PHI read/write to record. `refs` carries counts/ids only — NEVER PHI. */
+/** One PHI read/write/purge to record. `refs` carries counts/ids only — NEVER PHI. */
 export interface PhiAccessInput {
-  action: 'read' | 'write';
+  action: 'read' | 'write' | 'purge';
   /** which PHI field, e.g. 'clinic_session_outcome.intake' | 'session.transcript'. */
   entity: string;
   /** the PHI subject key (session id), when known. */
@@ -318,7 +318,7 @@ export interface PhiAccessRecord {
   ts: string;
   actorUserId: string | null;
   actorLabel: PhiActorLabel;
-  action: 'read' | 'write';
+  action: 'read' | 'write' | 'purge';
   entity: string;
   entityId: string | null;
   clinicId: string | null;

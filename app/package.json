@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "migrate": "tsx src/db/migrate.ts",
+    "purge:phi": "tsx src/db/retention-purge-cli.ts",
     "seed": "tsx src/db/seed-cli.ts",
     "seed:users": "tsx src/db/seed-users-cli.ts"
   },
