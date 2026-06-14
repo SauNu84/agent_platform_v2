@@ -394,6 +394,31 @@ export interface ClinicOutcomeRecord {
   simulated: boolean;
   /** structured intake JSON extracted from the transcript (AC #4). */
   intake: Record<string, unknown>;
+  /** why the call escalated to a human (SAU-273 WS4); null unless escalated. */
+  escalationReason?: string | null;
+  /** how the escalation was handled: warm_transfer | voicemail | callback | none. */
+  handoffAction?: string | null;
+  /** dispatch summary of the booking confirmations: sent|partial|blocked|skipped|failed|none. */
+  confirmationStatus?: string | null;
+  createdAt?: string;
+}
+
+/** One per attempted outbound confirmation/notice (SAU-273 WS3). No PHI. */
+export interface ClinicNotificationRecord {
+  id?: string;
+  sessionId: string | null;
+  userId: string | null;
+  clinicId?: string | null;
+  /** opaque booking reference (calendar event id). */
+  reference: string;
+  channel: 'sms' | 'email';
+  audience: 'patient' | 'clinic';
+  /** masked recipient — never the raw phone/email. */
+  recipientMasked: string;
+  status: 'sent' | 'failed' | 'blocked' | 'skipped';
+  providerId?: string | null;
+  simulated: boolean;
+  error?: string | null;
   createdAt?: string;
 }
 
@@ -491,6 +516,10 @@ export interface Store {
   /** Upsert the session's outcome + extracted intake. Idempotent per session. */
   recordClinicOutcome(rec: ClinicOutcomeRecord): Promise<ClinicOutcomeRecord>;
   getClinicOutcome(sessionId: string): Promise<ClinicOutcomeRecord | null>;
+  /** Append a confirmation/notice delivery record (SAU-273 WS3). */
+  recordClinicNotification(rec: ClinicNotificationRecord): Promise<ClinicNotificationRecord>;
+  /** All delivery records for a session, newest first. */
+  listClinicNotifications(sessionId: string): Promise<ClinicNotificationRecord[]>;
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
   listSessionHistory(userId: string): Promise<SessionHistoryRow[]>;

@@ -9,7 +9,7 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -38,6 +38,7 @@ export class MemoryStore implements Store {
   private usage = new Map<string, VoiceUsageRecord>();        // by sessionId
   private analyses = new Map<string, AnalysisRecord>();       // by sessionId
   private clinicOutcomes = new Map<string, ClinicOutcomeRecord>(); // by sessionId (SAU-267)
+  private clinicNotifications: ClinicNotificationRecord[] = []; // SAU-273 WS3 delivery log
   private entitlements = new Map<string, EntitlementRecord>(); // by userId
   private checkouts = new Map<string, CheckoutRecord>();       // by id (SAU-250)
   private apiKeys = new Map<string, ApiKeyRecord>();           // by id (SAU-252)
@@ -542,6 +543,22 @@ export class MemoryStore implements Store {
 
   async getClinicOutcome(sessionId: string): Promise<ClinicOutcomeRecord | null> {
     return this.clinicOutcomes.get(sessionId) ?? null;
+  }
+
+  async recordClinicNotification(rec: ClinicNotificationRecord): Promise<ClinicNotificationRecord> {
+    const full: ClinicNotificationRecord = {
+      ...rec,
+      id: rec.id ?? `notif-${this.clinicNotifications.length + 1}`,
+      createdAt: rec.createdAt ?? nowIso(),
+    };
+    this.clinicNotifications.push(full);
+    return full;
+  }
+
+  async listClinicNotifications(sessionId: string): Promise<ClinicNotificationRecord[]> {
+    return this.clinicNotifications
+      .filter((n) => n.sessionId === sessionId)
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
   }
 
   // ── Slice 2: History + Creator analytics ──────────────────────────────────────

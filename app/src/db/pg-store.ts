@@ -19,7 +19,7 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -72,6 +72,27 @@ function rowToClinicOutcome(r: Row): ClinicOutcomeRecord {
     // PHI at rest (SAU-274): `intake` is stored as an AES-256-GCM envelope; decrypt
     // on read. Legacy pre-0017 plaintext rows pass through unchanged.
     intake: decryptJson<Record<string, unknown>>(r.intake) ?? {},
+    escalationReason: r.escalation_reason ?? null,
+    handoffAction: r.handoff_action ?? null,
+    confirmationStatus: r.confirmation_status ?? null,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+  };
+}
+
+function rowToClinicNotification(r: Row): ClinicNotificationRecord {
+  return {
+    id: r.id,
+    sessionId: r.session_id ?? null,
+    userId: r.user_id ?? null,
+    clinicId: r.clinic_id ?? null,
+    reference: r.reference,
+    channel: r.channel,
+    audience: r.audience,
+    recipientMasked: r.recipient_masked,
+    status: r.status,
+    providerId: r.provider_id ?? null,
+    simulated: r.simulated ?? true,
+    error: r.error ?? null,
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
   };
 }
@@ -724,20 +745,23 @@ export class PgStore implements Store {
   async recordClinicOutcome(rec: ClinicOutcomeRecord): Promise<ClinicOutcomeRecord> {
     const { rows } = await this.q(
       `INSERT INTO clinic_session_outcome (session_id, scenario_id, user_id, clinic_id, outcome, event_id, event_link,
-         doctor_id, doctor_name, slot_start, slot_end, calendar, simulated, intake)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
+         doctor_id, doctor_name, slot_start, slot_end, calendar, simulated, intake,
+         escalation_reason, handoff_action, confirmation_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17)
        ON CONFLICT (session_id) DO UPDATE SET
          scenario_id = EXCLUDED.scenario_id, user_id = EXCLUDED.user_id, clinic_id = EXCLUDED.clinic_id,
          outcome = EXCLUDED.outcome, event_id = EXCLUDED.event_id, event_link = EXCLUDED.event_link,
          doctor_id = EXCLUDED.doctor_id, doctor_name = EXCLUDED.doctor_name, slot_start = EXCLUDED.slot_start,
          slot_end = EXCLUDED.slot_end, calendar = EXCLUDED.calendar, simulated = EXCLUDED.simulated,
-         intake = EXCLUDED.intake
+         intake = EXCLUDED.intake, escalation_reason = EXCLUDED.escalation_reason,
+         handoff_action = EXCLUDED.handoff_action, confirmation_status = EXCLUDED.confirmation_status
        RETURNING *`,
       // PHI at rest (SAU-274): `intake` carries patient identifiers (name/DOB/
       // reason/insurance) — encrypt it into an envelope before write.
       [rec.sessionId, rec.scenarioId, rec.userId, rec.clinicId ?? null, rec.outcome, rec.eventId, rec.eventLink,
         rec.doctorId, rec.doctorName, rec.slotStart, rec.slotEnd, rec.calendar, rec.simulated,
-        JSON.stringify(encryptJson(rec.intake ?? {}))],
+        JSON.stringify(encryptJson(rec.intake ?? {})),
+        rec.escalationReason ?? null, rec.handoffAction ?? null, rec.confirmationStatus ?? null],
     );
     // PHI audit (SAU-275): record the write of patient intake.
     await this.recordPhiAccess({
@@ -757,6 +781,27 @@ export class PgStore implements Store {
       clinicId: rec.clinicId ?? null,
     });
     return rec;
+  }
+
+  // ── Confirmation / notice delivery log (SAU-273 WS3) — migration 0020 ─────────
+  async recordClinicNotification(rec: ClinicNotificationRecord): Promise<ClinicNotificationRecord> {
+    const { rows } = await this.q(
+      `INSERT INTO clinic_notification (session_id, user_id, clinic_id, reference, channel, audience,
+         recipient_masked, status, provider_id, simulated, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING *`,
+      [rec.sessionId, rec.userId, rec.clinicId ?? null, rec.reference, rec.channel, rec.audience,
+        rec.recipientMasked, rec.status, rec.providerId ?? null, rec.simulated, rec.error ?? null],
+    );
+    return rowToClinicNotification(rows[0]);
+  }
+
+  async listClinicNotifications(sessionId: string): Promise<ClinicNotificationRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM clinic_notification WHERE session_id = $1 ORDER BY created_at DESC',
+      [sessionId],
+    );
+    return rows.map(rowToClinicNotification);
   }
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────

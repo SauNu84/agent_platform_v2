@@ -17,6 +17,10 @@ import type { ScenarioRecord } from '@/domain/scenario';
 import type { Store, ClinicOutcomeRecord, ClinicOutcome, SessionTranscript } from '@/db/store';
 import { CLINIC_TOOL_NAMES } from '@/services/clinic-booking';
 import { extractIntake } from '@/intake/extractor';
+import { DEFAULT_CLINIC } from '@/domain/clinic';
+import { dispatchBookingConfirmations, type NotificationDelivery } from '@/services/clinic-notify';
+import { handleEscalation } from '@/services/clinic-escalation';
+import type { BookingPhi } from '@/services/clinic-confirmation';
 
 /** A scenario is a clinic action-agent when it wires the booking tools. */
 export function isClinicScenario(scenario: ScenarioRecord): boolean {
@@ -36,6 +40,19 @@ interface BookingResult {
   calendar?: string;
   simulated?: boolean;
   slots?: unknown[];
+  patientPhone?: string | null;
+  patientEmail?: string | null;
+}
+
+/** Roll up the per-channel deliveries into one summary for the outcome row. */
+function summarizeConfirmations(deliveries: NotificationDelivery[]): string {
+  if (deliveries.some((d) => d.status === 'blocked')) return 'blocked';
+  const attempted = deliveries.filter((d) => d.status !== 'skipped');
+  if (attempted.length === 0) return 'skipped';
+  const sent = attempted.filter((d) => d.status === 'sent').length;
+  if (sent === attempted.length) return 'sent';
+  if (sent > 0) return 'partial';
+  return 'failed';
 }
 
 /** Decide the outcome from the session's tool-call results. */
@@ -84,6 +101,57 @@ export async function finalizeClinicSession(opts: {
   const { store, scenario, sessionId, userId, clinicId = null, transcript } = opts;
   const intake = await extractIntake({ turns: transcript.turns, toolCalls: transcript.toolCalls });
   const { outcome, booking } = deriveOutcome(transcript.toolCalls);
+  const clinicName = DEFAULT_CLINIC.name;
+
+  // Close-the-loop side effects (SAU-273). Both are best-effort and fail-soft —
+  // a confirmation/handoff problem must never undo a completed booking or throw
+  // out of finalization. The PHI guard inside dispatch is fail-CLOSED separately.
+  let confirmationStatus: string | null = null;
+  let escalationReason: string | null = null;
+  let handoffAction: string | null = null;
+  const deliveries: NotificationDelivery[] = [];
+
+  if (outcome === 'booked' && booking?.eventId) {
+    // WS3: tell the patient (SMS + email) + notify the clinic. PHI-free bodies.
+    const phi: BookingPhi = {
+      patientName: intake.patientName,
+      dob: intake.dob,
+      reason: intake.reasonForVisit,
+      doctorName: booking.doctorName ?? null,
+      startIso: booking.start ?? null,
+    };
+    try {
+      const sent = await dispatchBookingConfirmations({
+        reference: booking.eventId,
+        clinicName,
+        contacts: {
+          patientPhone: booking.patientPhone ?? intake.phone,
+          patientEmail: booking.patientEmail ?? null,
+        },
+        phi,
+      });
+      deliveries.push(...sent);
+      confirmationStatus = summarizeConfirmations(sent);
+    } catch {
+      confirmationStatus = 'failed';
+    }
+  } else if (outcome === 'escalated') {
+    // WS4: route the live caller to a human (or after-hours voicemail/callback)
+    // and notify the clinic. Outcome stays `escalated`; we record HOW it was handled.
+    try {
+      const esc = await handleEscalation({
+        turns: transcript.turns,
+        outcome,
+        reference: sessionId,
+        clinicName,
+      });
+      escalationReason = esc.reason;
+      handoffAction = esc.action;
+      deliveries.push(...esc.notifications);
+    } catch {
+      /* never let a handoff problem fail finalization */
+    }
+  }
 
   const rec: ClinicOutcomeRecord = {
     sessionId,
@@ -100,6 +168,28 @@ export async function finalizeClinicSession(opts: {
     calendar: booking?.calendar ?? null,
     simulated: booking?.simulated ?? true,
     intake: intake as unknown as Record<string, unknown>,
+    escalationReason,
+    handoffAction,
+    confirmationStatus,
   };
-  return store.recordClinicOutcome(rec);
+  const saved = await store.recordClinicOutcome(rec);
+
+  // Persist the delivery log (no PHI — masked recipient only).
+  const reference = booking?.eventId ?? sessionId;
+  for (const d of deliveries) {
+    await store.recordClinicNotification({
+      sessionId,
+      userId,
+      clinicId,
+      reference,
+      channel: d.channel,
+      audience: d.audience,
+      recipientMasked: d.recipientMasked,
+      status: d.status,
+      providerId: d.providerId ?? null,
+      simulated: d.simulated,
+      error: d.error ?? null,
+    });
+  }
+  return saved;
 }

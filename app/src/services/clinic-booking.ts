@@ -46,6 +46,10 @@ export interface CreateAppointmentArgs {
   reason?: string | null;
   insurance?: string | null;
   dob?: string | null;
+  /** Patient callback number for the confirmation SMS (contact PHI; body stays PHI-free). */
+  patientPhone?: string | null;
+  /** Patient email for the confirmation email (contact PHI). */
+  patientEmail?: string | null;
 }
 
 export type CreateAppointmentResult =
@@ -60,6 +64,9 @@ export type CreateAppointmentResult =
       calendar: string;
       simulated: boolean;
       insuranceAccepted: boolean;
+      /** Echoed back so the confirmation dispatcher can reach the patient. */
+      patientPhone?: string | null;
+      patientEmail?: string | null;
     }
   | {
       booked: false;
@@ -156,6 +163,8 @@ export async function createAppointment(args: CreateAppointmentArgs, deps?: Clin
     calendar: calendar.label,
     simulated: calendar.simulated,
     insuranceAccepted: isInsuranceAccepted(clinic, args.insurance),
+    patientPhone: args.patientPhone?.trim() || null,
+    patientEmail: args.patientEmail?.trim() || null,
   };
 }
 
