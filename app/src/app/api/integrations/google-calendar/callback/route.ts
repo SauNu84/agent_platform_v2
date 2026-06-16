@@ -15,8 +15,10 @@ import { verifyOAuthState, saveGoogleConnection } from '@/services/calendar/cale
 
 export const dynamic = 'force-dynamic';
 
-function back(origin: string, status: string): NextResponse {
-  return NextResponse.redirect(`${origin}/settings/integrations?calendar=${encodeURIComponent(status)}`);
+/** Bounce back to `path` (a vetted same-origin path) with a ?calendar=<status> flag. */
+function back(origin: string, status: string, path = '/settings/integrations'): NextResponse {
+  const sep = path.includes('?') ? '&' : '?';
+  return NextResponse.redirect(`${origin}${path}${sep}calendar=${encodeURIComponent(status)}`);
 }
 
 export async function GET(req: NextRequest) {
@@ -34,16 +36,18 @@ export async function GET(req: NextRequest) {
 
   const verified = verifyOAuthState(state, gate.actor.userId);
   if (!verified) return back(origin, 'state_mismatch');
+  // The flow may have started from the demo config panel; return there if so.
+  const dest = verified.returnTo ?? '/settings/integrations';
 
   const cfg = readGoogleOAuthConfig();
-  if (!cfg) return back(origin, 'not_configured');
+  if (!cfg) return back(origin, 'not_configured', dest);
 
   try {
     const tokens = await exchangeCodeForTokens(cfg, code, resolveRedirectUri(origin));
     await saveGoogleConnection(getStore(), gate.actor.userId, tokens, verified.calendarId);
-    return back(origin, 'connected');
+    return back(origin, 'connected', dest);
   } catch (e) {
     console.warn('[calendar] OAuth callback failed:', (e as Error).message);
-    return back(origin, 'error');
+    return back(origin, 'error', dest);
   }
 }

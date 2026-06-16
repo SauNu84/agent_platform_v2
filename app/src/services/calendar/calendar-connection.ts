@@ -96,6 +96,19 @@ export async function clearGoogleConnection(store: Store, userId: string): Promi
 }
 
 /**
+ * Switch the target calendar of an existing connection in place (no re-consent):
+ * bookings then read free/busy from and write events to `calendarId`. Returns false
+ * when there's no connection to update. Used by the demo config panel (SAU-297).
+ */
+export async function setConnectionCalendarId(store: Store, userId: string, calendarId: string): Promise<boolean> {
+  const conn = await readGoogleConnection(store, userId);
+  if (!conn) return false;
+  const cal = calendarId.trim() || 'primary';
+  await saveGoogleConnection(store, userId, conn.tokens, cal, conn.connectedAt);
+  return true;
+}
+
+/**
  * Return a valid access token for the connection, refreshing + persisting a new
  * one when the stored token is expired/near-expiry. Falls back to the stored token
  * when refresh isn't possible (no refresh token or OAuth app unconfigured) so a
@@ -141,17 +154,38 @@ export async function getCalendarConnectionView(store: Store, userId: string): P
 
 // ── OAuth CSRF state (self-verifying, no server-side row) ─────────────────────--
 
-/** Mint an opaque `state` binding the flow to `userId` (+ calendarId choice). */
-export function buildOAuthState(userId: string, calendarId = 'primary'): string {
-  return encrypt(JSON.stringify({ uid: userId, cal: calendarId, n: randomBytes(9).toString('base64') }));
+/**
+ * Sanitize a post-connect return path: only same-origin relative paths are allowed
+ * (must start with a single "/", no scheme/host), so the encrypted state can't be
+ * used as an open-redirect. Returns null for anything else.
+ */
+export function safeReturnTo(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const p = raw.trim();
+  if (!p.startsWith('/') || p.startsWith('//')) return null;
+  return p;
+}
+
+/** Mint an opaque `state` binding the flow to `userId` (+ calendarId + returnTo). */
+export function buildOAuthState(userId: string, calendarId = 'primary', returnTo?: string | null): string {
+  const ret = safeReturnTo(returnTo);
+  return encrypt(
+    JSON.stringify({ uid: userId, cal: calendarId, n: randomBytes(9).toString('base64'), ...(ret ? { ret } : {}) }),
+  );
 }
 
 /** Verify the `state` returned by Google and recover the bound user + calendar. */
-export function verifyOAuthState(state: string, expectedUserId: string): { calendarId: string } | null {
+export function verifyOAuthState(
+  state: string,
+  expectedUserId: string,
+): { calendarId: string; returnTo: string | null } | null {
   try {
-    const parsed = JSON.parse(decrypt(state)) as { uid?: string; cal?: string };
+    const parsed = JSON.parse(decrypt(state)) as { uid?: string; cal?: string; ret?: string };
     if (!parsed.uid || parsed.uid !== expectedUserId) return null;
-    return { calendarId: typeof parsed.cal === 'string' && parsed.cal ? parsed.cal : 'primary' };
+    return {
+      calendarId: typeof parsed.cal === 'string' && parsed.cal ? parsed.cal : 'primary',
+      returnTo: safeReturnTo(parsed.ret),
+    };
   } catch {
     return null;
   }

@@ -297,7 +297,7 @@ test('ensureFreshAccessToken returns the stored token when still fresh (no netwo
 // ── CSRF state ────────────────────────────────────────────────────────────────
 test('OAuth state binds the flow to the user and recovers the calendar id', () => {
   const state = buildOAuthState('user-1', 'clinic-cal');
-  assert.deepEqual(verifyOAuthState(state, 'user-1'), { calendarId: 'clinic-cal' });
+  assert.deepEqual(verifyOAuthState(state, 'user-1'), { calendarId: 'clinic-cal', returnTo: null });
   // Wrong user ⇒ rejected (CSRF / mix-up protection).
   assert.equal(verifyOAuthState(state, 'user-2'), null);
   // Garbage ⇒ rejected, no throw.

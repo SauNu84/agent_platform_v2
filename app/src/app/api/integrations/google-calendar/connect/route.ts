@@ -32,7 +32,10 @@ export async function GET(req: NextRequest) {
 
   const origin = new URL(req.url).origin;
   const calendarId = req.nextUrl.searchParams.get('calendarId')?.trim() || 'primary';
-  const state = buildOAuthState(gate.actor.userId, calendarId);
+  // Optional same-origin path to return to after consent (defaults to Settings →
+  // Integrations in the callback). The demo config panel passes its own path.
+  const returnTo = req.nextUrl.searchParams.get('returnTo');
+  const state = buildOAuthState(gate.actor.userId, calendarId, returnTo);
   const consentUrl = buildConsentUrl(cfg, { redirectUri: resolveRedirectUri(origin), state });
   return NextResponse.redirect(consentUrl);
 }

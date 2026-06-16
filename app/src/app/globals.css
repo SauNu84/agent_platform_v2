@@ -853,6 +853,8 @@ td.warn { color: #d97706; font-weight: 600; }
 .docs-breadcrumb { font-size: 13px; color: var(--muted); margin-bottom: 16px; font-family: var(--mono); }
 .docs-breadcrumb a { color: var(--muted); }
 .docs-breadcrumb a:hover { color: var(--text); }
+.docs-cta { margin: 0 0 20px; }
+.docs-cta a.btn { text-decoration: none; }
 .docs-pager {
   display: flex;
   justify-content: space-between;

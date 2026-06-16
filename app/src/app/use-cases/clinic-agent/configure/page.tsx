@@ -1,0 +1,44 @@
+/**
+ * /use-cases/clinic-agent/configure (SAU-297) — the no-code "Set up a demo" panel
+ * for the AI Clinic Agent. Connect a clinic's Google Calendar (reusing the SAU-271
+ * per-clinic OAuth flow) and set the phone numbers, so a call books into THAT
+ * calendar. Auth-gated (the static explainer at /use-cases/clinic-agent stays
+ * public); data is fetched per-actor and the interactive bits are a client island.
+ */
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { getStore } from '@/db';
+import { requirePageActor } from '@/services/current-user';
+import { toUseCaseLinks } from '@/services/use-cases';
+import UseCaseShell from '@/components/UseCaseShell';
+import { getCalendarConnectionView } from '@/services/calendar/calendar-connection';
+import { getClinicPhoneView } from '@/services/clinic-phone';
+import ClinicDemoConfig from './ClinicDemoConfig';
+
+export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Set up a demo — AI Clinic Agent',
+  description: "Connect a clinic's Google Calendar and phone numbers, then run a call that books into it.",
+};
+
+export default async function ClinicConfigurePage() {
+  const store = getStore();
+  const actor = await requirePageActor();
+
+  const [calendarOAuth, phone] = await Promise.all([
+    getCalendarConnectionView(store, actor.userId),
+    getClinicPhoneView(store, actor.userId),
+  ]);
+
+  return (
+    <UseCaseShell links={toUseCaseLinks()} activeSlug="clinic-agent">
+      <nav className="docs-breadcrumb">
+        <Link href="/use-cases">Use Cases</Link> <span aria-hidden="true">/</span>{' '}
+        <Link href="/use-cases/clinic-agent">AI Clinic Agent</Link> <span aria-hidden="true">/</span> Set up a demo
+      </nav>
+
+      <ClinicDemoConfig calendarOAuth={calendarOAuth} phone={phone} />
+    </UseCaseShell>
+  );
+}
