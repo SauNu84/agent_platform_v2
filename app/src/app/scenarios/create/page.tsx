@@ -974,6 +974,13 @@ function CreateScenarioForm() {
                       <option key={m.id} value={m.id}>{m.label}</option>
                     ))}
                   </select>
+                  {/* CTO guardrail #1 (SAU-307): a Super Agent runs in ONE realtime
+                      session on one engine in v1, so a per-sub-agent model can't be
+                      honored at runtime yet. We capture it (forward-compatible for
+                      multi-session orchestration) but say so plainly — no silent control. */}
+                  <p className="form-hint" style={{ marginTop: 4 }}>
+                    Saved for later — v1 runs all sub-agents on the scenario&apos;s model in one session. A per-sub-agent model applies once multi-session orchestration ships.
+                  </p>
                 </div>
               </div>
             ))}
