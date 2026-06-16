@@ -171,7 +171,7 @@ test('OAuth app creds: client secret is encrypted at rest and never echoed', asy
   assert.equal(view.clientIdMasked, `…${CLIENT_ID.slice(-8)}`, 'client id is masked to its tail');
   assert.equal(view.redirectUri, `${ORIGIN}/api/integrations/google-calendar/callback`);
   // The view never carries the raw secret.
-  assert.equal((view as Record<string, unknown>).clientSecret, undefined);
+  assert.equal((view as unknown as Record<string, unknown>).clientSecret, undefined);
 
   // The stored secret is ciphertext, not plaintext.
   const rec = await store.getUserSetting(USER, GOOGLE_OAUTH_APP_KEY);

@@ -16,6 +16,7 @@ import { getScenario } from '@/services/scenarios';
 import { getActor } from '@/services/current-user';
 import { runClinicTool, CLINIC_TOOL_NAMES } from '@/services/clinic-booking';
 import { resolveCalendarAdapter } from '@/services/calendar';
+import { getClinicConfig } from '@/services/clinic-config';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,10 +47,14 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   try {
     // Point the booking adapter at THIS clinic's calendar (SAU-271 WS2): the
     // actor's per-clinic Google OAuth connection if connected, else the Phase-0
-    // sandbox token, else the simulated mock — resolved fail-soft. The rules
-    // engine is unchanged; we only swap where free/busy is read and events land.
+    // sandbox token, else the simulated mock — resolved fail-soft.
     const calendar = await resolveCalendarAdapter({ store, userId: actor.userId });
-    const result = await runClinicTool(tool, body.args, { calendar });
+    // Load THIS operator's authored clinic definition (SAU-300, WS-A): hours,
+    // doctors, services, insurance and booking rules. The pure rules engine still
+    // enforces them in the tool — never the prompt (AC #2). Falls back to the
+    // Phase-0 DEFAULT_CLINIC when nothing has been authored yet.
+    const clinic = await getClinicConfig(store, actor.userId);
+    const result = await runClinicTool(tool, body.args, { clinic, calendar });
     return NextResponse.json({ tool, result }, { status: 200 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

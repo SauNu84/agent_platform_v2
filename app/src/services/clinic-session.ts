@@ -18,6 +18,7 @@ import type { Store, ClinicOutcomeRecord, ClinicOutcome, SessionTranscript } fro
 import { CLINIC_TOOL_NAMES } from '@/services/clinic-booking';
 import { extractIntake } from '@/intake/extractor';
 import { DEFAULT_CLINIC } from '@/domain/clinic';
+import { getClinicConfig } from '@/services/clinic-config';
 import { dispatchBookingConfirmations, type NotificationDelivery } from '@/services/clinic-notify';
 import { handleEscalation } from '@/services/clinic-escalation';
 import type { BookingPhi } from '@/services/clinic-confirmation';
@@ -101,7 +102,10 @@ export async function finalizeClinicSession(opts: {
   const { store, scenario, sessionId, userId, clinicId = null, transcript } = opts;
   const intake = await extractIntake({ turns: transcript.turns, toolCalls: transcript.toolCalls });
   const { outcome, booking } = deriveOutcome(transcript.toolCalls);
-  const clinicName = DEFAULT_CLINIC.name;
+  // Use THIS operator's authored clinic (SAU-300) for the confirmation/escalation
+  // copy + after-hours behavior; falls back to DEFAULT_CLINIC when none is authored.
+  const clinic = userId ? await getClinicConfig(store, userId) : DEFAULT_CLINIC;
+  const clinicName = clinic.name;
 
   // Close-the-loop side effects (SAU-273). Both are best-effort and fail-soft —
   // a confirmation/handoff problem must never undo a completed booking or throw
@@ -143,6 +147,7 @@ export async function finalizeClinicSession(opts: {
         turns: transcript.turns,
         outcome,
         reference: sessionId,
+        clinic,
         clinicName,
       });
       escalationReason = esc.reason;

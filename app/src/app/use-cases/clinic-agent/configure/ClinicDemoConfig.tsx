@@ -17,6 +17,7 @@
  */
 import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import ClinicDefinitionCard, { type ClinicConfigForm } from './ClinicDefinitionCard';
 
 const RETURN_TO = '/use-cases/clinic-agent/configure';
 
@@ -474,11 +475,15 @@ export default function ClinicDemoConfig({
   calendarOAuth,
   oauthApp,
   phone,
+  clinicConfig,
+  clinicConfigured,
   isAdmin,
 }: {
   calendarOAuth: CalendarOAuthView;
   oauthApp: GoogleOAuthAppView;
   phone: ClinicPhoneView;
+  clinicConfig: ClinicConfigForm;
+  clinicConfigured: boolean;
   isAdmin: boolean;
 }) {
   const [oauthConfigured, setOauthConfigured] = useState(oauthApp.configured || calendarOAuth.oauthConfigured);
@@ -497,9 +502,10 @@ export default function ClinicDemoConfig({
         <OAuthAppCard initial={oauthApp} isAdmin={isAdmin} onConfiguredChange={setOauthConfigured} />
         <CalendarCard initial={calendarOAuth} oauthConfigured={oauthConfigured} />
         <PhoneCard initial={phone} />
+        <ClinicDefinitionCard initial={clinicConfig} configured={clinicConfigured} />
 
         <div className="settings-integration">
-          <h3>4. Run the demo</h3>
+          <h3>5. Run the demo</h3>
           <p className="billing-muted">
             {ready
               ? 'Calendar connected — talk to the agent and watch the event appear in your calendar.'

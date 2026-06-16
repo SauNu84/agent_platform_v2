@@ -15,7 +15,9 @@ import UseCaseShell from '@/components/UseCaseShell';
 import { getCalendarConnectionView } from '@/services/calendar/calendar-connection';
 import { getGoogleOAuthAppView } from '@/services/calendar/google-oauth-config';
 import { getClinicPhoneView } from '@/services/clinic-phone';
+import { getClinicConfigView } from '@/services/clinic-config';
 import ClinicDemoConfig from './ClinicDemoConfig';
+import type { ClinicConfigForm } from './ClinicDefinitionCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,10 +36,11 @@ export default async function ClinicConfigurePage() {
   const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:3000';
   const origin = `${proto}://${host}`;
 
-  const [calendarOAuth, oauthApp, phone] = await Promise.all([
+  const [calendarOAuth, oauthApp, phone, clinicConfig] = await Promise.all([
     getCalendarConnectionView(store, actor.userId),
     getGoogleOAuthAppView(store, actor.userId, origin),
     getClinicPhoneView(store, actor.userId),
+    getClinicConfigView(store, actor.userId),
   ]);
 
   return (
@@ -47,7 +50,14 @@ export default async function ClinicConfigurePage() {
         <Link href="/use-cases/clinic-agent">AI Clinic Agent</Link> <span aria-hidden="true">/</span> Set up a demo
       </nav>
 
-      <ClinicDemoConfig calendarOAuth={calendarOAuth} oauthApp={oauthApp} phone={phone} isAdmin={actor.isAdmin} />
+      <ClinicDemoConfig
+        calendarOAuth={calendarOAuth}
+        oauthApp={oauthApp}
+        phone={phone}
+        clinicConfig={clinicConfig.config as unknown as ClinicConfigForm}
+        clinicConfigured={clinicConfig.configured}
+        isAdmin={actor.isAdmin}
+      />
     </UseCaseShell>
   );
 }

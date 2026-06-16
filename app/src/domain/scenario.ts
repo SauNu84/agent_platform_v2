@@ -28,11 +28,12 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
   // the realtime session and dispatched to /api/scenarios/[slug]/tools server-side.
   check_availability: {
     name: 'check_availability',
-    description: 'Look up open appointment slots on the clinic calendar. Call this before offering times. Optionally narrow by doctor and/or a date range (ISO 8601).',
+    description: 'Look up open appointment slots on the clinic calendar. Call this before offering times. Optionally narrow by doctor, service/appointment type, and/or a date range (ISO 8601). The result also lists the clinic\'s services and accepted insurance.',
     paramsSchema: {
       type: 'object',
       properties: {
         doctor: { type: 'string', description: 'Doctor name or id to narrow the search (optional).' },
+        service: { type: 'string', description: 'Appointment type / service name or id; sets the visit length and restricts to providers who offer it (optional).' },
         from: { type: 'string', description: 'Earliest ISO 8601 datetime to consider (optional; defaults to now).' },
         to: { type: 'string', description: 'Latest ISO 8601 datetime to consider (optional; defaults to a week out).' },
       },
@@ -47,8 +48,9 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       properties: {
         patientName: { type: 'string', description: 'Full name of the patient.' },
         doctor: { type: 'string', description: 'The chosen doctor (name or id).' },
+        service: { type: 'string', description: 'Appointment type / service (name or id); sets the visit length (optional).' },
         slotStart: { type: 'string', description: 'ISO 8601 start time of the confirmed slot.' },
-        slotEnd: { type: 'string', description: 'ISO 8601 end time (optional; defaults to the clinic slot length).' },
+        slotEnd: { type: 'string', description: 'ISO 8601 end time (optional; defaults to the service or clinic slot length).' },
         reason: { type: 'string', description: 'Reason for the visit.' },
         insurance: { type: 'string', description: 'Insurance plan the patient gave (optional).' },
         dob: { type: 'string', description: 'Patient date of birth (optional).' },

@@ -11,16 +11,20 @@
  * completion (AC #1).
  */
 import {
-  DEFAULT_CLINIC, computeOpenSlots, validateBooking, findDoctor, isInsuranceAccepted,
+  DEFAULT_CLINIC, computeOpenSlots, validateBooking, findDoctor, findService, resolveDurationMinutes, isInsuranceAccepted,
   type ClinicConfig, type BusyEvent,
 } from '@/domain/clinic';
 import { getCalendarAdapter, type CalendarAdapter } from '@/services/calendar';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A booking window in days from "now"; the agent rarely needs more than a week. */
 const DEFAULT_LOOKAHEAD_DAYS = 7;
 
 export interface CheckAvailabilityArgs {
   doctor?: string | null;
+  /** Appointment type (name or id) — sets the visit length + filters providers (SAU-300). */
+  service?: string | null;
   /** ISO date or datetime; defaults to now. */
   from?: string | null;
   /** ISO date or datetime; defaults to from + 7 days. */
@@ -33,15 +37,21 @@ export interface CheckAvailabilityResult {
   simulated: boolean;
   slots: Array<{ doctorId: string; doctorName: string; start: string; end: string }>;
   doctors: Array<{ id: string; name: string; specialty: string }>;
+  /** Appointment types the clinic offers, so the agent can name them (SAU-300). */
+  services: Array<{ id: string; name: string; durationMinutes: number }>;
+  /** Insurance plans accepted (so the agent answers "do you take X?"). */
+  insuranceAccepted: string[];
   note?: string;
 }
 
 export interface CreateAppointmentArgs {
   patientName?: string | null;
   doctor?: string | null;
+  /** Appointment type (name or id); sets the visit length when slotEnd is omitted (SAU-300). */
+  service?: string | null;
   /** ISO 8601 start of the chosen slot. */
   slotStart?: string | null;
-  /** Optional ISO end; defaults to the clinic's standard slot length. */
+  /** Optional ISO end; defaults to the chosen service's duration or the clinic's slot length. */
   slotEnd?: string | null;
   reason?: string | null;
   insurance?: string | null;
@@ -70,7 +80,16 @@ export type CreateAppointmentResult =
     }
   | {
       booked: false;
-      reason: 'unknown_doctor' | 'bad_slot' | 'outside_hours' | 'double_book' | 'missing_fields';
+      reason:
+        | 'unknown_doctor'
+        | 'bad_slot'
+        | 'outside_hours'
+        | 'double_book'
+        | 'unknown_service'
+        | 'service_unavailable'
+        | 'lead_time'
+        | 'day_full'
+        | 'missing_fields';
       message: string;
     };
 
@@ -96,9 +115,12 @@ export async function checkAvailability(args: CheckAvailabilityArgs, deps?: Clin
     ? Date.parse(args.to)
     : fromMs + DEFAULT_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000;
 
+  const service = findService(clinic, args.service);
   const busyRaw = await calendar.listBusy({ fromMs, toMs }, args.doctor ? findDoctor(clinic, args.doctor)?.id : undefined);
   const busy: BusyEvent[] = busyRaw.map((b) => ({ doctorId: b.doctorId, startMs: b.startMs, endMs: b.endMs }));
-  const slots = computeOpenSlots(clinic, { fromMs, toMs }, busy, args.doctor ?? null);
+  // Honor configurable rules (SAU-300): service duration + provider filter, lead time,
+  // buffers and per-day caps are all applied inside the pure engine.
+  const slots = computeOpenSlots(clinic, { fromMs, toMs }, busy, args.doctor ?? null, 12, { service, nowMs: now });
 
   return {
     clinic: clinic.name,
@@ -106,12 +128,14 @@ export async function checkAvailability(args: CheckAvailabilityArgs, deps?: Clin
     simulated: calendar.simulated,
     slots: slots.map((s) => ({ doctorId: s.doctorId, doctorName: s.doctorName, start: s.startIso, end: s.endIso })),
     doctors: clinic.doctors.map((d) => ({ id: d.id, name: d.name, specialty: d.specialty })),
-    note: slots.length === 0 ? 'No open slots in that window — try a different date range or doctor.' : undefined,
+    services: (clinic.services ?? []).map((s) => ({ id: s.id, name: s.name, durationMinutes: s.durationMinutes })),
+    insuranceAccepted: clinic.insuranceAccepted,
+    note: slots.length === 0 ? 'No open slots in that window — try a different date range, doctor, or service.' : undefined,
   };
 }
 
 export async function createAppointment(args: CreateAppointmentArgs, deps?: ClinicDeps): Promise<CreateAppointmentResult> {
-  const { clinic, calendar } = resolve(deps);
+  const { clinic, calendar, now } = resolve(deps);
 
   if (!args.patientName || !args.patientName.trim()) {
     return { booked: false, reason: 'missing_fields', message: "I still need the patient's name before I can book." };
@@ -124,24 +148,36 @@ export async function createAppointment(args: CreateAppointmentArgs, deps?: Clin
     return { booked: false, reason: 'bad_slot', message: 'A valid appointment time is required.' };
   }
   const doc = findDoctor(clinic, args.doctor);
+  const service = findService(clinic, args.service);
+  const durationMs = resolveDurationMinutes(clinic, service) * 60_000;
+  const bufferMs = Math.max(0, clinic.bufferMinutes ?? 0) * 60_000;
+  // Read the whole calendar day so the per-day cap (maxPerDay) is decided on the
+  // full picture, and so the buffer-padded double-book check sees adjacent events.
+  const dayStartMs = startMs - ((startMs % DAY_MS) + DAY_MS) % DAY_MS;
   const busyRaw = await calendar.listBusy(
-    { fromMs: startMs - 60_000, toMs: startMs + clinic.slotMinutes * 60_000 + 60_000 },
+    { fromMs: Math.min(dayStartMs, startMs - bufferMs - 60_000), toMs: Math.max(dayStartMs + DAY_MS, startMs + durationMs + bufferMs + 60_000) },
     doc?.id,
   );
   const busy: BusyEvent[] = busyRaw.map((b) => ({ doctorId: b.doctorId, startMs: b.startMs, endMs: b.endMs }));
 
-  const v = validateBooking(clinic, { doctor: args.doctor, slotStartIso: args.slotStart, slotEndIso: args.slotEnd }, busy);
+  const v = validateBooking(
+    clinic,
+    { doctor: args.doctor, service: args.service, slotStartIso: args.slotStart, slotEndIso: args.slotEnd },
+    busy,
+    { nowMs: now },
+  );
   if (!v.ok || !v.doctor || v.startMs == null || v.endMs == null) {
     return { booked: false, reason: v.reason ?? 'bad_slot', message: v.message ?? 'Unable to book that slot.' };
   }
 
-  const summary = `${args.patientName.trim()} — ${args.reason?.trim() || 'Appointment'} (${v.doctor.name})`;
+  const summary = `${args.patientName.trim()} — ${v.service?.name || args.reason?.trim() || 'Appointment'} (${v.doctor.name})`;
   const description = [
     `Patient: ${args.patientName.trim()}`,
     args.dob ? `DOB: ${args.dob}` : null,
+    v.service ? `Service: ${v.service.name}` : null,
     args.reason ? `Reason: ${args.reason}` : null,
     args.insurance ? `Insurance: ${args.insurance}` : null,
-    'Booked by AI Clinic Intake & Booking agent (synthetic Phase-0 spike).',
+    'Booked by AI Clinic Intake & Booking agent (synthetic).',
   ].filter(Boolean).join('\n');
 
   const event = await calendar.createEvent({
