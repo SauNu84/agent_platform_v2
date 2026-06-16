@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '@/db/memory-store';
-import { createScenarioFromJson, ScenarioCompileError } from '@/services/scenarios';
+import { createScenarioFromJson, updateScenario, ScenarioCompileError } from '@/services/scenarios';
 import { modelInstructions, toCompiledScenario, type ScenarioRecord } from '@/domain/scenario';
 import {
   parseSuperAgentConfig, safeParseSuperAgentConfig, compileSuperAgentInstructions,
@@ -106,6 +106,31 @@ test('SAU-307: createScenarioFromJson persists a valid super agent and rejects i
   // Unknown tool name → rejected (same registry rule as default agents).
   await assert.rejects(() => createScenarioFromJson(store, {
     id: 'super-badtool', name: 'BadTool', persona: 'p',
+    metadata: { _agentType: 'super', _superAgent: { supervisor: VALID.supervisor, subAgents: [{ name: 'A', instructions: 'x', tools: ['nonesuch'] }] } },
+  }), /nonesuch/);
+});
+
+test('SAU-307: updateScenario applies the write-time gate (D3 holds on the update path too)', async () => {
+  const store = new MemoryStore();
+  await createScenarioFromJson(store, {
+    id: 'super-upd', name: 'Super Upd', persona: 'fallback persona', visibility: 'private',
+    metadata: { _agentType: 'super', _superAgent: VALID },
+  });
+
+  // A valid super config updates cleanly.
+  const ok = await updateScenario(store, 'super-upd', {
+    metadata: { _agentType: 'super', _superAgent: { ...VALID, supervisor: { ...VALID.supervisor, goal: 'Updated goal.' } } },
+  });
+  assert.ok(ok && isSuperAgent(ok.metadata));
+
+  // A malformed super config is rejected on update, not silently persisted to
+  // degrade to the single-agent prompt at runtime.
+  await assert.rejects(() => updateScenario(store, 'super-upd', {
+    metadata: { _agentType: 'super', _superAgent: { supervisor: VALID.supervisor, subAgents: [] } },
+  }), ScenarioCompileError);
+
+  // An unknown tool name is rejected on update too (same registry rule as create).
+  await assert.rejects(() => updateScenario(store, 'super-upd', {
     metadata: { _agentType: 'super', _superAgent: { supervisor: VALID.supervisor, subAgents: [{ name: 'A', instructions: 'x', tools: ['nonesuch'] }] } },
   }), /nonesuch/);
 });

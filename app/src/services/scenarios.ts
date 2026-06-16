@@ -83,7 +83,14 @@ export async function updateScenario(store: Store, slug: string, body: unknown):
   // NB: per ADR-002 the DB is downstream of MD. Direct edits to compiled fields are
   // a convenience for API consumers and will be overwritten on the next compile of
   // the source file. Allowed as a known constraint (ADR-002 §Consequences).
-  return store.updateScenario(slug, toPatch(body));
+  const patch = toPatch(body);
+  // SAU-307: the write-time gate (D3) must hold on EVERY write, not just create —
+  // metadata is a wholesale replace here, so a Super Agent edited via the update
+  // path could otherwise persist a config the runtime can't compile (it would
+  // silently fall back to the single-agent prompt). Validate the metadata being
+  // written, the same way both create paths do. No-op for default agents.
+  if (patch.metadata) assertAgentTypeValid(patch.metadata);
+  return store.updateScenario(slug, patch);
 }
 
 export async function deleteScenario(store: Store, slug: string): Promise<boolean> {
