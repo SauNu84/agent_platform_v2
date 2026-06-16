@@ -141,7 +141,11 @@ export const USE_CASES: UseCase[] = [
     body: CLINIC_AGENT_BODY,
     // SAU-297: no-code demo setup (connect Google Calendar + phone numbers) as a
     // left-nav sub-item under the clinic agent, not just an in-page button.
-    subLinks: [{ href: "/use-cases/clinic-agent/configure", label: "Set up a demo" }],
+    subLinks: [
+      { href: "/use-cases/clinic-agent/configure", label: "Set up a demo" },
+      // SAU-301 WS-B: per-clinic ops dashboard (outcomes/ROI) + clinic switcher.
+      { href: "/use-cases/clinic-agent/dashboard", label: "Ops dashboard" },
+    ],
   },
 ];
 

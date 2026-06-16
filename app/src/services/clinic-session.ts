@@ -18,6 +18,7 @@ import type { Store, ClinicOutcomeRecord, ClinicOutcome, SessionTranscript } fro
 import { CLINIC_TOOL_NAMES } from '@/services/clinic-booking';
 import { extractIntake } from '@/intake/extractor';
 import { DEFAULT_CLINIC } from '@/domain/clinic';
+import { isAfterHours } from '@/domain/escalation';
 import { getClinicConfig } from '@/services/clinic-config';
 import { dispatchBookingConfirmations, type NotificationDelivery } from '@/services/clinic-notify';
 import { handleEscalation } from '@/services/clinic-escalation';
@@ -104,8 +105,11 @@ export async function finalizeClinicSession(opts: {
   const { outcome, booking } = deriveOutcome(transcript.toolCalls);
   // Use THIS operator's authored clinic (SAU-300) for the confirmation/escalation
   // copy + after-hours behavior; falls back to DEFAULT_CLINIC when none is authored.
-  const clinic = userId ? await getClinicConfig(store, userId) : DEFAULT_CLINIC;
+  const clinic = userId ? await getClinicConfig(store, userId, clinicId) : DEFAULT_CLINIC;
   const clinicName = clinic.name;
+  // After-hours signal for the ops dashboard (SAU-301): derived from the clinic's
+  // own hours table at finalize time, for every outcome (not just escalations).
+  const afterHours = isAfterHours(clinic.hours, Date.now());
 
   // Close-the-loop side effects (SAU-273). Both are best-effort and fail-soft —
   // a confirmation/handoff problem must never undo a completed booking or throw
@@ -176,6 +180,7 @@ export async function finalizeClinicSession(opts: {
     escalationReason,
     handoffAction,
     confirmationStatus,
+    afterHours,
   };
   const saved = await store.recordClinicOutcome(rec);
 

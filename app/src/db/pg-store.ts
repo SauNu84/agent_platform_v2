@@ -19,7 +19,7 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -75,6 +75,7 @@ function rowToClinicOutcome(r: Row): ClinicOutcomeRecord {
     escalationReason: r.escalation_reason ?? null,
     handoffAction: r.handoff_action ?? null,
     confirmationStatus: r.confirmation_status ?? null,
+    afterHours: r.after_hours ?? null,
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
   };
 }
@@ -94,6 +95,17 @@ function rowToClinicNotification(r: Row): ClinicNotificationRecord {
     simulated: r.simulated ?? true,
     error: r.error ?? null,
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+  };
+}
+
+function rowToClinic(r: Row): ClinicRecord {
+  return {
+    id: r.id,
+    slug: r.slug,
+    name: r.name,
+    config: r.config ?? null,
+    createdByUserId: r.created_by_user_id ?? null,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date(0).toISOString(),
   };
 }
 
@@ -746,22 +758,24 @@ export class PgStore implements Store {
     const { rows } = await this.q(
       `INSERT INTO clinic_session_outcome (session_id, scenario_id, user_id, clinic_id, outcome, event_id, event_link,
          doctor_id, doctor_name, slot_start, slot_end, calendar, simulated, intake,
-         escalation_reason, handoff_action, confirmation_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17)
+         escalation_reason, handoff_action, confirmation_status, after_hours)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)
        ON CONFLICT (session_id) DO UPDATE SET
          scenario_id = EXCLUDED.scenario_id, user_id = EXCLUDED.user_id, clinic_id = EXCLUDED.clinic_id,
          outcome = EXCLUDED.outcome, event_id = EXCLUDED.event_id, event_link = EXCLUDED.event_link,
          doctor_id = EXCLUDED.doctor_id, doctor_name = EXCLUDED.doctor_name, slot_start = EXCLUDED.slot_start,
          slot_end = EXCLUDED.slot_end, calendar = EXCLUDED.calendar, simulated = EXCLUDED.simulated,
          intake = EXCLUDED.intake, escalation_reason = EXCLUDED.escalation_reason,
-         handoff_action = EXCLUDED.handoff_action, confirmation_status = EXCLUDED.confirmation_status
+         handoff_action = EXCLUDED.handoff_action, confirmation_status = EXCLUDED.confirmation_status,
+         after_hours = EXCLUDED.after_hours
        RETURNING *`,
       // PHI at rest (SAU-274): `intake` carries patient identifiers (name/DOB/
       // reason/insurance) — encrypt it into an envelope before write.
       [rec.sessionId, rec.scenarioId, rec.userId, rec.clinicId ?? null, rec.outcome, rec.eventId, rec.eventLink,
         rec.doctorId, rec.doctorName, rec.slotStart, rec.slotEnd, rec.calendar, rec.simulated,
         JSON.stringify(encryptJson(rec.intake ?? {})),
-        rec.escalationReason ?? null, rec.handoffAction ?? null, rec.confirmationStatus ?? null],
+        rec.escalationReason ?? null, rec.handoffAction ?? null, rec.confirmationStatus ?? null,
+        rec.afterHours ?? null],
     );
     // PHI audit (SAU-275): record the write of patient intake.
     await this.recordPhiAccess({
@@ -800,6 +814,97 @@ export class PgStore implements Store {
     const { rows } = await this.q(
       'SELECT * FROM clinic_notification WHERE session_id = $1 ORDER BY created_at DESC',
       [sessionId],
+    );
+    return rows.map(rowToClinicNotification);
+  }
+
+  // ── Multi-clinic tenancy (SAU-301, WS-B) — migration 0021 ────────────────────
+  async createClinic(input: NewClinic): Promise<ClinicRecord> {
+    const { rows } = await this.q(
+      `INSERT INTO clinic (slug, name, created_by_user_id, config)
+       VALUES ($1,$2,$3,$4::jsonb) RETURNING *`,
+      [input.slug, input.name, input.createdByUserId, input.config ? JSON.stringify(input.config) : null],
+    );
+    return rowToClinic(rows[0]);
+  }
+
+  async getClinicById(id: string): Promise<ClinicRecord | null> {
+    const { rows } = await this.q('SELECT * FROM clinic WHERE id = $1', [id]);
+    return rows[0] ? rowToClinic(rows[0]) : null;
+  }
+
+  async getClinicBySlug(slug: string): Promise<ClinicRecord | null> {
+    const { rows } = await this.q('SELECT * FROM clinic WHERE slug = $1', [slug]);
+    return rows[0] ? rowToClinic(rows[0]) : null;
+  }
+
+  async listClinicsForUser(userId: string): Promise<ClinicRecord[]> {
+    // Join through membership so the list is independent of the single active
+    // app.clinic_id GUC (the switcher needs every clinic the user may act for).
+    const { rows } = await this.q(
+      `SELECT c.* FROM clinic c
+         JOIN clinic_member m ON m.clinic_id = c.id
+        WHERE m.user_id = $1
+        ORDER BY c.created_at ASC`,
+      [userId],
+    );
+    return rows.map(rowToClinic);
+  }
+
+  async updateClinicConfig(clinicId: string, config: Record<string, unknown>): Promise<ClinicRecord> {
+    const { rows } = await this.q(
+      'UPDATE clinic SET config = $2::jsonb WHERE id = $1 RETURNING *',
+      [clinicId, JSON.stringify(config)],
+    );
+    if (!rows[0]) throw new Error('clinic not found or not permitted');
+    return rowToClinic(rows[0]);
+  }
+
+  async addClinicMember(clinicId: string, userId: string, role = 'owner'): Promise<void> {
+    await this.q(
+      `INSERT INTO clinic_member (clinic_id, user_id, role) VALUES ($1,$2,$3)
+       ON CONFLICT (clinic_id, user_id) DO NOTHING`,
+      [clinicId, userId, role],
+    );
+  }
+
+  async isClinicMember(clinicId: string, userId: string): Promise<boolean> {
+    const { rows } = await this.q(
+      'SELECT 1 FROM clinic_member WHERE clinic_id = $1 AND user_id = $2',
+      [clinicId, userId],
+    );
+    return rows.length > 0;
+  }
+
+  async listClinicOutcomesForClinic(clinicId: string): Promise<ClinicOutcomeSummary[]> {
+    // Non-PHI columns only — never SELECT `intake` here (no decrypt, no PHI audit).
+    const { rows } = await this.q(
+      `SELECT session_id, outcome, event_id, slot_start, slot_end, escalation_reason,
+              handoff_action, confirmation_status, after_hours, simulated, created_at
+         FROM clinic_session_outcome
+        WHERE clinic_id = $1
+        ORDER BY created_at DESC`,
+      [clinicId],
+    );
+    return rows.map((r: Row) => ({
+      sessionId: r.session_id,
+      outcome: r.outcome,
+      eventId: r.event_id ?? null,
+      slotStart: r.slot_start ? new Date(r.slot_start).toISOString() : null,
+      slotEnd: r.slot_end ? new Date(r.slot_end).toISOString() : null,
+      escalationReason: r.escalation_reason ?? null,
+      handoffAction: r.handoff_action ?? null,
+      confirmationStatus: r.confirmation_status ?? null,
+      afterHours: r.after_hours ?? null,
+      simulated: r.simulated ?? true,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date(0).toISOString(),
+    }));
+  }
+
+  async listClinicNotificationsForClinic(clinicId: string): Promise<ClinicNotificationRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM clinic_notification WHERE clinic_id = $1 ORDER BY created_at DESC',
+      [clinicId],
     );
     return rows.map(rowToClinicNotification);
   }

@@ -53,7 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     // doctors, services, insurance and booking rules. The pure rules engine still
     // enforces them in the tool — never the prompt (AC #2). Falls back to the
     // Phase-0 DEFAULT_CLINIC when nothing has been authored yet.
-    const clinic = await getClinicConfig(store, actor.userId);
+    const clinic = await getClinicConfig(store, actor.userId, actor.clinicId);
     const result = await runClinicTool(tool, body.args, { clinic, calendar });
     return NextResponse.json({ tool, result }, { status: 200 });
   } catch (e) {

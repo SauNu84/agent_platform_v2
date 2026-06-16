@@ -9,7 +9,7 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicMemberRecord, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -39,6 +39,8 @@ export class MemoryStore implements Store {
   private analyses = new Map<string, AnalysisRecord>();       // by sessionId
   private clinicOutcomes = new Map<string, ClinicOutcomeRecord>(); // by sessionId (SAU-267)
   private clinicNotifications: ClinicNotificationRecord[] = []; // SAU-273 WS3 delivery log
+  private clinics = new Map<string, ClinicRecord>();          // by id (SAU-301 WS-B)
+  private clinicMembers: ClinicMemberRecord[] = [];           // user↔clinic (SAU-301 WS-B)
   private entitlements = new Map<string, EntitlementRecord>(); // by userId
   private checkouts = new Map<string, CheckoutRecord>();       // by id (SAU-250)
   private apiKeys = new Map<string, ApiKeyRecord>();           // by id (SAU-252)
@@ -558,6 +560,82 @@ export class MemoryStore implements Store {
   async listClinicNotifications(sessionId: string): Promise<ClinicNotificationRecord[]> {
     return this.clinicNotifications
       .filter((n) => n.sessionId === sessionId)
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+  }
+
+  // ── Multi-clinic tenancy (SAU-301, WS-B) ─────────────────────────────────────
+  // NOTE: the in-memory store does not enforce RLS — isolation is proven against a
+  // migrated Postgres (tests/clinic-tenancy-rls.test.ts). Here we mirror the shape
+  // so services + unit tests work with zero infra.
+  async createClinic(input: NewClinic): Promise<ClinicRecord> {
+    const rec: ClinicRecord = {
+      id: randomUUID(),
+      slug: input.slug,
+      name: input.name,
+      config: input.config ?? null,
+      createdByUserId: input.createdByUserId,
+      createdAt: nowIso(),
+    };
+    this.clinics.set(rec.id, rec);
+    return rec;
+  }
+
+  async getClinicById(id: string): Promise<ClinicRecord | null> {
+    return this.clinics.get(id) ?? null;
+  }
+
+  async getClinicBySlug(slug: string): Promise<ClinicRecord | null> {
+    for (const c of this.clinics.values()) if (c.slug === slug) return c;
+    return null;
+  }
+
+  async listClinicsForUser(userId: string): Promise<ClinicRecord[]> {
+    const ids = this.clinicMembers.filter((m) => m.userId === userId).map((m) => m.clinicId);
+    return ids
+      .map((id) => this.clinics.get(id))
+      .filter((c): c is ClinicRecord => Boolean(c))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async updateClinicConfig(clinicId: string, config: Record<string, unknown>): Promise<ClinicRecord> {
+    const existing = this.clinics.get(clinicId);
+    if (!existing) throw new Error('clinic not found');
+    const updated: ClinicRecord = { ...existing, config };
+    this.clinics.set(clinicId, updated);
+    return updated;
+  }
+
+  async addClinicMember(clinicId: string, userId: string, role = 'owner'): Promise<void> {
+    if (this.clinicMembers.some((m) => m.clinicId === clinicId && m.userId === userId)) return;
+    this.clinicMembers.push({ clinicId, userId, role, createdAt: nowIso() });
+  }
+
+  async isClinicMember(clinicId: string, userId: string): Promise<boolean> {
+    return this.clinicMembers.some((m) => m.clinicId === clinicId && m.userId === userId);
+  }
+
+  async listClinicOutcomesForClinic(clinicId: string): Promise<ClinicOutcomeSummary[]> {
+    return [...this.clinicOutcomes.values()]
+      .filter((o) => (o.clinicId ?? null) === clinicId)
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+      .map((o) => ({
+        sessionId: o.sessionId,
+        outcome: o.outcome,
+        eventId: o.eventId ?? null,
+        slotStart: o.slotStart ?? null,
+        slotEnd: o.slotEnd ?? null,
+        escalationReason: o.escalationReason ?? null,
+        handoffAction: o.handoffAction ?? null,
+        confirmationStatus: o.confirmationStatus ?? null,
+        afterHours: o.afterHours ?? null,
+        simulated: o.simulated,
+        createdAt: o.createdAt ?? nowIso(),
+      }));
+  }
+
+  async listClinicNotificationsForClinic(clinicId: string): Promise<ClinicNotificationRecord[]> {
+    return this.clinicNotifications
+      .filter((n) => (n.clinicId ?? null) === clinicId)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
   }
 

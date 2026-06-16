@@ -400,7 +400,28 @@ export interface ClinicOutcomeRecord {
   handoffAction?: string | null;
   /** dispatch summary of the booking confirmations: sent|partial|blocked|skipped|failed|none. */
   confirmationStatus?: string | null;
+  /** was the call handled outside clinic hours? (SAU-301 dashboard after-hours metric). */
+  afterHours?: boolean | null;
   createdAt?: string;
+}
+
+/**
+ * Non-PHI projection of a booking outcome for the per-clinic ops dashboard
+ * (SAU-301). Deliberately omits `intake` so the metrics read-model never
+ * decrypts patient identifiers nor emits a PHI read into the audit log.
+ */
+export interface ClinicOutcomeSummary {
+  sessionId: string;
+  outcome: ClinicOutcome;
+  eventId: string | null;
+  slotStart: string | null;
+  slotEnd: string | null;
+  escalationReason: string | null;
+  handoffAction: string | null;
+  confirmationStatus: string | null;
+  afterHours: boolean | null;
+  simulated: boolean;
+  createdAt: string;
 }
 
 /** One per attempted outbound confirmation/notice (SAU-273 WS3). No PHI. */
@@ -420,6 +441,33 @@ export interface ClinicNotificationRecord {
   simulated: boolean;
   error?: string | null;
   createdAt?: string;
+}
+
+// ── Multi-clinic tenancy (SAU-301, Phase 2 · WS-B) ──────────────────────────
+/** A clinic/tenant row with its authored definition (config) + provenance. */
+export interface ClinicRecord {
+  id: string;
+  slug: string;
+  name: string;
+  /** authored ClinicConfig (non-PHI); null until the operator saves a definition. */
+  config: Record<string, unknown> | null;
+  createdByUserId: string | null;
+  createdAt: string;
+}
+
+export interface NewClinic {
+  slug: string;
+  name: string;
+  createdByUserId: string;
+  config?: Record<string, unknown> | null;
+}
+
+/** A user ↔ clinic membership (the switcher's list + active-clinic gate). */
+export interface ClinicMemberRecord {
+  clinicId: string;
+  userId: string;
+  role: string;
+  createdAt: string;
 }
 
 export interface Store {
@@ -520,6 +568,24 @@ export interface Store {
   recordClinicNotification(rec: ClinicNotificationRecord): Promise<ClinicNotificationRecord>;
   /** All delivery records for a session, newest first. */
   listClinicNotifications(sessionId: string): Promise<ClinicNotificationRecord[]>;
+
+  // ── Multi-clinic tenancy (SAU-301, WS-B) — clinics + memberships ────────────
+  /** Provision a clinic (RLS: creator-stamped self-provision). */
+  createClinic(input: NewClinic): Promise<ClinicRecord>;
+  getClinicById(id: string): Promise<ClinicRecord | null>;
+  getClinicBySlug(slug: string): Promise<ClinicRecord | null>;
+  /** Clinics the user is a member of (the switcher list), newest first. */
+  listClinicsForUser(userId: string): Promise<ClinicRecord[]>;
+  /** Replace a clinic's authored definition (RLS: must be a member). */
+  updateClinicConfig(clinicId: string, config: Record<string, unknown>): Promise<ClinicRecord>;
+  /** Add a user↔clinic membership (idempotent on the PK). */
+  addClinicMember(clinicId: string, userId: string, role?: string): Promise<void>;
+  /** True when the user belongs to the clinic (gates active-clinic selection). */
+  isClinicMember(clinicId: string, userId: string): Promise<boolean>;
+  /** Non-PHI booking-outcome summaries for one clinic (RLS-scoped), newest first — dashboard read-model. */
+  listClinicOutcomesForClinic(clinicId: string): Promise<ClinicOutcomeSummary[]>;
+  /** All notification deliveries for one clinic (RLS-scoped) — dashboard compliance tile. */
+  listClinicNotificationsForClinic(clinicId: string): Promise<ClinicNotificationRecord[]>;
 
   // ── Slice 2: History (read-model) + Creator analytics ─────────────────────────
   listSessionHistory(userId: string): Promise<SessionHistoryRow[]>;

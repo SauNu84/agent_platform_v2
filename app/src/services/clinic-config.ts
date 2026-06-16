@@ -160,19 +160,41 @@ export function toClinicConfigView(clinic: ClinicConfig): ClinicConfigInput {
  * and valid, else the Phase-0 DEFAULT_CLINIC (so the demo always works). This is
  * what the booking tools + scenario read at runtime.
  */
-export async function getClinicConfig(store: Store, userId: string | null): Promise<ClinicConfig> {
+export async function getClinicConfig(
+  store: Store,
+  userId: string | null,
+  clinicId?: string | null,
+): Promise<ClinicConfig> {
+  // Multi-clinic (SAU-301, WS-B): when an active clinic is selected, its authored
+  // definition lives on the clinic row (clinic.config) so two clinics owned by the
+  // same operator stay independent. Fall back to the WS-A per-user setting (back-
+  // compat for operators who authored before WS-B), then to DEFAULT_CLINIC.
+  if (clinicId) {
+    try {
+      const clinic = await store.getClinicById(clinicId);
+      const fromClinic = clinic?.config ? coerceClinicConfig(clinic.config) : null;
+      if (fromClinic) return fromClinic;
+    } catch {
+      /* fail soft to the per-user / default path */
+    }
+  }
   if (!userId) return DEFAULT_CLINIC;
   const rec = await store.getUserSetting(userId, CLINIC_CONFIG_KEY);
   const value = rec?.value;
   if (!value || value.status !== 'configured' || typeof value.config !== 'object' || value.config === null) {
     return DEFAULT_CLINIC;
   }
-  const parsed = clinicConfigInputSchema.safeParse(value.config);
-  if (!parsed.success) return DEFAULT_CLINIC; // corrupt/legacy record ⇒ fail soft to the default
+  return coerceClinicConfig(value.config) ?? DEFAULT_CLINIC;
+}
+
+/** Validate a stored authoring blob → domain ClinicConfig, or null if corrupt/legacy. */
+function coerceClinicConfig(raw: unknown): ClinicConfig | null {
+  const parsed = clinicConfigInputSchema.safeParse(raw);
+  if (!parsed.success) return null;
   try {
     return toClinicConfig(parsed.data);
   } catch {
-    return DEFAULT_CLINIC;
+    return null;
   }
 }
 
