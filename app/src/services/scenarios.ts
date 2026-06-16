@@ -6,12 +6,28 @@
  *                   schema, so the API can't write a row the compiler couldn't.
  */
 import {
-  scenarioFrontmatterSchema, normalizeFrontmatter, type CompiledScenarioRecord,
+  scenarioFrontmatterSchema, normalizeFrontmatter, validateAgentTypeMetadata,
+  type CompiledScenarioRecord,
 } from '@/domain/scenario';
+import { SuperAgentConfigError } from '@/domain/super-agent';
 import { compileScenarioContent, sha256, ScenarioCompileError } from '@/compiler/compile';
 import type { OwnerOpts, ScenarioFilter, ScenarioRecord, Store } from '@/db/store';
 
 export { ScenarioCompileError };
+
+/**
+ * Gate Super Agent (SAU-307) configs at write time. Translates a
+ * `SuperAgentConfigError` (or an unknown-tool error) into a `ScenarioCompileError`
+ * so every create path reports invalid input the same way. No-op for default agents.
+ */
+function assertAgentTypeValid(metadata: Record<string, unknown> | undefined): void {
+  try {
+    validateAgentTypeMetadata(metadata);
+  } catch (e) {
+    if (e instanceof SuperAgentConfigError) throw new ScenarioCompileError(e.message, e.issues);
+    throw new ScenarioCompileError((e as Error).message);
+  }
+}
 
 export async function listScenarios(store: Store, filter?: ScenarioFilter): Promise<ScenarioRecord[]> {
   return store.listScenarios(filter);
@@ -29,6 +45,7 @@ export async function createScenarioFromMarkdown(
   owner?: OwnerOpts,
 ): Promise<{ scenario: ScenarioRecord; created: boolean }> {
   const { record, contentHash } = compileScenarioContent(raw);
+  assertAgentTypeValid(record.metadata);
   const res = await store.upsertScenarioFromCompile(record, {
     repoPath: opts.repoPath ?? `inline:${record.slug}.md`,
     contentHash,
@@ -45,6 +62,10 @@ export async function createScenarioFromJson(store: Store, body: unknown, owner?
     throw new ScenarioCompileError(`invalid scenario: ${lines}`, parsed.error.issues);
   }
   const record: CompiledScenarioRecord = normalizeFrontmatter(parsed.data, '');
+  // SAU-307: a Super Agent must carry a valid supervisor + sub-agent config (and
+  // resolvable tool names). Reject here so the API can't write a row the runtime
+  // couldn't compile — surfaced as a ScenarioCompileError like any invalid input.
+  assertAgentTypeValid(record.metadata);
   const existing = await store.getScenarioBySlug(record.slug);
   if (existing) throw new ScenarioCompileError(`scenario with slug "${record.slug}" already exists`);
   // Record a content_source so drift detection still works for API-created rows.

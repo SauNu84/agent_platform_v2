@@ -15,8 +15,22 @@ import Link from 'next/link';
 import { buildRemixConfig } from '@/services/remix';
 import { AI_MODELS, DEFAULT_AI_MODEL, aiModelById } from '@/lib/ai-models';
 import { OPENAI_VOICES, DEFAULT_VOICE, isOpenAiVoice } from '@/lib/voices';
+import { AGENT_TYPE_OPTIONS } from '@/domain/super-agent';
+import { TOOL_REGISTRY } from '@/domain/scenario';
 
 interface RubricRow { topic: string; weight: number; note: string; }
+
+/** A sub-agent row in the Super Agent authoring form (SAU-307). */
+interface SubAgentRow { id: string; name: string; instructions: string; tools: string[]; model: string; }
+
+/** Tool names an author can attach to a sub-agent (the built-in registry). */
+const TOOL_NAMES = Object.keys(TOOL_REGISTRY);
+
+let subAgentSeq = 0;
+function newSubAgent(): SubAgentRow {
+  subAgentSeq += 1;
+  return { id: `sa-${subAgentSeq}`, name: '', instructions: '', tools: [], model: '' };
+}
 
 /** A Knowledge Base summary as returned by /api/knowledge-bases (SAU-243). */
 interface KbSummary { id: string; title: string; description: string | null; docCount: number; }
@@ -100,6 +114,15 @@ function CreateScenarioForm() {
   const [userInstructions, setUserInstructions] = useState('');
   const [aiDescription, setAiDescription] = useState('');
   const [persona, setPersona] = useState('');
+  // Agent type (SAU-307): the platform's second agent type. 'default' = single
+  // agent (the fields above). 'super' = a supervisor orchestrating inline
+  // sub-agents. Composite / Meeting Assistant are board-deferred (shown disabled).
+  const [agentType, setAgentType] = useState<'default' | 'super'>('default');
+  const [superRole, setSuperRole] = useState('');
+  const [superGoal, setSuperGoal] = useState('');
+  const [superInstructions, setSuperInstructions] = useState('');
+  const [superCommon, setSuperCommon] = useState('');
+  const [subAgents, setSubAgents] = useState<SubAgentRow[]>([]);
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   // SAU-238 (ask #6) → SAU-258: which voice engine powers this scenario (real
   // multi-vendor picker). The stored id is the scenario default; tier gating means
@@ -193,6 +216,23 @@ function CreateScenarioForm() {
         if (typeof md._aiContextSource === 'string') { setContextSource(md._aiContextSource); setContextUrl(md._aiContextSource); }
         if (isOpenAiVoice(draft.voice?.name)) setVoiceChoice(draft.voice.name);
         if (typeof md._avatarUrl === 'string') setAvatarUrl(md._avatarUrl);
+        // SAU-307: carry a Super Agent's supervisor + sub-agents into the remix.
+        if (md._agentType === 'super' && md._superAgent && typeof md._superAgent === 'object') {
+          const cfg = md._superAgent as {
+            supervisor?: { role?: string; goal?: string; instructions?: string; commonInstructions?: string };
+            subAgents?: Array<{ id?: string; name?: string; instructions?: string; tools?: string[]; model?: string }>;
+          };
+          setAgentType('super');
+          setSuperRole(cfg.supervisor?.role ?? '');
+          setSuperGoal(cfg.supervisor?.goal ?? '');
+          setSuperInstructions(cfg.supervisor?.instructions ?? '');
+          setSuperCommon(cfg.supervisor?.commonInstructions ?? '');
+          setSubAgents((cfg.subAgents ?? []).map((s) => ({
+            ...newSubAgent(),
+            name: s.name ?? '', instructions: s.instructions ?? '',
+            tools: Array.isArray(s.tools) ? s.tools : [], model: s.model ?? '',
+          })));
+        }
         setRemixedName(data.scenario.name);
         // Carry the source scenario's linked Knowledge Bases into the remix
         // (SAU-243); the auto-link on submit silently drops any the user can't use.
@@ -498,12 +538,62 @@ function CreateScenarioForm() {
     setRubric((r) => r.filter((_, idx) => idx !== i));
   }
 
+  // ── Super Agent sub-agent row mutations (SAU-307) ──────────────────────────
+  function addSubAgent() { setSubAgents((s) => [...s, newSubAgent()]); }
+  function removeSubAgent(id: string) { setSubAgents((s) => s.filter((r) => r.id !== id)); }
+  function updateSubAgent(id: string, patch: Partial<SubAgentRow>) {
+    setSubAgents((s) => s.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+  function toggleSubAgentTool(id: string, tool: string) {
+    setSubAgents((s) => s.map((r) =>
+      r.id === id ? { ...r, tools: r.tools.includes(tool) ? r.tools.filter((t) => t !== tool) : [...r.tools, tool] } : r,
+    ));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!slug) { setTab('basics'); setError('ID / Slug is required.'); return; }
-    if (!persona) { setTab('agent'); setError('AI Instructions are required.'); return; }
+    if (agentType === 'super') {
+      // Super Agent (SAU-307): the supervisor + ≥1 fully-specified sub-agent is
+      // required; the single-agent "AI Instructions" field is not used here.
+      if (!superRole.trim() || !superGoal.trim() || !superInstructions.trim()) {
+        setTab('agent'); setError('Super Agent needs a supervisor Role, Goal, and Instructions.'); return;
+      }
+      const clean = subAgents.filter((s) => s.name.trim() && s.instructions.trim());
+      if (clean.length === 0) {
+        setTab('agent'); setError('Super Agent needs at least one sub-agent with a name and instructions.'); return;
+      }
+    } else if (!persona) {
+      setTab('agent'); setError('AI Instructions are required.'); return;
+    }
     setSubmitting(true);
     setError(null);
+    // Super Agent (SAU-307): build the structured config and a persona fallback.
+    // The scenario row still needs a non-empty `persona`/aiInstructions (schema
+    // invariant); for a supervisor we seed it from the supervisor role/goal so the
+    // row is valid, while the REAL prompt is compiled server-side from _superAgent.
+    const superCfg = agentType === 'super'
+      ? {
+          supervisor: {
+            role: superRole.trim(),
+            goal: superGoal.trim(),
+            instructions: superInstructions.trim(),
+            commonInstructions: superCommon.trim(),
+          },
+          subAgents: subAgents
+            .filter((s) => s.name.trim() && s.instructions.trim())
+            .map((s) => ({
+              id: s.id,
+              name: s.name.trim(),
+              instructions: s.instructions.trim(),
+              tools: s.tools,
+              ...(s.model ? { model: s.model } : {}),
+            })),
+        }
+      : null;
+    const personaToSend = agentType === 'super'
+      ? (persona.trim() || `Supervisor: ${superRole.trim()} — ${superGoal.trim()}`)
+      : persona;
     try {
       const res = await fetch('/api/scenarios', {
         method: 'POST',
@@ -512,7 +602,7 @@ function CreateScenarioForm() {
           id: slug,
           name: name || slug,
           description: description || undefined,
-          persona,
+          persona: personaToSend,
           rubric: rubric.filter((r) => r.topic.trim()),
           visibility,
           // Remix carries the cloned voice + source metadata (incl. _remixedFrom);
@@ -523,7 +613,14 @@ function CreateScenarioForm() {
           // live session; keep the carried language if remixing.
           voice: { name: voiceChoice, language: voice?.language ?? 'en-US' },
           metadata: {
-            ...(carriedMetadata ?? { _source: 'user' }),
+            // Strip any carried agent-type keys (SAU-307) so a remix that flips
+            // back to Default can't persist a stale supervisor config; the live
+            // `superCfg` spread below is the single source of truth when 'super'.
+            ...(() => {
+              const base: Record<string, unknown> = { ...(carriedMetadata ?? { _source: 'user' }) };
+              delete base._agentType; delete base._superAgent;
+              return base;
+            })(),
             ...(avatarUrl.trim() ? { _avatarUrl: avatarUrl.trim() } : {}),
             ...(rubricText.trim() ? { _rubricText: rubricText.trim() } : {}),
             // SAU-238: human brief (UI only) + AI description (folded into the model prompt).
@@ -532,6 +629,8 @@ function CreateScenarioForm() {
             _model: aiModel,
             ...(aiContext.trim() ? { _aiContext: aiContext.trim() } : {}),
             ...(contextSource.trim() ? { _aiContextSource: contextSource.trim() } : {}),
+            // Super Agent (SAU-307): the type discriminator + structured config.
+            ...(superCfg ? { _agentType: 'super', _superAgent: superCfg } : {}),
           },
           // Knowledge Base links (SAU-243) — linked server-side after create.
           knowledgeBaseIds: linkedKbs.map((k) => k.id),
@@ -754,6 +853,26 @@ function CreateScenarioForm() {
           {/* ── AI Agent ───────────────────────────────────────────── */}
           {tab === 'agent' && (
           <div className="studio-pane">
+          {/* Agent Type (SAU-307) — Default | Super Agent | Composite/Meeting (soon). */}
+          <div className="form-group">
+            <label className="form-label">Type</label>
+            <p className="form-hint-block">A <strong>Default</strong> agent is one persona with one set of tools and voice. A <strong>Super Agent</strong> is a supervisor that orchestrates several inline sub-agents and switches between them per a strategy you describe.</p>
+            <div className="radio-group" role="radiogroup" aria-label="Agent type">
+              {AGENT_TYPE_OPTIONS.map((opt) => (
+                <label key={opt.id} className="radio-label" title={opt.blurb} style={!opt.available ? { opacity: 0.5 } : undefined}>
+                  <input
+                    type="radio" name="agentType" value={opt.id}
+                    disabled={!opt.available}
+                    checked={agentType === opt.id}
+                    onChange={() => { if (opt.id === 'default' || opt.id === 'super') setAgentType(opt.id); }}
+                  />
+                  {opt.label}{!opt.available ? ' (soon)' : ''}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {agentType === 'default' && (<>
           {/* Description for AI (SAU-238) — persona identity, prepended to the model prompt */}
           <div className="form-group">
             <label htmlFor={`${uid}-aidesc`} className="form-label">Description for AI <span className="form-optional">(Optional)</span></label>
@@ -781,9 +900,86 @@ function CreateScenarioForm() {
               placeholder="You are a [role]. Your goal is to [objective]. Ask [types of questions]..."
               value={persona}
               onChange={(e) => setPersona(e.target.value)}
-              required
             />
           </div>
+          </>)}
+
+          {agentType === 'super' && (<>
+          {/* ── Supervisor (SAU-307) ── */}
+          <div className="form-group">
+            <label className="form-label" style={{ fontSize: '1.05em' }}>🧭 Supervisor</label>
+            <p className="form-hint-block">The supervisor coordinates the sub-agents below — it decides which one handles each part of the conversation and switches between them.</p>
+          </div>
+          <div className="form-group">
+            <label htmlFor={`${uid}-sup-role`} className="form-label">Role <span className="form-required">*</span></label>
+            <textarea id={`${uid}-sup-role`} className="form-textarea" rows={2}
+              placeholder="A front-desk coordinator for a medical clinic." value={superRole}
+              onChange={(e) => setSuperRole(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label htmlFor={`${uid}-sup-goal`} className="form-label">Goal <span className="form-required">*</span></label>
+            <textarea id={`${uid}-sup-goal`} className="form-textarea" rows={2}
+              placeholder="Get every caller to the right specialist and a booked outcome." value={superGoal}
+              onChange={(e) => setSuperGoal(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label htmlFor={`${uid}-sup-instr`} className="form-label">Instructions <span className="form-required">*</span></label>
+            <p className="form-hint-block">The switching strategy — when to hand off to which sub-agent.</p>
+            <textarea id={`${uid}-sup-instr`} className="form-textarea form-textarea-tall" rows={5}
+              placeholder="Start with Intake to gather the reason for the visit. If it's billing, switch to Billing. Once a service is chosen, switch to Scheduler to book." value={superInstructions}
+              onChange={(e) => setSuperInstructions(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label htmlFor={`${uid}-sup-common`} className="form-label">Common Instructions <span className="form-optional">(Optional)</span></label>
+            <p className="form-hint-block">Applied to every sub-agent, always (tone, guardrails, escalation rules).</p>
+            <textarea id={`${uid}-sup-common`} className="form-textarea" rows={3}
+              placeholder="Be warm and concise. Never give medical advice. If the caller is in distress, offer to connect a human." value={superCommon}
+              onChange={(e) => setSuperCommon(e.target.value)} />
+          </div>
+
+          {/* ── Sub-Agents (SAU-307) ── */}
+          <div className="form-group">
+            <label className="form-label" style={{ fontSize: '1.05em' }}>🤝 Sub-Agents <span className="form-required">*</span></label>
+            <p className="form-hint-block">Add the specialists the supervisor switches between. Each has its own instructions, tools, and preferred model.</p>
+            {subAgents.length === 0 && (
+              <div className="report-panel"><p className="form-hint" style={{ margin: 0 }}>No sub-agents yet — add at least one.</p></div>
+            )}
+            {subAgents.map((sa, i) => (
+              <div key={sa.id} className="report-panel" style={{ marginBottom: 12 }}>
+                <div className="rubric-row" style={{ alignItems: 'center' }}>
+                  <input className="form-input rubric-topic" placeholder={`Sub-agent ${i + 1} name (e.g. Intake)`}
+                    value={sa.name} onChange={(e) => updateSubAgent(sa.id, { name: e.target.value })} aria-label={`Sub-agent ${i + 1} name`} />
+                  <button type="button" className="btn-remove" onClick={() => removeSubAgent(sa.id)} aria-label={`Remove sub-agent ${i + 1}`}>×</button>
+                </div>
+                <textarea className="form-textarea" rows={3} style={{ marginTop: 8 }}
+                  placeholder="What this sub-agent does and how it behaves." value={sa.instructions}
+                  onChange={(e) => updateSubAgent(sa.id, { instructions: e.target.value })} aria-label={`Sub-agent ${i + 1} instructions`} />
+                <div style={{ marginTop: 8 }}>
+                  <span className="studio-section-label">Tools</span>
+                  <div className="radio-group" style={{ flexWrap: 'wrap' }}>
+                    {TOOL_NAMES.map((t) => (
+                      <label key={t} className="radio-label">
+                        <input type="checkbox" checked={sa.tools.includes(t)} onChange={() => toggleSubAgentTool(sa.id, t)} />
+                        {t}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <label className="studio-section-label" htmlFor={`${uid}-${sa.id}-model`}>Model</label>
+                  <select id={`${uid}-${sa.id}-model`} className="form-input" value={sa.model}
+                    onChange={(e) => updateSubAgent(sa.id, { model: e.target.value })}>
+                    <option value="">Use the scenario model</option>
+                    {AI_MODELS.filter((m) => m.available).map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ))}
+            <button type="button" className="btn-sm" onClick={addSubAgent}>＋ Add sub-agent</button>
+          </div>
+          </>)}
 
           {/* AI Model (SAU-238 ask #6 → SAU-258 multi-vendor picker) */}
           <div className="form-group">

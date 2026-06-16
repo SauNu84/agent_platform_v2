@@ -10,6 +10,10 @@
  */
 import { z } from 'zod';
 import type { CompiledScenario, ToolDefinition } from '@/voice/realtime-interface';
+import {
+  safeParseSuperAgentConfig, parseSuperAgentConfig, compileSuperAgentInstructions,
+  superAgentToolNames, isSuperAgent, type SuperAgentConfig,
+} from '@/domain/super-agent';
 
 // ── Built-in multimodal tool registry (ADR-005, minimal Slice-1 surface) ─────
 // Frontmatter may list tools by name (`tools: [slides, whiteboard]`) OR inline a
@@ -151,6 +155,23 @@ export interface CompiledScenarioRecord {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * Validate the agent-type config on a record's metadata at WRITE time (SAU-307),
+ * so the API can never persist a Super Agent the runtime couldn't compile. No-op
+ * for default agents. Throws on a malformed supervisor/sub-agent config or a
+ * sub-agent tool name that isn't in the registry. Returns the parsed config (or
+ * null) for callers that want it.
+ */
+export function validateAgentTypeMetadata(metadata: Record<string, unknown> | undefined): SuperAgentConfig | null {
+  if (!isSuperAgent(metadata)) return null;
+  // Strict parse: throws SuperAgentConfigError (a readable message) on any issue.
+  const cfg = parseSuperAgentConfig(metadata?._superAgent);
+  // Tool names must resolve against the built-in registry (same rule as default
+  // agents' `tools`); resolveTool throws on an unknown name.
+  for (const name of superAgentToolNames(cfg)) resolveTool(name);
+  return cfg;
+}
+
 /** Resolve a tool ref (name or inline def) to a full ToolDefinition. */
 export function resolveTool(ref: string | ToolDefinition): ToolDefinition {
   if (typeof ref === 'string') {
@@ -214,13 +235,43 @@ export function modelInstructions(
   // attached (e.g. fetched from a URL). Grounding context → improves answers.
   const context = typeof rec.metadata?._aiContext === 'string' ? rec.metadata._aiContext.trim() : '';
   const kb = typeof opts?.knowledgeBaseText === 'string' ? opts.knowledgeBaseText.trim() : '';
-  const parts = [desc, rec.aiInstructions];
+  // Super Agent (SAU-307): when authored as a supervisor, the head of the prompt
+  // is the COMPILED supervisor+sub-agents coordination prompt (not the persona /
+  // single-agent path). Context + KB still fold in below, unchanged. A malformed
+  // config tolerantly falls back to the default path (runtime stays resilient;
+  // create-time validation is the real gate — see services/scenarios.ts).
+  const superCfg = isSuperAgent(rec.metadata) ? safeParseSuperAgentConfig(rec.metadata?._superAgent) : null;
+  const head = superCfg ? compileSuperAgentInstructions(superCfg) : '';
+  const parts = head ? [head] : [desc, rec.aiInstructions];
   if (context) parts.push(`## Reference context\nUse the following background as ground truth where relevant:\n\n${context}`);
   // Knowledge Base (SAU-243): reusable, multi-document corpus linked to this
   // scenario. Appended last, after Additional Context, so the per-scenario
   // context still leads. Already bounded by KB_CONTEXT_CHAR_BUDGET upstream.
   if (kb) parts.push(`## Knowledge base\nReference documents linked to this scenario. Treat as ground truth where relevant:\n\n${kb}`);
   return parts.filter(Boolean).join('\n\n');
+}
+
+/**
+ * Resolve the tools the realtime session should expose for a record. For a Super
+ * Agent (SAU-307) this is the UNION of every sub-agent's tools (deduped by name,
+ * resolved against the registry) merged with any scenario-level tools — the one
+ * session needs the whole team's toolset available. Unknown tool names are
+ * skipped here (create-time validation already rejects them). Default agents
+ * just use their own tools.
+ */
+export function resolveScenarioTools(rec: ScenarioRecord): ToolDefinition[] {
+  const cfg: SuperAgentConfig | null = isSuperAgent(rec.metadata)
+    ? safeParseSuperAgentConfig(rec.metadata?._superAgent)
+    : null;
+  if (!cfg) return rec.tools;
+  const byName = new Map<string, ToolDefinition>();
+  for (const t of rec.tools) byName.set(t.name, t);
+  for (const name of superAgentToolNames(cfg)) {
+    if (byName.has(name)) continue;
+    const found = TOOL_REGISTRY[name];
+    if (found) byName.set(name, found);
+  }
+  return [...byName.values()];
 }
 
 /** Project a canonical record into the realtime voice seam's CompiledScenario. */
@@ -230,7 +281,7 @@ export function toCompiledScenario(rec: ScenarioRecord, opts?: ModelInstructions
     name: rec.name,
     aiInstructions: modelInstructions(rec, opts),
     voice: { name: rec.voiceName, languageCode: rec.languageCode },
-    tools: rec.tools,
+    tools: resolveScenarioTools(rec),
     rubric: rec.rubric,
   };
 }
