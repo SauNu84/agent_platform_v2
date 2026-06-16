@@ -11,6 +11,7 @@
  * up here automatically (the links are passed in from the registry).
  */
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import type { UseCaseLink } from '@/services/use-cases';
 
 export interface UseCaseShellProps {
@@ -21,6 +22,7 @@ export interface UseCaseShellProps {
 }
 
 export default function UseCaseShell({ links, activeSlug, children }: UseCaseShellProps) {
+  const pathname = usePathname();
   return (
     <div className="docs-shell">
       <aside className="docs-sidebar" aria-label="Use cases">
@@ -34,10 +36,22 @@ export default function UseCaseShell({ links, activeSlug, children }: UseCaseShe
               <li key={u.slug}>
                 <Link
                   href={`/use-cases/${u.slug}`}
-                  className={u.slug === activeSlug ? 'active' : ''}
+                  className={u.slug === activeSlug && pathname === `/use-cases/${u.slug}` ? 'active' : ''}
                 >
                   <span aria-hidden="true">{u.icon}</span> {u.navLabel}
                 </Link>
+                {/* Nested sub-pages (e.g. the clinic agent's "Set up a demo"). */}
+                {u.subLinks && u.subLinks.length > 0 && (
+                  <ul className="docs-side-sub">
+                    {u.subLinks.map((s) => (
+                      <li key={s.href}>
+                        <Link href={s.href} className={pathname === s.href ? 'active' : ''}>
+                          {s.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>

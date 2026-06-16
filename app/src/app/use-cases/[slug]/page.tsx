@@ -38,17 +38,9 @@ export default function UseCasePage({ params }: { params: { slug: string } }) {
         {useCase.navLabel}
       </nav>
 
-      {/* SAU-297: the clinic agent has a no-code "Set up a demo" panel (connect a
-          Google Calendar + set phone numbers, then run a call that books into it).
-          Other use cases have no config surface, so the CTA is clinic-only. */}
-      {useCase.slug === 'clinic-agent' && (
-        <p className="docs-cta">
-          <Link className="btn" href="/use-cases/clinic-agent/configure">
-            Set up a demo →
-          </Link>
-        </p>
-      )}
-
+      {/* SAU-297: the clinic agent's no-code "Set up a demo" panel is reached from
+          the left-nav sub-item under "AI Clinic Agent" (UseCaseShell), per board
+          preference — no in-page button. */}
       <MarkdownDoc markdown={useCase.body} />
     </UseCaseShell>
   );

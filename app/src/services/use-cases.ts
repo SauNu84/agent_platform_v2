@@ -14,6 +14,12 @@
  * Content is authored by the CPO on SAU-265 (use-case-clinic-explainer doc).
  */
 
+/** A nested nav entry under a use case (e.g. the clinic agent's demo setup page). */
+export interface UseCaseSubLink {
+  href: string;
+  label: string;
+}
+
 export interface UseCase {
   /** URL slug under /use-cases/[slug]; unique across the catalog. */
   slug: string;
@@ -27,6 +33,8 @@ export interface UseCase {
   summary: string;
   /** Article body as GFM Markdown (may include \`\`\`mermaid fences). */
   body: string;
+  /** Optional nested nav links (e.g. a config sub-page) shown under this entry. */
+  subLinks?: UseCaseSubLink[];
 }
 
 const CLINIC_AGENT_BODY = `# Use Case — AI Clinic Call Agent (Intake & Booking)
@@ -131,6 +139,9 @@ export const USE_CASES: UseCase[] = [
     summary:
       "An AI agent answers a clinic\u2019s phone, collects patient intake, checks the calendar and clinic rules, and books the appointment \u2014 a real action-taking agent, not a training sim.",
     body: CLINIC_AGENT_BODY,
+    // SAU-297: no-code demo setup (connect Google Calendar + phone numbers) as a
+    // left-nav sub-item under the clinic agent, not just an in-page button.
+    subLinks: [{ href: "/use-cases/clinic-agent/configure", label: "Set up a demo" }],
   },
 ];
 
@@ -140,6 +151,7 @@ export interface UseCaseLink {
   title: string;
   navLabel: string;
   icon: string;
+  subLinks?: UseCaseSubLink[];
 }
 
 export function getAllUseCases(): UseCase[] {
@@ -147,7 +159,7 @@ export function getAllUseCases(): UseCase[] {
 }
 
 export function toUseCaseLinks(): UseCaseLink[] {
-  return USE_CASES.map(({ slug, title, navLabel, icon }) => ({ slug, title, navLabel, icon }));
+  return USE_CASES.map(({ slug, title, navLabel, icon, subLinks }) => ({ slug, title, navLabel, icon, subLinks }));
 }
 
 export function getUseCase(slug: string): UseCase | null {

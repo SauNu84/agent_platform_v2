@@ -8,8 +8,10 @@
  * `?calendarId=` lets the clinic target a specific calendar (defaults to primary).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getStore } from '@/db';
 import { actorOr401 } from '@/auth/api-guard';
-import { readGoogleOAuthConfig, buildConsentUrl, resolveRedirectUri } from '@/services/calendar/google-oauth';
+import { buildConsentUrl, resolveRedirectUri } from '@/services/calendar/google-oauth';
+import { resolveGoogleOAuthConfig } from '@/services/calendar/google-oauth-config';
 import { buildOAuthState } from '@/services/calendar/calendar-connection';
 
 export const dynamic = 'force-dynamic';
@@ -18,13 +20,13 @@ export async function GET(req: NextRequest) {
   const gate = await actorOr401();
   if ('response' in gate) return gate.response;
 
-  const cfg = readGoogleOAuthConfig();
+  const cfg = await resolveGoogleOAuthConfig(getStore(), gate.actor.userId);
   if (!cfg) {
     return NextResponse.json(
       {
         error:
-          'Google Calendar OAuth is not configured on this server (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET). ' +
-          'Booking will use the simulated sandbox calendar until it is connected.',
+          'Google Calendar OAuth app is not configured. Add the OAuth client ID + secret in the demo setup panel ' +
+          '(or set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET). Booking uses the simulated sandbox calendar until then.',
       },
       { status: 503 },
     );

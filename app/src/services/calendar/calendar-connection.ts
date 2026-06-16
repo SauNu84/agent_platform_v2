@@ -14,11 +14,8 @@
 import { randomBytes } from 'node:crypto';
 import type { Store } from '@/db/store';
 import { encrypt, decrypt } from '@/lib/crypto';
-import {
-  readGoogleOAuthConfig,
-  refreshAccessToken,
-  type GoogleTokenResponse,
-} from './google-oauth';
+import { refreshAccessToken, type GoogleTokenResponse } from './google-oauth';
+import { resolveGoogleOAuthConfig } from './google-oauth-config';
 
 /** user_setting key for the Google Calendar OAuth connection (distinct from the
  *  SAU-253 `integration:calendar` provider-choice record so neither clobbers the
@@ -123,7 +120,7 @@ export async function ensureFreshAccessToken(
   const fresh = conn.tokens.expiryMs - REFRESH_SKEW_MS > nowMs;
   if (fresh) return conn.tokens.accessToken;
 
-  const cfg = readGoogleOAuthConfig();
+  const cfg = await resolveGoogleOAuthConfig(store, userId);
   if (!cfg || !conn.tokens.refreshToken) return conn.tokens.accessToken;
 
   const refreshed = await refreshAccessToken(cfg, conn.tokens.refreshToken, nowMs);
@@ -148,7 +145,7 @@ export async function getCalendarConnectionView(store: Store, userId: string): P
     calendarId: conn?.calendarId ?? null,
     scope: conn?.scope ?? null,
     connectedAt: conn?.connectedAt ?? null,
-    oauthConfigured: readGoogleOAuthConfig() != null,
+    oauthConfigured: (await resolveGoogleOAuthConfig(store, userId)) != null,
   };
 }
 

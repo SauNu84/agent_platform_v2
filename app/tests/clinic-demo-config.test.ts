@@ -20,10 +20,12 @@ import {
   saveGoogleConnection,
   setConnectionCalendarId,
   readGoogleConnection,
+  getCalendarConnectionView,
   buildOAuthState,
   verifyOAuthState,
   safeReturnTo,
 } from '@/services/calendar/calendar-connection';
+import { toUseCaseLinks } from '@/services/use-cases';
 import {
   DEFAULT_AGENT_NUMBER,
   getClinicPhoneConfig,
@@ -34,6 +36,16 @@ import {
   toPhoneIntegrationSetting,
   ClinicPhoneError,
 } from '@/services/clinic-phone';
+import {
+  GOOGLE_OAUTH_APP_KEY,
+  saveGoogleOAuthApp,
+  clearGoogleOAuthApp,
+  readStoredGoogleOAuthConfig,
+  resolveGoogleOAuthConfig,
+  getGoogleOAuthAppView,
+  GoogleOAuthAppError,
+} from '@/services/calendar/google-oauth-config';
+import { isEncrypted } from '@/lib/crypto';
 
 const FAR_FUTURE = Date.parse('2099-01-01T00:00:00Z');
 const USER = 'user-clinic-1';
@@ -141,4 +153,86 @@ test('safeReturnTo blocks open-redirects; bad returnTo is dropped from state', (
 
   const state = buildOAuthState(USER, 'primary', 'https://evil.example.com');
   assert.equal(verifyOAuthState(state, USER)?.returnTo, null);
+});
+
+// ── Google OAuth app credentials (no .env) ───────────────────────────────────
+const ORIGIN = 'https://demo.example.com';
+const CLIENT_ID = '1234-abc.apps.googleusercontent.com';
+
+test('OAuth app creds: client secret is encrypted at rest and never echoed', async () => {
+  const store = new MemoryStore();
+  delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+  delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+
+  const view = await saveGoogleOAuthApp(store, USER, ORIGIN, CLIENT_ID, 'GOCSPX-secret-value');
+  assert.equal(view.configured, true);
+  assert.equal(view.secretConfigured, true);
+  assert.equal(view.envProvisioned, false);
+  assert.equal(view.clientIdMasked, `…${CLIENT_ID.slice(-8)}`, 'client id is masked to its tail');
+  assert.equal(view.redirectUri, `${ORIGIN}/api/integrations/google-calendar/callback`);
+  // The view never carries the raw secret.
+  assert.equal((view as Record<string, unknown>).clientSecret, undefined);
+
+  // The stored secret is ciphertext, not plaintext.
+  const rec = await store.getUserSetting(USER, GOOGLE_OAUTH_APP_KEY);
+  assert.ok(isEncrypted(String(rec?.value.clientSecret)), 'secret stored encrypted');
+  assert.equal(rec?.value.clientId, CLIENT_ID, 'client id stored plaintext (not a secret)');
+
+  // The server-only resolver recovers the decrypted config.
+  const cfg = await readStoredGoogleOAuthConfig(store, USER);
+  assert.equal(cfg?.clientId, CLIENT_ID);
+  assert.equal(cfg?.clientSecret, 'GOCSPX-secret-value');
+});
+
+test('OAuth app creds: env takes precedence over stored, and clear reverts', async () => {
+  const store = new MemoryStore();
+  await saveGoogleOAuthApp(store, USER, ORIGIN, CLIENT_ID, 'GOCSPX-stored');
+
+  // No env → resolves to stored.
+  delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+  delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  assert.equal((await resolveGoogleOAuthConfig(store, USER))?.clientSecret, 'GOCSPX-stored');
+
+  // Env present → env wins.
+  process.env.GOOGLE_OAUTH_CLIENT_ID = 'env-id.apps.googleusercontent.com';
+  process.env.GOOGLE_OAUTH_CLIENT_SECRET = 'GOCSPX-env';
+  const envCfg = await resolveGoogleOAuthConfig(store, USER);
+  assert.equal(envCfg?.clientSecret, 'GOCSPX-env');
+  assert.equal((await getGoogleOAuthAppView(store, USER, ORIGIN)).envProvisioned, true);
+  delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+  delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+
+  // Clear removes the stored creds → not configured.
+  const cleared = await clearGoogleOAuthApp(store, USER, ORIGIN);
+  assert.equal(cleared.configured, false);
+  assert.equal(await resolveGoogleOAuthConfig(store, USER), null);
+});
+
+test('OAuth app creds: rejects an implausible client id / short secret', async () => {
+  const store = new MemoryStore();
+  await assert.rejects(() => saveGoogleOAuthApp(store, USER, ORIGIN, 'not-a-client-id', 'GOCSPX-long-enough'), GoogleOAuthAppError);
+  await assert.rejects(() => saveGoogleOAuthApp(store, USER, ORIGIN, CLIENT_ID, 'short'), GoogleOAuthAppError);
+  await assert.rejects(() => saveGoogleOAuthApp(store, USER, ORIGIN, '', 'GOCSPX-long-enough'), GoogleOAuthAppError);
+});
+
+test('storing OAuth app creds flips the calendar connection view to configured', async () => {
+  const store = new MemoryStore();
+  delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+  delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+
+  const before = await getCalendarConnectionView(store, USER);
+  assert.equal(before.oauthConfigured, false, 'no creds ⇒ connect gated');
+
+  await saveGoogleOAuthApp(store, USER, ORIGIN, CLIENT_ID, 'GOCSPX-secret-value');
+  const after = await getCalendarConnectionView(store, USER);
+  assert.equal(after.oauthConfigured, true, 'stored creds ⇒ connect enabled (no .env)');
+});
+
+// ── Nav sub-link ─────────────────────────────────────────────────────────────
+test('clinic-agent carries a "Set up a demo" nav sub-link', () => {
+  const clinic = toUseCaseLinks().find((u) => u.slug === 'clinic-agent');
+  assert.ok(clinic, 'clinic-agent link exists');
+  const sub = clinic!.subLinks?.find((s) => s.href === '/use-cases/clinic-agent/configure');
+  assert.ok(sub, 'has the configure sub-link');
+  assert.equal(sub!.label, 'Set up a demo');
 });

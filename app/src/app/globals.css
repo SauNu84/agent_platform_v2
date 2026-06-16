@@ -840,6 +840,9 @@ td.warn { color: #d97706; font-weight: 600; }
   line-height: 1.35;
 }
 .docs-sidebar li a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+/* Nested sub-nav under a catalog entry (SAU-297: clinic agent "Set up a demo"). */
+.docs-side-sub { margin: 1px 0 4px 0 !important; padding-left: 14px !important; border-left: 1px solid var(--border); }
+.docs-side-sub li a { font-size: 12.5px; padding: 4px 8px; }
 .docs-sidebar li a.active {
   color: var(--text);
   background: var(--panel-2);
@@ -853,8 +856,6 @@ td.warn { color: #d97706; font-weight: 600; }
 .docs-breadcrumb { font-size: 13px; color: var(--muted); margin-bottom: 16px; font-family: var(--mono); }
 .docs-breadcrumb a { color: var(--muted); }
 .docs-breadcrumb a:hover { color: var(--text); }
-.docs-cta { margin: 0 0 20px; }
-.docs-cta a.btn { text-decoration: none; }
 .docs-pager {
   display: flex;
   justify-content: space-between;

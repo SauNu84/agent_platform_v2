@@ -7,11 +7,13 @@
  */
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { getStore } from '@/db';
 import { requirePageActor } from '@/services/current-user';
 import { toUseCaseLinks } from '@/services/use-cases';
 import UseCaseShell from '@/components/UseCaseShell';
 import { getCalendarConnectionView } from '@/services/calendar/calendar-connection';
+import { getGoogleOAuthAppView } from '@/services/calendar/google-oauth-config';
 import { getClinicPhoneView } from '@/services/clinic-phone';
 import ClinicDemoConfig from './ClinicDemoConfig';
 
@@ -26,8 +28,15 @@ export default async function ClinicConfigurePage() {
   const store = getStore();
   const actor = await requirePageActor();
 
-  const [calendarOAuth, phone] = await Promise.all([
+  // Derive the request origin for the OAuth redirect URI shown in the panel.
+  const h = headers();
+  const proto = h.get('x-forwarded-proto') ?? 'http';
+  const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:3000';
+  const origin = `${proto}://${host}`;
+
+  const [calendarOAuth, oauthApp, phone] = await Promise.all([
     getCalendarConnectionView(store, actor.userId),
+    getGoogleOAuthAppView(store, actor.userId, origin),
     getClinicPhoneView(store, actor.userId),
   ]);
 
@@ -38,7 +47,7 @@ export default async function ClinicConfigurePage() {
         <Link href="/use-cases/clinic-agent">AI Clinic Agent</Link> <span aria-hidden="true">/</span> Set up a demo
       </nav>
 
-      <ClinicDemoConfig calendarOAuth={calendarOAuth} phone={phone} />
+      <ClinicDemoConfig calendarOAuth={calendarOAuth} oauthApp={oauthApp} phone={phone} isAdmin={actor.isAdmin} />
     </UseCaseShell>
   );
 }

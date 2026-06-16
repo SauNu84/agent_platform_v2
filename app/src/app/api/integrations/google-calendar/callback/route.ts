@@ -10,7 +10,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { actorOr401 } from '@/auth/api-guard';
 import { getStore } from '@/db';
-import { readGoogleOAuthConfig, exchangeCodeForTokens, resolveRedirectUri } from '@/services/calendar/google-oauth';
+import { exchangeCodeForTokens, resolveRedirectUri } from '@/services/calendar/google-oauth';
+import { resolveGoogleOAuthConfig } from '@/services/calendar/google-oauth-config';
 import { verifyOAuthState, saveGoogleConnection } from '@/services/calendar/calendar-connection';
 
 export const dynamic = 'force-dynamic';
@@ -39,7 +40,7 @@ export async function GET(req: NextRequest) {
   // The flow may have started from the demo config panel; return there if so.
   const dest = verified.returnTo ?? '/settings/integrations';
 
-  const cfg = readGoogleOAuthConfig();
+  const cfg = await resolveGoogleOAuthConfig(getStore(), gate.actor.userId);
   if (!cfg) return back(origin, 'not_configured', dest);
 
   try {
