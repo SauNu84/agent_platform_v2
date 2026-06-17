@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from './Avatar';
 import type { SessionSummary } from './DetailShell';
 import { GeminiLiveSession, type GeminiLiveToken } from '@/lib/gemini-live-client';
+import { SET_ACTIVE_SUBAGENT_TOOL } from '@/domain/super-agent';
 
 type Turn = SessionSummary['turns'][number];
 type Phase = 'verify' | 'live';
@@ -86,6 +87,9 @@ export default function LiveDemo({
   // SAU-267: server-side tool calls the agent made during the session (booking
   // loop). Captured so they persist in the transcript and drive the outcome record.
   const liveToolCallsRef = useRef<Array<{ name: string; args: unknown; result: unknown; at: number }>>([]);
+  // SAU-318 #4: the sub-agent the supervisor last marked active (advisory). Live
+  // attribution badge; the marker calls also land in liveToolCallsRef (the History).
+  const [activeSubAgent, setActiveSubAgent] = useState<string | null>(null);
   const [booking, setBooking] = useState<{ doctorName: string; start: string; eventId: string; simulated: boolean } | null>(null);
   const [outcome, setOutcome] = useState<{ outcome: string; eventId?: string | null; simulated?: boolean } | null>(null);
 
@@ -226,6 +230,22 @@ export default function LiveDemo({
     const dc = dcRef.current;
     let args: unknown = {};
     try { args = argsJson ? JSON.parse(argsJson) : {}; } catch { args = {}; }
+    // SAU-318 #4: the advisory attribution marker. UI-side-effect only — there is NO
+    // server executor (the tools route 400s ui tools), so handle it client-side:
+    // record which sub-agent is now active into the session toolCalls (the History
+    // attribution) and update the live badge, then ack so the model keeps talking.
+    if (name === SET_ACTIVE_SUBAGENT_TOOL) {
+      const sub = (args as { name?: unknown })?.name;
+      const subName = typeof sub === 'string' ? sub.trim() : '';
+      const result = { ok: true, active: subName };
+      liveToolCallsRef.current = [...liveToolCallsRef.current, { name, args, result, at: Date.now() }];
+      if (subName) setActiveSubAgent(subName);
+      if (dc && dc.readyState === 'open') {
+        dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } }));
+        dc.send(JSON.stringify({ type: 'response.create' }));
+      }
+      return;
+    }
     let result: unknown;
     try {
       const res = await fetch(`/api/scenarios/${slug}/tools`, {
@@ -257,11 +277,13 @@ export default function LiveDemo({
     liveTurnsRef.current = [];
     liveToolCallsRef.current = [];
     liveStartedAtRef.current = Date.now();
+    setActiveSubAgent(null);
     // Map the scenario's SERVER-side tools (ADR-005) into OpenAI Realtime function
-    // tools. UI-only tools are skipped (no server executor). Empty for ordinary
-    // training scenarios, so this is a no-op there.
+    // tools. UI-only tools are skipped (no server executor) — EXCEPT the Super Agent
+    // attribution marker (SAU-318 #4), a ui tool the model is meant to call and we
+    // handle client-side. Empty for ordinary training scenarios, so this is a no-op there.
     const serverTools = (tok.scenario?.tools ?? [])
-      .filter((t) => t.sideEffect === 'server' || t.sideEffect === 'both')
+      .filter((t) => t.sideEffect === 'server' || t.sideEffect === 'both' || t.name === SET_ACTIVE_SUBAGENT_TOOL)
       .map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.paramsSchema ?? { type: 'object', properties: {} } }));
     // OpenAI's `voice` must be a plain string; coerce defensively (the route already
     // sends a string, but a scenario voice object would otherwise be rejected).
@@ -533,6 +555,10 @@ export default function LiveDemo({
           <audio ref={audioRef} autoPlay hidden />
           {vendor === 'mock' && (running || finished) && (
             <p className="ld-sim">Simulated session — no voice-vendor key is configured for this environment.</p>
+          )}
+          {/* SAU-318 #4: advisory attribution — which sub-agent the supervisor marked active. */}
+          {activeSubAgent && (
+            <div className="notice" role="status">Active sub-agent: <strong>{activeSubAgent}</strong></div>
           )}
           {/* SAU-267: live proof the agent actually created the appointment. */}
           {booking && (

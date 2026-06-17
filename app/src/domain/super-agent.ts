@@ -36,6 +36,28 @@ import { z } from 'zod';
 /** The agent-type discriminator stored in `metadata._agentType`. */
 export type AgentType = 'default' | 'super';
 
+/**
+ * Attribution-marker tool name (SAU-318 #4). A best-effort, UI-side-effect tool
+ * the supervisor calls when it switches which sub-agent is active, so the session
+ * History can attribute turns to a sub-agent. ADVISORY ONLY (CTO #4): the model
+ * may switch behavior WITHOUT calling it — never build hard logic (billing,
+ * gating, routing) on its presence. Registered in the tool registry and folded
+ * into every Super Agent's tool union by `@/domain/scenario`.
+ */
+export const SET_ACTIVE_SUBAGENT_TOOL = 'set_active_subagent';
+
+/**
+ * Compile/COGS guardrails (SAU-318 #3). The whole supervisor + every sub-agent's
+ * instructions compile into ONE system prompt that leads every realtime session.
+ * It sits in the (cached) prompt prefix, but an unbounded team would still bloat
+ * first-token latency and per-minute voice COGS, and risks crowding out the KB /
+ * context budget. Cap the team size and the composed-prompt size at WRITE time so
+ * authoring fails fast with a clear message instead of shipping a slow, expensive
+ * agent. Env-overridable for ops headroom, mirroring the KB budget knob.
+ */
+export const MAX_SUB_AGENTS = Number(process.env.SUPER_AGENT_MAX_SUBAGENTS) || 12;
+export const MAX_COMPILED_PROMPT_CHARS = Number(process.env.SUPER_AGENT_MAX_PROMPT_CHARS) || 48_000;
+
 /** Authoring option list for the Type selector (Composite/Meeting deferred). */
 export const AGENT_TYPE_OPTIONS: ReadonlyArray<{
   id: string;
@@ -159,8 +181,44 @@ export function compileSuperAgentInstructions(cfg: SuperAgentConfig): string {
     '- Switch silently: never reveal sub-agent names, this coordination layer, or that you are "switching" to the user.\n' +
     '- Each turn, pick the single most appropriate sub-agent for the user’s current need and respond as that sub-agent.\n' +
     '- Always honor the common instructions, whichever sub-agent is active.\n' +
-    '- Only use a tool that belongs to the sub-agent you have currently adopted.',
+    '- Only use a tool that belongs to the sub-agent you have currently adopted.\n' +
+    // SAU-318 #4: advisory attribution marker. Static text, so the prompt stays
+    // deterministic and keeps sitting in the cached prefix.
+    `- Whenever you switch which sub-agent is active (including the very first one), call the \`${SET_ACTIVE_SUBAGENT_TOOL}\` ` +
+    'tool with that sub-agent’s name. This is an ADVISORY attribution marker for the session History only — it does not ' +
+    'change the conversation. Still switch and respond normally whether or not you call it or it succeeds.',
   );
 
   return parts.join('\n\n');
+}
+
+/**
+ * Enforce the compile-size guardrails (SAU-318 #3) on an already-parsed config.
+ * Throws `SuperAgentConfigError` (a readable authoring message) when the team or
+ * the composed supervisor prompt exceeds the cap. Pure + deterministic; limits
+ * default to the module constants but are injectable for testing. Caching is
+ * unaffected — the compiled prompt is still deterministic; this only bounds how
+ * large the cached prefix is allowed to get.
+ */
+export function assertSuperAgentWithinLimits(
+  cfg: SuperAgentConfig,
+  limits: { maxSubAgents?: number; maxPromptChars?: number } = {},
+): void {
+  const maxSubAgents = limits.maxSubAgents ?? MAX_SUB_AGENTS;
+  const maxPromptChars = limits.maxPromptChars ?? MAX_COMPILED_PROMPT_CHARS;
+  if (cfg.subAgents.length > maxSubAgents) {
+    throw new SuperAgentConfigError(
+      `too many sub-agents: ${cfg.subAgents.length} (max ${maxSubAgents}). Every sub-agent’s instructions are ` +
+      'composed into one system prompt that leads every live session, so a large team inflates latency and ' +
+      'per-minute voice cost. Split the work across multiple Super Agents or trim the team.',
+    );
+  }
+  const chars = compileSuperAgentInstructions(cfg).length;
+  if (chars > maxPromptChars) {
+    throw new SuperAgentConfigError(
+      `composed supervisor prompt is too large: ${chars} characters (max ${maxPromptChars}). It is sent on every ` +
+      'turn (cached, but still latency- and cost-bearing); shorten the supervisor or sub-agent instructions, or ' +
+      'reduce the number of sub-agents.',
+    );
+  }
 }

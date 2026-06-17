@@ -12,7 +12,8 @@ import { z } from 'zod';
 import type { CompiledScenario, ToolDefinition } from '@/voice/realtime-interface';
 import {
   safeParseSuperAgentConfig, parseSuperAgentConfig, compileSuperAgentInstructions,
-  superAgentToolNames, isSuperAgent, type SuperAgentConfig,
+  superAgentToolNames, isSuperAgent, assertSuperAgentWithinLimits,
+  SET_ACTIVE_SUBAGENT_TOOL, type SuperAgentConfig,
 } from '@/domain/super-agent';
 
 // ── Built-in multimodal tool registry (ADR-005, minimal Slice-1 surface) ─────
@@ -62,6 +63,28 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       required: ['patientName', 'doctor', 'slotStart'],
     },
     sideEffect: 'server',
+  },
+
+  // ── Super Agent attribution marker — SAU-318 #4 ───────────────────────────
+  // Advisory, UI-side-effect marker the supervisor calls when it switches which
+  // sub-agent is active, so the session History can attribute turns. No server
+  // executor; handled client-side (recorded into the session toolCalls). ADVISORY
+  // ONLY (CTO #4): the model may switch without calling it — never gate, bill, or
+  // route on it. Auto-folded into a Super Agent's tool union (resolveScenarioTools).
+  [SET_ACTIVE_SUBAGENT_TOOL]: {
+    name: SET_ACTIVE_SUBAGENT_TOOL,
+    description:
+      'Advisory attribution marker: call this whenever you switch which sub-agent is currently active (including the ' +
+      'first), passing that sub-agent’s name. It records which sub-agent handled the turn for the session History and ' +
+      'has NO effect on the conversation — switch and respond normally whether or not you call it.',
+    paramsSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Name of the sub-agent you are switching to (as listed in your sub-agents manifest).' },
+      },
+      required: ['name'],
+    },
+    sideEffect: 'ui',
   },
 };
 
@@ -169,6 +192,9 @@ export function validateAgentTypeMetadata(metadata: Record<string, unknown> | un
   // Tool names must resolve against the built-in registry (same rule as default
   // agents' `tools`); resolveTool throws on an unknown name.
   for (const name of superAgentToolNames(cfg)) resolveTool(name);
+  // SAU-318 #3: cap team size + composed-prompt size so a runaway supervisor can't
+  // be persisted (latency/voice-COGS guardrail). Throws SuperAgentConfigError.
+  assertSuperAgentWithinLimits(cfg);
   return cfg;
 }
 
@@ -255,9 +281,11 @@ export function modelInstructions(
  * Resolve the tools the realtime session should expose for a record. For a Super
  * Agent (SAU-307) this is the UNION of every sub-agent's tools (deduped by name,
  * resolved against the registry) merged with any scenario-level tools — the one
- * session needs the whole team's toolset available. Unknown tool names are
- * skipped here (create-time validation already rejects them). Default agents
- * just use their own tools.
+ * session needs the whole team's toolset available. Plus the advisory
+ * `set_active_subagent` attribution marker (SAU-318 #4), always available to a
+ * supervisor so it can mark switches. Unknown tool names are skipped here
+ * (create-time validation already rejects them). Default agents just use their
+ * own tools.
  */
 export function resolveScenarioTools(rec: ScenarioRecord): ToolDefinition[] {
   const cfg: SuperAgentConfig | null = isSuperAgent(rec.metadata)
@@ -271,6 +299,8 @@ export function resolveScenarioTools(rec: ScenarioRecord): ToolDefinition[] {
     const found = TOOL_REGISTRY[name];
     if (found) byName.set(name, found);
   }
+  // SAU-318 #4: fold in the attribution marker for every Super Agent.
+  if (!byName.has(SET_ACTIVE_SUBAGENT_TOOL)) byName.set(SET_ACTIVE_SUBAGENT_TOOL, TOOL_REGISTRY[SET_ACTIVE_SUBAGENT_TOOL]);
   return [...byName.values()];
 }
 

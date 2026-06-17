@@ -6,6 +6,7 @@ import { modelInstructions, toCompiledScenario, type ScenarioRecord } from '@/do
 import {
   parseSuperAgentConfig, safeParseSuperAgentConfig, compileSuperAgentInstructions,
   superAgentToolNames, isSuperAgent, SuperAgentConfigError, AGENT_TYPE_OPTIONS,
+  assertSuperAgentWithinLimits, SET_ACTIVE_SUBAGENT_TOOL, MAX_SUB_AGENTS,
 } from '@/domain/super-agent';
 
 const VALID = {
@@ -86,7 +87,59 @@ test('SAU-307: toCompiledScenario exposes the UNION of sub-agent tools', () => {
   };
   const compiled = toCompiledScenario(rec);
   const names = compiled.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['check_availability', 'create_appointment']);
+  // SAU-318 #4: the union now also carries the advisory attribution marker.
+  assert.deepEqual(names, ['check_availability', 'create_appointment', SET_ACTIVE_SUBAGENT_TOOL]);
+});
+
+test('SAU-318 #4: the attribution marker is folded into every super agent, prompted, and is a ui marker', () => {
+  // Even a super agent whose sub-agents declare NO tools gets the marker.
+  const noTools = {
+    supervisor: VALID.supervisor,
+    subAgents: [{ name: 'Solo', instructions: 'Do the thing.', tools: [] }],
+  };
+  const rec: ScenarioRecord = {
+    id: 'x', slug: 'solo-super', name: 'Solo Super', description: null,
+    aiInstructions: 'fallback', rubric: [], isPublic: false,
+    voiceName: 'alloy', languageCode: 'en-US', tools: [],
+    metadata: { _agentType: 'super', _superAgent: noTools },
+    ownerUserId: null, createdAt: '', updatedAt: '',
+  };
+  const marker = toCompiledScenario(rec).tools.find((t) => t.name === SET_ACTIVE_SUBAGENT_TOOL);
+  assert.ok(marker, 'marker present in the union');
+  assert.equal(marker!.sideEffect, 'ui', 'marker is a UI-side-effect (no server executor)');
+  // The compiled supervisor prompt instructs the model to call it on each switch.
+  const sys = compileSuperAgentInstructions(parseSuperAgentConfig(VALID));
+  assert.ok(sys.includes(SET_ACTIVE_SUBAGENT_TOOL), 'prompt names the marker tool');
+  assert.ok(/attribution/i.test(sys) && /ADVISORY/i.test(sys), 'prompt frames it as advisory attribution');
+});
+
+test('SAU-318 #3: assertSuperAgentWithinLimits caps team size and composed-prompt size', () => {
+  // A normal config passes.
+  assert.doesNotThrow(() => assertSuperAgentWithinLimits(parseSuperAgentConfig(VALID)));
+
+  // Too many sub-agents → readable authoring error.
+  const big = parseSuperAgentConfig({
+    supervisor: VALID.supervisor,
+    subAgents: Array.from({ length: MAX_SUB_AGENTS + 1 }, (_, i) => ({ name: `Sub${i}`, instructions: 'x', tools: [] })),
+  });
+  assert.throws(() => assertSuperAgentWithinLimits(big), /too many sub-agents/);
+
+  // Oversized composed prompt → rejected (inject a tiny limit so the test is fast + deterministic).
+  assert.throws(() => assertSuperAgentWithinLimits(parseSuperAgentConfig(VALID), { maxPromptChars: 50 }), /too large/);
+});
+
+test('SAU-318 #3: createScenarioFromJson rejects a super agent over the sub-agent cap', async () => {
+  const store = new MemoryStore();
+  await assert.rejects(() => createScenarioFromJson(store, {
+    id: 'super-toobig', name: 'Too Big', persona: 'p',
+    metadata: {
+      _agentType: 'super',
+      _superAgent: {
+        supervisor: VALID.supervisor,
+        subAgents: Array.from({ length: MAX_SUB_AGENTS + 1 }, (_, i) => ({ name: `Sub${i}`, instructions: 'x', tools: [] })),
+      },
+    },
+  }), /too many sub-agents/);
 });
 
 test('SAU-307: createScenarioFromJson persists a valid super agent and rejects invalid ones', async () => {
