@@ -27,9 +27,13 @@ import type {
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
   PhiAccessInput, PhiAccessRecord, PhiAccessFilter,
 } from './store';
+import type {
+  Debtor, DebtorPii, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
+} from '@/domain/collections';
 import { genShareCode } from '@/lib/short-code';
 import { encryptJson, decryptJson } from '@/lib/phi';
 import { phiAuditIntegrity } from '@/lib/phi-audit';
+import { collectionsAuditIntegrity } from '@/domain/collections-audit';
 import { getActorContext } from '@/auth/actor';
 
 // pg returns untyped rows; `Row` documents that we map them explicitly below.
@@ -218,6 +222,45 @@ function rowToPhiAccess(r: Row): PhiAccessRecord {
     entityId: r.entity_id ?? null,
     clinicId: r.clinic_id ?? null,
     refs: (r.refs ?? {}) as Record<string, unknown>,
+    integrity: r.integrity,
+  };
+}
+
+function rowToDebtor(r: Row): Debtor {
+  // PII lives in one AES-256-GCM envelope at rest (SAU-274 lib/phi); decrypt in-process.
+  const pii = decryptJson<DebtorPii>(r.pii) ?? { name: '', phone: '', balanceCents: 0 };
+  return {
+    id: r.id,
+    clinicId: r.clinic_id,
+    externalRef: r.external_ref,
+    name: pii.name,
+    phone: pii.phone,
+    balanceCents: pii.balanceCents,
+    timezone: r.timezone,
+    state: r.state ?? null,
+    consent: Boolean(r.consent),
+    optedOut: Boolean(r.opted_out),
+    optedOutAt: r.opted_out_at ? new Date(r.opted_out_at).toISOString() : null,
+    disputeOpen: Boolean(r.dispute_open),
+    createdAt: new Date(r.created_at).toISOString(),
+    updatedAt: new Date(r.updated_at).toISOString(),
+  };
+}
+
+function rowToCollectionsAudit(r: Row): CollectionsAuditRecord {
+  return {
+    id: r.id,
+    seq: Number(r.seq),
+    ts: new Date(r.ts).toISOString(),
+    clinicId: r.clinic_id,
+    actorUserId: r.actor_user_id ?? null,
+    actorLabel: r.actor_label,
+    debtorRef: r.debtor_ref,
+    eventType: r.event_type,
+    decision: r.decision ?? null,
+    reason: r.reason ?? null,
+    refs: (r.refs ?? {}) as Record<string, unknown>,
+    prevIntegrity: r.prev_integrity ?? '',
     integrity: r.integrity,
   };
 }
@@ -1418,6 +1461,136 @@ export class PgStore implements Store {
       params,
     );
     return rows.map(rowToPhiAccess);
+  }
+
+  // ── Collections: debtors + compliance ledger (SAU-333, WS-2) — migration 0022 ─
+  async upsertDebtor(input: NewDebtor): Promise<Debtor> {
+    // PII at rest (SAU-274): name/phone/balance go into ONE encrypted envelope.
+    const pii: DebtorPii = { name: input.name, phone: input.phone, balanceCents: input.balanceCents };
+    const { rows } = await this.q(
+      `INSERT INTO debtor (clinic_id, external_ref, pii, timezone, state, consent, opted_out, dispute_open)
+       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8)
+       ON CONFLICT (clinic_id, external_ref) DO UPDATE SET
+         pii = EXCLUDED.pii, timezone = EXCLUDED.timezone, state = EXCLUDED.state,
+         consent = EXCLUDED.consent, opted_out = EXCLUDED.opted_out, dispute_open = EXCLUDED.dispute_open
+       RETURNING *`,
+      [input.clinicId, input.externalRef, JSON.stringify(encryptJson(pii)), input.timezone,
+        input.state ?? null, input.consent ?? false, input.optedOut ?? false, input.disputeOpen ?? false],
+    );
+    return rowToDebtor(rows[0]);
+  }
+
+  async getDebtor(id: string): Promise<Debtor | null> {
+    const { rows } = await this.q('SELECT * FROM debtor WHERE id = $1', [id]);
+    return rows[0] ? rowToDebtor(rows[0]) : null;
+  }
+
+  async getDebtorByRef(clinicId: string, externalRef: string): Promise<Debtor | null> {
+    const { rows } = await this.q(
+      'SELECT * FROM debtor WHERE clinic_id = $1 AND external_ref = $2',
+      [clinicId, externalRef],
+    );
+    return rows[0] ? rowToDebtor(rows[0]) : null;
+  }
+
+  async listDebtorsForClinic(clinicId: string): Promise<Debtor[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM debtor WHERE clinic_id = $1 ORDER BY created_at DESC',
+      [clinicId],
+    );
+    return rows.map(rowToDebtor);
+  }
+
+  async setDebtorOptOut(id: string, optedOut: boolean): Promise<Debtor | null> {
+    const { rows } = await this.q(
+      `UPDATE debtor SET opted_out = $2, opted_out_at = CASE WHEN $2 THEN now() ELSE NULL END
+       WHERE id = $1 RETURNING *`,
+      [id, optedOut],
+    );
+    if (!rows[0]) return null;
+    const debtor = rowToDebtor(rows[0]);
+    // Guardrail 10: an opt-out is a first-class compliance event in the ledger.
+    await this.recordCollectionsAudit({
+      clinicId: debtor.clinicId, debtorRef: debtor.id, eventType: 'opt_out',
+      reason: optedOut ? 'do_not_call' : 'opt_out_cleared', refs: { optedOut },
+    });
+    return debtor;
+  }
+
+  async setDebtorDispute(id: string, disputeOpen: boolean): Promise<Debtor | null> {
+    const { rows } = await this.q(
+      'UPDATE debtor SET dispute_open = $2 WHERE id = $1 RETURNING *',
+      [id, disputeOpen],
+    );
+    return rows[0] ? rowToDebtor(rows[0]) : null;
+  }
+
+  /**
+   * Append one compliance event to the per-tenant HMAC hash chain. The previous
+   * row's integrity (the chain link) is read under a per-tenant advisory lock so
+   * concurrent appends for the same lender can't fork the chain.
+   */
+  async recordCollectionsAudit(entry: CollectionsAuditInput): Promise<CollectionsAuditRecord> {
+    const ctx = getActorContext();
+    const actorUserId = ctx?.userId ? ctx.userId : null;
+    const actorLabel = entry.actorLabel ?? (actorUserId ? `user:${actorUserId}` : 'system');
+    const decision = entry.decision ?? null;
+    const reason = entry.reason ?? null;
+    const refs = entry.refs ?? {};
+    const ts = new Date().toISOString();
+
+    const run = async (c: PoolClient): Promise<CollectionsAuditRecord> => {
+      // Serialize chain appends per lender (advisory lock auto-releases at tx end).
+      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`collections_audit:${entry.clinicId}`]);
+      const prev = await c.query(
+        'SELECT integrity FROM collections_audit_log WHERE clinic_id = $1 ORDER BY seq DESC LIMIT 1',
+        [entry.clinicId],
+      );
+      const prevIntegrity = prev.rows[0]?.integrity ?? '';
+      const integrity = collectionsAuditIntegrity(
+        { ts, clinicId: entry.clinicId, actorUserId, actorLabel, debtorRef: entry.debtorRef,
+          eventType: entry.eventType, decision, reason, refs },
+        prevIntegrity,
+      );
+      const { rows } = await c.query(
+        `INSERT INTO collections_audit_log
+           (ts, clinic_id, actor_user_id, actor_label, debtor_ref, event_type, decision, reason, refs, prev_integrity, integrity)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11) RETURNING *`,
+        [ts, entry.clinicId, actorUserId, actorLabel, entry.debtorRef, entry.eventType,
+          decision, reason, JSON.stringify(refs), prevIntegrity, integrity],
+      );
+      return rowToCollectionsAudit(rows[0]);
+    };
+
+    // Always run inside the actor transaction so the lock + read + insert are atomic.
+    if (getActorContext()) return this.withActorTx(run);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const out = await run(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listCollectionsAudit(filter: CollectionsAuditFilter): Promise<CollectionsAuditRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.clinicId) { params.push(filter.clinicId); clauses.push(`clinic_id = $${params.length}`); }
+    if (filter.debtorRef) { params.push(filter.debtorRef); clauses.push(`debtor_ref = $${params.length}`); }
+    if (filter.eventType) { params.push(filter.eventType); clauses.push(`event_type = $${params.length}`); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(Math.min(filter.limit ?? 500, 2000));
+    const { rows } = await this.q(
+      `SELECT * FROM collections_audit_log ${where} ORDER BY seq DESC LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map(rowToCollectionsAudit);
   }
 
   // ── AuthN + RBAC (Slice 5, SAU-229) — no RLS on these tables; pool-direct ───

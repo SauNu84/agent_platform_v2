@@ -17,6 +17,10 @@ import type {
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
   PhiAccessInput, PhiAccessRecord, PhiAccessFilter,
 } from './store';
+import type {
+  Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
+} from '@/domain/collections';
+import { collectionsAuditIntegrity } from '@/domain/collections-audit';
 import { genShareCode } from '@/lib/short-code';
 import { ROLE_CAPABILITIES } from '@/auth/rbac';
 
@@ -55,6 +59,8 @@ export class MemoryStore implements Store {
   private consents: ConsentRecord[] = [];                     // append-only
   private audit: (AuditEvent & { ts: string })[] = [];        // append-only
   private phiAccess: PhiAccessRecord[] = [];                  // append-only (SAU-275)
+  private debtors = new Map<string, Debtor>();                // by id (SAU-333 WS-2)
+  private collectionsAudit: CollectionsAuditRecord[] = [];    // append-only, HMAC-chained (SAU-333)
   private shareLinks = new Map<string, ShareLinkRecord>();    // by code
   private scenarioToShareCode = new Map<string, string>();    // scenarioId → code (idempotency)
   // ── Knowledge Base (SAU-243) ──
@@ -892,6 +898,108 @@ export class MemoryStore implements Store {
       .filter((e) => (!filter.entityId || e.entityId === filter.entityId)
         && (!filter.clinicId || e.clinicId === filter.clinicId)
         && (!filter.actorUserId || e.actorUserId === filter.actorUserId))
+      .sort((a, b) => b.seq - a.seq)
+      .slice(0, filter.limit ?? 500);
+  }
+
+  // ── Collections: debtors + compliance ledger (SAU-333, WS-2) ─────────────────
+  // NOTE: the in-memory store does not enforce RLS or encrypt at rest — those are
+  // proven against a migrated Postgres (tests/collections-*.test.ts). The HMAC
+  // hash-chain IS reproduced here so the tamper-evidence math is unit-testable
+  // without infra.
+  async upsertDebtor(input: NewDebtor): Promise<Debtor> {
+    const now = nowIso();
+    const existing = [...this.debtors.values()].find(
+      (d) => d.clinicId === input.clinicId && d.externalRef === input.externalRef,
+    );
+    const rec: Debtor = {
+      id: existing?.id ?? randomUUID(),
+      clinicId: input.clinicId,
+      externalRef: input.externalRef,
+      name: input.name,
+      phone: input.phone,
+      balanceCents: input.balanceCents,
+      timezone: input.timezone,
+      state: input.state ?? null,
+      consent: input.consent ?? false,
+      optedOut: input.optedOut ?? false,
+      optedOutAt: existing?.optedOutAt ?? null,
+      disputeOpen: input.disputeOpen ?? false,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.debtors.set(rec.id, rec);
+    return rec;
+  }
+
+  async getDebtor(id: string): Promise<Debtor | null> {
+    return this.debtors.get(id) ?? null;
+  }
+
+  async getDebtorByRef(clinicId: string, externalRef: string): Promise<Debtor | null> {
+    return [...this.debtors.values()].find(
+      (d) => d.clinicId === clinicId && d.externalRef === externalRef,
+    ) ?? null;
+  }
+
+  async listDebtorsForClinic(clinicId: string): Promise<Debtor[]> {
+    return [...this.debtors.values()]
+      .filter((d) => d.clinicId === clinicId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async setDebtorOptOut(id: string, optedOut: boolean): Promise<Debtor | null> {
+    const existing = this.debtors.get(id);
+    if (!existing) return null;
+    const updated: Debtor = {
+      ...existing,
+      optedOut,
+      optedOutAt: optedOut ? nowIso() : null,
+      updatedAt: nowIso(),
+    };
+    this.debtors.set(id, updated);
+    await this.recordCollectionsAudit({
+      clinicId: updated.clinicId, debtorRef: updated.id, eventType: 'opt_out',
+      reason: optedOut ? 'do_not_call' : 'opt_out_cleared', refs: { optedOut },
+    });
+    return updated;
+  }
+
+  async setDebtorDispute(id: string, disputeOpen: boolean): Promise<Debtor | null> {
+    const existing = this.debtors.get(id);
+    if (!existing) return null;
+    const updated: Debtor = { ...existing, disputeOpen, updatedAt: nowIso() };
+    this.debtors.set(id, updated);
+    return updated;
+  }
+
+  async recordCollectionsAudit(entry: CollectionsAuditInput): Promise<CollectionsAuditRecord> {
+    const ts = nowIso();
+    const prev = [...this.collectionsAudit]
+      .filter((e) => e.clinicId === entry.clinicId)
+      .sort((a, b) => b.seq - a.seq)[0];
+    const prevIntegrity = prev?.integrity ?? '';
+    const content = {
+      ts, clinicId: entry.clinicId, actorUserId: null, actorLabel: entry.actorLabel ?? 'system',
+      debtorRef: entry.debtorRef, eventType: entry.eventType,
+      decision: entry.decision ?? null, reason: entry.reason ?? null, refs: entry.refs ?? {},
+    };
+    const rec: CollectionsAuditRecord = {
+      id: randomUUID(),
+      seq: this.collectionsAudit.length + 1,
+      ...content,
+      prevIntegrity,
+      integrity: collectionsAuditIntegrity(content, prevIntegrity),
+    };
+    this.collectionsAudit.push(rec);
+    return rec;
+  }
+
+  async listCollectionsAudit(filter: CollectionsAuditFilter): Promise<CollectionsAuditRecord[]> {
+    return this.collectionsAudit
+      .filter((e) => (!filter.clinicId || e.clinicId === filter.clinicId)
+        && (!filter.debtorRef || e.debtorRef === filter.debtorRef)
+        && (!filter.eventType || e.eventType === filter.eventType))
       .sort((a, b) => b.seq - a.seq)
       .slice(0, filter.limit ?? 500);
   }

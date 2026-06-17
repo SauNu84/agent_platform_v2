@@ -11,6 +11,9 @@ import type { AnalysisRecord, Evaluation, Improvement } from '@/domain/analysis'
 import type { ToolDefinition, SessionUsage } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
+import type {
+  Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
+} from '@/domain/collections';
 
 export type ContentEntityType = 'scenario' | 'coach' | 'course';
 
@@ -655,6 +658,24 @@ export interface Store {
   recordPhiAccess(entry: PhiAccessInput): Promise<void>;
   /** Query the PHI access log (RLS-scoped to the caller's clinic / own access). */
   listPhiAccess(filter: PhiAccessFilter): Promise<PhiAccessRecord[]>;
+
+  // ── Collections debtors + compliance ledger (SAU-333, WS-2) ─────────────────
+  /** Upsert a synthetic debtor (PII encrypted at the boundary). Idempotent on (clinic, externalRef). */
+  upsertDebtor(input: NewDebtor): Promise<Debtor>;
+  /** Read a debtor by id (RLS-scoped; PII decrypted in-process). */
+  getDebtor(id: string): Promise<Debtor | null>;
+  /** Read a debtor by (clinic, externalRef) — the ingestion idempotency key. */
+  getDebtorByRef(clinicId: string, externalRef: string): Promise<Debtor | null>;
+  /** All debtors for a lender/tenant (RLS-scoped), newest first. */
+  listDebtorsForClinic(clinicId: string): Promise<Debtor[]>;
+  /** Record an opt-out / do-not-call for a debtor (sets opted_out + appends an audit row). */
+  setDebtorOptOut(id: string, optedOut: boolean): Promise<Debtor | null>;
+  /** Set the open-dispute flag for a debtor (an open dispute pauses calling). */
+  setDebtorDispute(id: string, disputeOpen: boolean): Promise<Debtor | null>;
+  /** Append one compliance event (dial decision / outcome / opt-out / purge) — HMAC hash-chained. */
+  recordCollectionsAudit(entry: CollectionsAuditInput): Promise<CollectionsAuditRecord>;
+  /** Query the compliance ledger (RLS-scoped to the caller's tenant), newest first. */
+  listCollectionsAudit(filter: CollectionsAuditFilter): Promise<CollectionsAuditRecord[]>;
 
   // ── AuthN + RBAC (Slice 5, SAU-229) ─────────────────────────────────────────
   createUser(input: NewUser): Promise<UserRecord>;
