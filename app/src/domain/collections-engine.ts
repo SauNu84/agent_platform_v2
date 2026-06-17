@@ -1,0 +1,367 @@
+/**
+ * Collections compliance engine + cadence scheduler (SAU-332, WS-1) — the core.
+ * "The rules ARE the product."
+ *
+ * `canDialNow(debtor, now, opts)` is the single decision the dialer must ask before
+ * every attempt. Every constraint from the board-accepted boundary (SAU-330 §6) is a
+ * hard gate HERE, in deterministic server-side logic — never prompt text. The model
+ * proposes; the server disposes (same rule that put the clinic's booking logic in the
+ * tool, SAU-267).
+ *
+ * Coordination with WS-2 (SAU-333): this engine consumes WS-2's {@link Debtor} record
+ * shape and its {@link DialDecision} value + {@link isValidTimeZone}, all from
+ * `@/domain/collections`. WS-2 owns the debtor data layer + the append-only audit
+ * ledger; the dialer (WS-3) reads recent attempts FROM that ledger and passes them in
+ * as {@link CallAttempt}s — the engine itself does no I/O and holds no PII.
+ *
+ * Design invariants:
+ *  - FAIL CLOSED on any unknown/malformed input (no debtor, bad `now`, unresolved TZ).
+ *  - ALL applicable blocking reasons are returned, not just the first — the audit log
+ *    and ops UI want every gate a debtor failed.
+ *  - The Reg-F 7-in-7 ceiling and 7-day conversation cooldown are CONSTANTS here and are
+ *    not reachable from {@link TenantCollectionsConfig}, so no per-tenant value can
+ *    loosen them.
+ *
+ * Scope: pure decision logic. No telephony. Synthetic debtors only (SAU-328 / SAU-330 §8).
+ */
+
+import type { Debtor, DialDecision } from '@/domain/collections';
+import { isValidTimeZone } from '@/domain/collections';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// ── Hard, un-overridable regulatory ceilings (SAU-330 §3 / §6 #2). Not in config. ──
+/** Reg-F §1006.14(b)(2)(i): no more than 7 attempts in 7 consecutive days per debt. */
+export const REG_F_MAX_ATTEMPTS = 7;
+export const REG_F_WINDOW_DAYS = 7;
+/** Reg-F §1006.14(b)(2)(ii): no calling within 7 days of a phone conversation about the debt. */
+export const REG_F_CONVERSATION_COOLDOWN_DAYS = 7;
+
+// ── Tenant-tunable defaults (may be made stricter, never looser than the ceilings). ──
+const DEFAULT_CADENCE_DAYS = 14; // every-2-weeks
+const DEFAULT_WINDOW_OPEN_HOUR = 9; // 9 AM debtor-local
+const DEFAULT_WINDOW_CLOSE_HOUR = 17; // 5 PM debtor-local
+
+/**
+ * The operational subset of a {@link Debtor} the engine reads. A full `Debtor` is
+ * assignable to this (proven in tests), so the dialer passes the record straight
+ * through. No PII (name/balance) is touched — only the compliance/scheduling fields.
+ */
+export interface DialEvaluableDebtor {
+  /** IANA zone from account data; engine still fail-closes if it does not resolve. */
+  timezone: string;
+  /** US state code (or null) — selects the per-state frequency cap (SAU-330 §4). */
+  state: string | null;
+  /** Prior-express-consent flag; false/absent ⇒ no dial (§6 #4). */
+  consent: boolean;
+  /** Do-not-call / opt-out; true ⇒ suppressed (§6 #3). */
+  optedOut: boolean;
+  /** Open §1692g validation dispute pauses calling (§6 #9). */
+  disputeOpen: boolean;
+  /** Optional phone for the area-code TZ fallback (Debtor.phone is assignable). */
+  phone?: string;
+}
+
+/**
+ * A single prior dial attempt — the raw material for the frequency/cooldown gates.
+ * WS-3 derives these from WS-2's audit ledger (one per `call_outcome` row).
+ */
+export interface CallAttempt {
+  /** When the attempt was placed (epoch ms). */
+  atMs: number;
+  /**
+   * True if a live telephone conversation about the debt occurred on this attempt —
+   * drives the Reg-F §1006.14(b)(2)(ii) 7-day post-conversation cooldown.
+   */
+  hadConversation?: boolean;
+}
+
+/** A jurisdiction-specific frequency ceiling (SAU-330 §4 state overlays). */
+export interface StateCallCap {
+  maxAttempts: number;
+  windowDays: number;
+}
+
+/**
+ * Per-tenant tunable policy. Tenants may make the rules STRICTER but can never loosen
+ * the hard regulatory ceilings (Reg-F 7-in-7, 7-day cooldown) — those are constants
+ * above and are not represented here, so no config value can override them.
+ */
+export interface TenantCollectionsConfig {
+  /** Minimum days between attempts. Default 14 (every-2-weeks, §6 #2). May be lengthened. */
+  cadenceDays?: number;
+  /** Calling-window open hour (debtor-local, 0–23). Default 9. */
+  windowOpenHour?: number;
+  /** Calling-window close hour (debtor-local, 0–23, exclusive). Default 17. */
+  windowCloseHour?: number;
+  /** Per-state stricter caps keyed by 2-letter state code (§4); applied IN ADDITION to Reg-F. */
+  stateCaps?: Record<string, StateCallCap>;
+  /** Extra observed holidays as 'YYYY-MM-DD' (debtor-local), merged with the built-in set (§6 #7). */
+  holidays?: string[];
+}
+
+/**
+ * Machine-readable block codes — one per guardrail this WS owns. WS-2's audit ledger
+ * records these verbatim in its `reason` field, so they are a stable contract: add,
+ * don't rename.
+ */
+export type DialBlockCode =
+  | 'unknown_input' // fail-closed: missing/malformed debtor or `now`
+  | 'unknown_timezone' // fail-closed: debtor TZ could not be resolved (§6 #6)
+  | 'opted_out' // do-not-call / revocation on file (§6 #3)
+  | 'no_consent' // no prior-express-consent record (§6 #4)
+  | 'dispute_open' // open §1692g validation dispute pauses calling (§6 #9)
+  | 'non_working_day' // weekend (working-days-only window, §6 #1)
+  | 'holiday' // observed holiday (§6 #7)
+  | 'outside_calling_window' // outside 9 AM–5 PM debtor-local (§6 #1)
+  | 'cadence_not_elapsed' // inside the per-tenant min interval (default 2 weeks, §6 #2)
+  | 'reg_f_7_in_7' // Reg-F §1006.14(b)(2)(i) hard ceiling — un-overridable (§6 #2)
+  | 'state_cap' // per-state stricter cap exceeded (§4)
+  | 'conversation_cooldown'; // Reg-F 7-day post-conversation cooldown (§6 #2)
+
+/** A single reason a dial was blocked, with a human-readable explanation. */
+export interface DialBlockReason {
+  code: DialBlockCode;
+  message: string;
+}
+
+/**
+ * The engine's verdict. `decision` is WS-2's {@link DialDecision} ('ALLOW' | 'BLOCK'),
+ * so the result drops straight into the audit ledger; ALLOW iff `reasons` is empty.
+ * ALL applicable blocking reasons are returned (not just the first).
+ */
+export interface DialEvaluation {
+  decision: DialDecision;
+  reasons: DialBlockReason[];
+}
+
+/** Options carrying the call history + tenant policy the gates need. */
+export interface CanDialOptions {
+  /** Prior attempts for this debtor (from WS-2's audit ledger), for the frequency gates. */
+  attempts?: CallAttempt[];
+  /** Per-tenant policy (stricter-only overrides). */
+  config?: TenantCollectionsConfig;
+}
+
+// ── Time-zone + holiday helpers (debtor-local, fail-closed; §6 #6 / #7) ──────────
+
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/**
+ * Representative NANP area-code → IANA zone map for the area-code fallback (§6 #6).
+ * Deliberately a SMALL subset for the synthetic POC; anything unlisted resolves to
+ * null → fail-closed, so the partial map is conservative, not risky.
+ */
+const AREA_CODE_TZ: Record<string, string> = {
+  '212': 'America/New_York', // NYC
+  '202': 'America/New_York', // DC
+  '404': 'America/New_York', // Atlanta
+  '617': 'America/New_York', // Boston (MA)
+  '305': 'America/New_York', // Miami
+  '215': 'America/New_York', // Philadelphia
+  '312': 'America/Chicago', // Chicago
+  '214': 'America/Chicago', // Dallas
+  '713': 'America/Chicago', // Houston
+  '612': 'America/Chicago', // Minneapolis
+  '303': 'America/Denver', // Denver
+  '602': 'America/Phoenix', // Phoenix (no DST)
+  '415': 'America/Los_Angeles', // San Francisco
+  '213': 'America/Los_Angeles', // Los Angeles
+  '206': 'America/Los_Angeles', // Seattle
+  '702': 'America/Los_Angeles', // Las Vegas
+  '907': 'America/Anchorage', // Alaska
+  '808': 'Pacific/Honolulu', // Hawaii
+};
+
+/** US federal holidays (observed dates), 'YYYY-MM-DD'. POC horizon: 2026–2027 (§6 #7). */
+export const DEFAULT_US_HOLIDAYS: ReadonlySet<string> = new Set([
+  '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25', '2026-06-19', '2026-07-03',
+  '2026-09-07', '2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25',
+  '2027-01-01', '2027-01-18', '2027-02-15', '2027-05-31', '2027-06-18', '2027-07-05',
+  '2027-09-06', '2027-10-11', '2027-11-11', '2027-11-25', '2027-12-24',
+]);
+
+/** True if `localDateStr` ('YYYY-MM-DD') is an observed holiday (built-in + tenant extra). */
+export function isHoliday(localDateStr: string, extra?: readonly string[]): boolean {
+  return DEFAULT_US_HOLIDAYS.has(localDateStr) || (!!extra && extra.includes(localDateStr));
+}
+
+/** Extract the 3-digit NANP area code from a phone string, or null. */
+export function areaCodeOf(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) return digits.slice(1, 4);
+  if (digits.length === 10) return digits.slice(0, 3);
+  return null;
+}
+
+/** Resolve a debtor's IANA zone: explicit account TZ first, then area-code fallback; else null. */
+export function resolveTimeZone(debtor: Pick<DialEvaluableDebtor, 'timezone' | 'phone'>): string | null {
+  if (isValidTimeZone(debtor.timezone)) return debtor.timezone;
+  const ac = areaCodeOf(debtor.phone);
+  if (ac) {
+    const tz = AREA_CODE_TZ[ac];
+    if (isValidTimeZone(tz)) return tz;
+  }
+  return null;
+}
+
+/** Debtor-local wall-clock decomposition of an epoch-ms instant. */
+export interface LocalParts {
+  /** 0=Sunday … 6=Saturday. */
+  weekday: number;
+  /** Local hour, 0–23. */
+  hour: number;
+  /** Local minute, 0–59. */
+  minute: number;
+  /** Local calendar date as 'YYYY-MM-DD' (for holiday matching). */
+  dateStr: string;
+}
+
+/** Decompose an instant into debtor-local parts; null if `tz` invalid or `ms` not finite. */
+export function getLocalParts(ms: number, tz: string): LocalParts | null {
+  if (!Number.isFinite(ms) || !isValidTimeZone(tz)) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23', // 00–23, so midnight is 00 not 24
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      weekday: 'short',
+    }).formatToParts(new Date(ms));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    const weekday = WEEKDAY_INDEX[get('weekday')];
+    const hour = Number(get('hour'));
+    const minute = Number(get('minute'));
+    if (weekday === undefined || !Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+    return { weekday, hour, minute, dateStr: `${get('year')}-${get('month')}-${get('day')}` };
+  } catch {
+    return null;
+  }
+}
+
+// ── Frequency helpers ────────────────────────────────────────────────────────
+
+/** Count attempts whose timestamp falls within `windowDays` before `nowMs`. */
+function attemptsInWindow(attempts: CallAttempt[], nowMs: number, windowDays: number): number {
+  const cutoff = nowMs - windowDays * DAY_MS;
+  return attempts.filter((a) => Number.isFinite(a.atMs) && a.atMs > cutoff && a.atMs <= nowMs).length;
+}
+
+/** Most recent attempt timestamp at or before `nowMs`, or null. */
+function lastAttemptMs(attempts: CallAttempt[], nowMs: number): number | null {
+  let last: number | null = null;
+  for (const a of attempts) {
+    if (Number.isFinite(a.atMs) && a.atMs <= nowMs && (last === null || a.atMs > last)) last = a.atMs;
+  }
+  return last;
+}
+
+function reason(code: DialBlockCode, message: string): DialBlockReason {
+  return { code, message };
+}
+
+/**
+ * The full compliance decision for one debtor at one instant. Returns ALLOW only when
+ * EVERY gate passes; otherwise BLOCK with the complete set of failing reasons.
+ */
+export function canDialNow(
+  debtor: DialEvaluableDebtor | null | undefined,
+  nowMs: number,
+  opts: CanDialOptions = {},
+): DialEvaluation {
+  const config = opts.config ?? {};
+  const attempts = opts.attempts ?? [];
+  const reasons: DialBlockReason[] = [];
+
+  // ── Fail-closed input validation (AC: fail-closed on any unknown input). ──
+  if (!debtor || typeof debtor !== 'object') {
+    return { decision: 'BLOCK', reasons: [reason('unknown_input', 'No debtor record supplied; refusing to dial.')] };
+  }
+  if (!Number.isFinite(nowMs)) {
+    return { decision: 'BLOCK', reasons: [reason('unknown_input', 'Invalid current time supplied; refusing to dial.')] };
+  }
+
+  // ── Suppression / consent / dispute gates (do not require a time zone). ──
+
+  // §6 #3 Do-not-call / opt-out: revocation must be honored ≤10 business days; we block
+  // immediately on record, which is strictly inside that SLA.
+  if (debtor.optedOut === true) {
+    reasons.push(reason('opted_out', 'Debtor has opted out / is on the do-not-call list; suppressed.'));
+  }
+
+  // §6 #4 Consent gate: dial only with a recorded prior-express-consent flag.
+  if (debtor.consent !== true) {
+    reasons.push(reason('no_consent', 'No prior-express-consent record on file for this number.'));
+  }
+
+  // §6 #9 Validation-notice / dispute: an open §1692g dispute pauses calling.
+  if (debtor.disputeOpen === true) {
+    reasons.push(reason('dispute_open', 'An open validation dispute is pausing calls to this debtor.'));
+  }
+
+  // ── Calling-window gates require the debtor's local time → resolve TZ (§6 #6). ──
+  const tz = resolveTimeZone(debtor);
+  const local = tz ? getLocalParts(nowMs, tz) : null;
+  if (!local) {
+    // §6 #6 fail-closed: unknown/unresolvable time zone → never dial.
+    reasons.push(reason('unknown_timezone', 'Could not resolve debtor local time zone; failing closed.'));
+  } else {
+    // §6 #1 Working days only (Mon–Fri).
+    if (local.weekday === 0 || local.weekday === 6) {
+      reasons.push(reason('non_working_day', 'Calls are only placed on working days (Mon–Fri).'));
+    }
+    // §6 #7 Holiday calendar.
+    if (isHoliday(local.dateStr, config.holidays)) {
+      reasons.push(reason('holiday', `No calls on observed holiday (${local.dateStr}).`));
+    }
+    // §6 #1 9 AM–5 PM debtor-local window. 09:00–09:59 is in-window; 17:00 onward is out.
+    const openHour = config.windowOpenHour ?? DEFAULT_WINDOW_OPEN_HOUR;
+    const closeHour = config.windowCloseHour ?? DEFAULT_WINDOW_CLOSE_HOUR;
+    if (local.hour < openHour || local.hour >= closeHour) {
+      reasons.push(
+        reason('outside_calling_window', `Outside the ${openHour}:00–${closeHour}:00 debtor-local calling window (local hour ${local.hour}).`),
+      );
+    }
+  }
+
+  // ── Frequency gates (§6 #2). Each is independent; the strictest blocks. ──
+
+  // Reg-F 7-in-7 HARD ceiling — un-overridable, checked even if a looser tenant cadence would allow it.
+  if (attemptsInWindow(attempts, nowMs, REG_F_WINDOW_DAYS) >= REG_F_MAX_ATTEMPTS) {
+    reasons.push(reason('reg_f_7_in_7', `Reg-F ceiling reached: ${REG_F_MAX_ATTEMPTS} attempts within ${REG_F_WINDOW_DAYS} days.`));
+  }
+
+  // Per-tenant cadence (default every-2-weeks): minimum gap since the last attempt.
+  const cadenceDays = Math.max(0, config.cadenceDays ?? DEFAULT_CADENCE_DAYS);
+  const last = lastAttemptMs(attempts, nowMs);
+  if (cadenceDays > 0 && last !== null && nowMs - last < cadenceDays * DAY_MS) {
+    reasons.push(reason('cadence_not_elapsed', `Within the ${cadenceDays}-day minimum interval since the last attempt.`));
+  }
+
+  // Per-state stricter cap (§4), if one is configured for the debtor's state.
+  const stateCap = debtor.state ? config.stateCaps?.[debtor.state.toUpperCase()] : undefined;
+  if (stateCap && attemptsInWindow(attempts, nowMs, stateCap.windowDays) >= stateCap.maxAttempts) {
+    reasons.push(
+      reason('state_cap', `State cap reached for ${debtor.state}: ${stateCap.maxAttempts} attempts within ${stateCap.windowDays} days.`),
+    );
+  }
+
+  // Reg-F 7-day post-conversation cooldown — un-overridable.
+  const cooldownCutoff = nowMs - REG_F_CONVERSATION_COOLDOWN_DAYS * DAY_MS;
+  if (attempts.some((a) => a.hadConversation === true && Number.isFinite(a.atMs) && a.atMs > cooldownCutoff && a.atMs <= nowMs)) {
+    reasons.push(
+      reason('conversation_cooldown', `Within the ${REG_F_CONVERSATION_COOLDOWN_DAYS}-day cooldown after a phone conversation about the debt.`),
+    );
+  }
+
+  return reasons.length === 0 ? { decision: 'ALLOW', reasons: [] } : { decision: 'BLOCK', reasons };
+}
+
+/** Convenience: true iff the debtor may be dialed at `nowMs`. */
+export function isDialAllowed(debtor: DialEvaluableDebtor | null | undefined, nowMs: number, opts?: CanDialOptions): boolean {
+  return canDialNow(debtor, nowMs, opts).decision === 'ALLOW';
+}
