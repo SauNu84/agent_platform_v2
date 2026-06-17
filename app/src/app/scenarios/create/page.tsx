@@ -17,11 +17,18 @@ import { AI_MODELS, DEFAULT_AI_MODEL, aiModelById } from '@/lib/ai-models';
 import { OPENAI_VOICES, DEFAULT_VOICE, isOpenAiVoice } from '@/lib/voices';
 import { AGENT_TYPE_OPTIONS } from '@/domain/super-agent';
 import { TOOL_REGISTRY } from '@/domain/scenario';
+import {
+  selectImportableAgents, buildSubAgentFromScenario, type ImportableAgent,
+} from '@/services/super-agent-import';
 
 interface RubricRow { topic: string; weight: number; note: string; }
 
-/** A sub-agent row in the Super Agent authoring form (SAU-307). */
-interface SubAgentRow { id: string; name: string; instructions: string; tools: string[]; model: string; }
+/**
+ * A sub-agent row in the Super Agent authoring form (SAU-307). `droppedTools`
+ * (SAU-327) records tool names a snapshot import couldn't carry, so the row can
+ * surface a one-time note; it is display-only and not part of the saved config.
+ */
+interface SubAgentRow { id: string; name: string; instructions: string; tools: string[]; model: string; droppedTools?: string[]; }
 
 /** Tool names an author can attach to a sub-agent (the built-in registry). */
 const TOOL_NAMES = Object.keys(TOOL_REGISTRY);
@@ -123,6 +130,14 @@ function CreateScenarioForm() {
   const [superInstructions, setSuperInstructions] = useState('');
   const [superCommon, setSuperCommon] = useState('');
   const [subAgents, setSubAgents] = useState<SubAgentRow[]>([]);
+  // SAU-327: "Add from existing agent…" — snapshot-import one of the author's
+  // Default agents as a new sub-agent row. The picker fetches the author's
+  // scenarios lazily on first open via the existing GET /api/scenarios.
+  const [importOpen, setImportOpen] = useState(false);
+  const [importAgents, setImportAgents] = useState<ImportableAgent[]>([]);
+  const [importPickId, setImportPickId] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   // SAU-238 (ask #6) → SAU-258: which voice engine powers this scenario (real
   // multi-vendor picker). The stored id is the scenario default; tier gating means
@@ -550,6 +565,46 @@ function CreateScenarioForm() {
     ));
   }
 
+  // ── Snapshot import of an existing Default agent (SAU-327) ─────────────────
+  // Fetch the author's scenarios (lazily, on first open) and keep only the
+  // Default agents they can import (excludes Super Agents + the scenario being
+  // remixed, to avoid self-nesting). Pure selection lives in the import service.
+  async function toggleImport() {
+    const next = !importOpen;
+    setImportOpen(next);
+    if (next && importAgents.length === 0 && !importLoading) {
+      setImportLoading(true);
+      setImportError(null);
+      try {
+        const res = await fetch('/api/scenarios');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+        setImportAgents(selectImportableAgents<ImportableAgent>(data.scenarios ?? [], remixFrom));
+      } catch (e) {
+        setImportError((e as Error).message);
+      } finally {
+        setImportLoading(false);
+      }
+    }
+  }
+
+  /** Copy the picked agent into a new, fully-editable sub-agent row (snapshot). */
+  function importSelected() {
+    const agent = importAgents.find((a) => a.slug === importPickId);
+    if (!agent) return;
+    const snapshot = buildSubAgentFromScenario(agent);
+    setSubAgents((s) => [...s, {
+      ...newSubAgent(),
+      name: snapshot.name,
+      instructions: snapshot.instructions,
+      tools: snapshot.tools,
+      model: snapshot.model,
+      ...(snapshot.droppedTools.length ? { droppedTools: snapshot.droppedTools } : {}),
+    }]);
+    setImportPickId('');
+    setImportOpen(false);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!slug) { setTab('basics'); setError('ID / Slug is required.'); return; }
@@ -964,6 +1019,12 @@ function CreateScenarioForm() {
                       </label>
                     ))}
                   </div>
+                  {/* SAU-327: tools the imported agent had that a sub-agent can't carry. */}
+                  {sa.droppedTools && sa.droppedTools.length > 0 && (
+                    <p className="form-hint" style={{ marginTop: 4, color: 'var(--accent, #0aa)' }}>
+                      Imported from an existing agent — {sa.droppedTools.length} unsupported tool{sa.droppedTools.length === 1 ? ' was' : 's were'} dropped: {sa.droppedTools.join(', ')}.
+                    </p>
+                  )}
                 </div>
                 <div style={{ marginTop: 8 }}>
                   <label className="studio-section-label" htmlFor={`${uid}-${sa.id}-model`}>Model</label>
@@ -984,7 +1045,34 @@ function CreateScenarioForm() {
                 </div>
               </div>
             ))}
-            <button type="button" className="btn-sm" onClick={addSubAgent}>＋ Add sub-agent</button>
+            <div className="kb-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="btn-sm" onClick={addSubAgent}>＋ Add sub-agent</button>
+              {/* SAU-327: snapshot-import one of the author's existing Default agents. */}
+              <button type="button" className="btn-sm" aria-expanded={importOpen} onClick={toggleImport}>↧ Add from existing agent…</button>
+            </div>
+            {importOpen && (
+              <div className="report-panel" style={{ marginTop: 8 }}>
+                <p className="form-hint-block" style={{ marginTop: 0 }}>
+                  Copy one of your existing agents in as a sub-agent. It&apos;s imported as a <strong>snapshot</strong> — editing it here won&apos;t change the original, and editing the original later won&apos;t change this sub-agent.
+                </p>
+                {importLoading ? (
+                  <p className="form-hint" style={{ margin: 0 }}>Loading your agents…</p>
+                ) : importAgents.length === 0 ? (
+                  <p className="form-hint" style={{ margin: 0 }}>{importError ? '' : 'You have no other Default agents to import.'}</p>
+                ) : (
+                  <div className="rubric-row">
+                    <select className="form-input rubric-topic" value={importPickId} onChange={(e) => setImportPickId(e.target.value)} aria-label="Choose an agent to import">
+                      <option value="">Choose an agent…</option>
+                      {importAgents.map((a) => (
+                        <option key={a.slug} value={a.slug}>{a.name || a.slug}</option>
+                      ))}
+                    </select>
+                    <button type="button" className="btn-sm" onClick={importSelected} disabled={!importPickId}>Import</button>
+                  </div>
+                )}
+                {importError && <div className="notice" role="alert">{importError}</div>}
+              </div>
+            )}
           </div>
           </>)}
 
