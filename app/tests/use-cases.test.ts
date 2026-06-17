@@ -41,6 +41,19 @@ test('clinic-agent use case carries both mermaid diagrams for rendering', () => 
   assert.match(clinic!.body, /```mermaid\s+sequenceDiagram/, 'has a mermaid sequenceDiagram');
 });
 
+test('call-center-agent use case exists, renders its mermaid flow, and sits below the clinic agent', () => {
+  const collections = getUseCase('call-center-agent');
+  assert.ok(collections, 'call-center-agent use case exists');
+  // The authored explainer carries a mermaid flowchart that must render as a diagram.
+  assert.match(collections!.body, /```mermaid\s+flowchart/, 'has a mermaid flowchart');
+  // SAU-329: nav order — AI Call Center Agent must appear directly below AI Clinic Agent.
+  const slugs = getAllUseCases().map((u) => u.slug);
+  assert.ok(
+    slugs.indexOf('call-center-agent') === slugs.indexOf('clinic-agent') + 1,
+    'call-center-agent is listed immediately after clinic-agent',
+  );
+});
+
 test('toUseCaseLinks: lightweight links cover every use case, no bodies', () => {
   const links = toUseCaseLinks();
   assert.equal(links.length, USE_CASES.length);

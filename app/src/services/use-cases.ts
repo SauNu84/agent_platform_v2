@@ -130,6 +130,87 @@ sequenceDiagram
 > **Privacy note:** while this is a demo, it uses **made-up patients only**. Before any real patient data flows through it, our security team scopes the healthcare (HIPAA/PHI) requirements first.
 `;
 
+// SAU-329 (parent SAU-328): second use case. CPO-authored explainer for an
+// outbound, compliant collections call agent. Pure catalog addition — content
+// only; the compliance engine / dialer are a later phase gated on Legal scoping.
+const COLLECTIONS_AGENT_BODY = `# Use Case — AI Call Center Agent for Collections (compliant reminders)
+
+> **What this page is:** a plain-language explainer of a second real use case — an AI agent that makes **outbound reminder calls** to a lender's debtors, strictly inside the rules that keep outreach respectful and compliant. Where the Clinic Agent *answers* calls and books, this agent *places* calls and reminds — within hard guardrails.
+
+---
+
+## The situation, in one paragraph
+
+A bank or lender has a list of customers with upcoming or overdue payments. Instead of a room full of agents dialing manually, an **AI agent** calls each debtor — but only when it's allowed: **business hours (e.g. 9 AM–5 PM) on working days**, **no more than once every two weeks** per person, never on weekends or holidays, and it stops the moment someone asks. On the call it identifies itself, gives the required disclosures, reminds the customer of the amount and due date, offers to help (pay now, set a plan, talk to a human), records the outcome, and schedules the next allowed contact. The lender gets timely, consistent, **fully logged and compliant** outreach.
+
+## Why the rules ARE the product
+
+Collections is one of the most regulated kinds of calling there is. The value here isn't "call more people" — it's **"call correctly, every time, provably."** So the company's rules are not suggestions in a prompt; they're **hard guardrails enforced in the system**, and the agent literally cannot break them:
+
+| Rule | How it's enforced |
+|---|---|
+| Call only 9 AM–5 PM, working days | Calling-window gate in the scheduler — out-of-window calls are never placed |
+| At most once / 2 weeks per debtor | Frequency cap per contact, tracked server-side |
+| No weekends / holidays | Calendar-aware scheduler |
+| Honor "stop calling" / disputes | Do-not-call + opt-out list, checked before every call |
+| Required identification & disclosures | Built into the script the agent must follow |
+| Full audit trail | Every attempt, outcome, and consent state logged |
+
+## How it compares to the Clinic Agent
+
+| | Clinic Agent | Collections Agent |
+|---|---|---|
+| Direction | **Inbound** (patient calls in) | **Outbound** (agent calls debtor) |
+| Trigger | A ringing phone | A debtor list + an *allowed* time slot |
+| Core constraint | Clinic hours / calendar | Compliance: calling window, frequency cap, do-not-call |
+| Goal | Book an appointment | A compliant reminder + recorded outcome / next step |
+| Shared foundation | Same voice, telephony bridge, tool-calling, outcome model, multi-tenant config | ← reused |
+
+---
+
+## User flow (one debtor, one cycle)
+
+\`\`\`mermaid
+flowchart TD
+    A([Lender uploads debtor list]) --> B[Scheduler picks who is due]
+    B --> C{Allowed to call now?}
+    C -- "Outside 9-5 / weekend / holiday" --> Z1[Wait for next allowed window]
+    C -- "Called within last 2 weeks" --> Z2[Hold until cadence allows]
+    C -- "On do-not-call / opted out" --> Z3[Skip - never call]
+    C -- Yes, all clear --> D[Agent places the call]
+    D --> E[Identify + required disclosures]
+    E --> F{Reach the person?}
+    F -- No answer / voicemail --> G[Log attempt - reschedule next allowed slot]
+    F -- Yes --> H[Remind: amount, due date]
+    H --> I{Customer response}
+    I -- Pay now / set plan --> J([Outcome: arrangement made])
+    I -- Wants a human --> K([Warm transfer / callback])
+    I -- "Stop calling" / dispute --> L([Add to do-not-call - stop])
+    G & J & K & L --> M[Record outcome + schedule next allowed contact]
+\`\`\`
+
+---
+
+## What it would reuse (already built for the Clinic Agent)
+- **Voice + telephony bridge** (Twilio, [SAU-292](/SAU/issues/SAU-292)) — here used for **outbound** dialing.
+- **Tool-calling framework + server-side outcome model** ([SAU-267](/SAU/issues/SAU-267)).
+- **No-code authoring + multi-tenant config + ops dashboard** ([SAU-300](/SAU/issues/SAU-300)/[SAU-301](/SAU/issues/SAU-301)) — per-lender rules and reporting.
+
+## What's new to build
+- **Debtor-list ingestion** (upload + validate the call list).
+- **Compliance engine + cadence scheduler** — the calling-window / frequency / do-not-call / holiday guardrails (the heart of this use case).
+- **Outbound dialer orchestration** + voicemail handling.
+- **Disclosures & opt-out** handling and a **compliance audit log**.
+
+## Phased plan (mirrors how the Clinic Agent was built)
+- **Phase 0 — explainer + this page** *(in progress now).*
+- **Phase 0.5 — Legal/Compliance scoping** (CISO/Legal): FDCPA, TCPA, Reg F, state laws — the go/no-go boundary before any real debtor call. *(Analogous to the clinic's HIPAA program.)*
+- **Phase 1 — build** the compliance engine + cadence scheduler + debtor ingestion + outbound calling, proven on **synthetic debtors**.
+- **Phase 2 — productize** (per-lender rule authoring, dashboards, scale) — much of it reused from the clinic work.
+
+> **Compliance note:** this is a **compliant-by-design** outreach tool — the regulatory rules are enforced guardrails, not optional. No real debtor is called until the Legal/Compliance scoping is signed off; the demo uses **synthetic debtors only**.
+`;
+
 export const USE_CASES: UseCase[] = [
   {
     slug: "clinic-agent",
@@ -146,6 +227,18 @@ export const USE_CASES: UseCase[] = [
       // SAU-301 WS-B: per-clinic ops dashboard (outcomes/ROI) + clinic switcher.
       { href: "/use-cases/clinic-agent/dashboard", label: "Ops dashboard" },
     ],
+  },
+  // SAU-329: second use case, listed below the clinic agent in the nav. Content/UX
+  // only — the explainer page; the compliance engine / dialer are a later phase
+  // gated on Legal/Compliance scoping (no real debtor is called from this page).
+  {
+    slug: "call-center-agent",
+    title: "AI Call Center Agent for Collections (Compliant Reminders)",
+    navLabel: "AI Call Center Agent",
+    icon: "☎️",
+    summary:
+      "An AI agent places outbound payment-reminder calls to a lender’s debtors — strictly inside hard compliance guardrails (calling window, frequency cap, do-not-call), fully logged. Compliant outbound payment reminders.",
+    body: COLLECTIONS_AGENT_BODY,
   },
 ];
 
