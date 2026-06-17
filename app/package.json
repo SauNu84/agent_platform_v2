@@ -16,6 +16,7 @@
     "purge:phi": "tsx src/db/retention-purge-cli.ts",
     "purge:debtors": "tsx src/db/collections-purge-cli.ts",
     "seed": "tsx src/db/seed-cli.ts",
+    "seed:collections": "tsx src/db/seed-collections-demo.ts",
     "seed:users": "tsx src/db/seed-users-cli.ts"
   },
   "dependencies": {

@@ -20,6 +20,8 @@ import type {
 import type {
   Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
 } from '@/domain/collections';
+import type { NewCallAttempt, CallAttemptRecord } from '@/domain/collections-outcome';
+import { outcomeHadConversation } from '@/domain/collections-outcome';
 import { collectionsAuditIntegrity } from '@/domain/collections-audit';
 import { genShareCode } from '@/lib/short-code';
 import { ROLE_CAPABILITIES } from '@/auth/rbac';
@@ -61,6 +63,7 @@ export class MemoryStore implements Store {
   private phiAccess: PhiAccessRecord[] = [];                  // append-only (SAU-275)
   private debtors = new Map<string, Debtor>();                // by id (SAU-333 WS-2)
   private collectionsAudit: CollectionsAuditRecord[] = [];    // append-only, HMAC-chained (SAU-333)
+  private callAttempts: CallAttemptRecord[] = [];             // per-attempt outcomes (SAU-335 WS-4)
   private shareLinks = new Map<string, ShareLinkRecord>();    // by code
   private scenarioToShareCode = new Map<string, string>();    // scenarioId → code (idempotency)
   // ── Knowledge Base (SAU-243) ──
@@ -1002,6 +1005,52 @@ export class MemoryStore implements Store {
         && (!filter.eventType || e.eventType === filter.eventType))
       .sort((a, b) => b.seq - a.seq)
       .slice(0, filter.limit ?? 500);
+  }
+
+  // ── Collections call-attempt outcomes (SAU-335, WS-4) ────────────────────────
+  async recordCallAttempt(input: NewCallAttempt): Promise<CallAttemptRecord> {
+    const { outcome } = input;
+    const hadConversation = outcomeHadConversation(outcome);
+    const blockReason = outcome === 'blocked_by_compliance' ? (input.blockReason ?? 'blocked') : null;
+    const attemptedAt = new Date(input.attemptedAtMs ?? Date.now()).toISOString();
+    const rec: CallAttemptRecord = {
+      id: randomUUID(),
+      clinicId: input.clinicId,
+      debtorId: input.debtorId,
+      outcome,
+      hadConversation,
+      blockReason,
+      attemptedAt,
+      simulated: input.simulated ?? true,
+      createdAt: nowIso(),
+    };
+    this.callAttempts.push(rec);
+    // Guardrail 10: mirror into the compliance ledger (block → dial_decision, else → call_outcome).
+    if (outcome === 'blocked_by_compliance') {
+      await this.recordCollectionsAudit({
+        clinicId: input.clinicId, debtorRef: input.debtorRef, eventType: 'dial_decision',
+        decision: 'BLOCK', reason: blockReason,
+        refs: { blockReasons: input.blockReasons ?? (blockReason ? [blockReason] : []) },
+      });
+    } else {
+      await this.recordCollectionsAudit({
+        clinicId: input.clinicId, debtorRef: input.debtorRef, eventType: 'call_outcome',
+        reason: outcome, refs: { hadConversation },
+      });
+    }
+    return rec;
+  }
+
+  async listCallAttemptsForDebtor(clinicId: string, debtorId: string): Promise<CallAttemptRecord[]> {
+    return this.callAttempts
+      .filter((a) => a.clinicId === clinicId && a.debtorId === debtorId)
+      .sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt));
+  }
+
+  async listCallAttemptsForClinic(clinicId: string): Promise<CallAttemptRecord[]> {
+    return this.callAttempts
+      .filter((a) => a.clinicId === clinicId)
+      .sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt));
   }
 
   // ── Slice 5: auth + RBAC ─────────────────────────────────────────────────

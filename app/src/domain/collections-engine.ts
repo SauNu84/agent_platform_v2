@@ -365,3 +365,71 @@ export function canDialNow(
 export function isDialAllowed(debtor: DialEvaluableDebtor | null | undefined, nowMs: number, opts?: CanDialOptions): boolean {
   return canDialNow(debtor, nowMs, opts).decision === 'ALLOW';
 }
+
+// ── Next-eligible-dial scheduler (SAU-335, WS-4 — the dashboard "when next" answer) ──
+
+/**
+ * Block codes that are NOT time-resolvable: the debtor's *state* must change first
+ * (an opt-out cleared, consent recorded, dispute closed, a resolvable TZ). Waiting does
+ * nothing, so the forward search short-circuits and the UI shows "suppressed", not a date.
+ */
+const PERMANENT_BLOCK_CODES: ReadonlySet<DialBlockCode> = new Set([
+  'unknown_input',
+  'unknown_timezone',
+  'opted_out',
+  'no_consent',
+  'dispute_open',
+]);
+
+/** Minutes-granularity of the forward scan. The calling window is hours wide, so a
+ *  15-minute step can never skip over an open window. */
+const NEXT_DIAL_STEP_MS = 15 * 60 * 1000;
+/** Search horizon — comfortably past the every-2-weeks default cadence + a holiday run. */
+const NEXT_DIAL_HORIZON_MS = 30 * DAY_MS;
+
+/** The next-eligible-dial verdict for one debtor, derived from `canDialNow` itself. */
+export interface NextDialResult {
+  /** May the debtor be dialed at `fromMs`? */
+  allowedNow: boolean;
+  /** Epoch ms of the next permitted dial, or null (permanent suppression or none in horizon). */
+  nextMs: number | null;
+  /** True when blocked by a state-based suppression (opt-out / consent / dispute / unresolved TZ). */
+  permanentBlock: boolean;
+  /** The reasons the dial is blocked at `fromMs` ([] when `allowedNow`). */
+  reasons: DialBlockReason[];
+}
+
+/**
+ * The earliest instant at/after `fromMs` this debtor may be dialed, computed from the
+ * SAME {@link canDialNow} gates the dialer enforces — never a guess (SAU-335 AC). The
+ * dashboard renders this as "Eligible now" / "Next: <time>" / "Suppressed".
+ *
+ *  - allowed now             → `{ allowedNow: true, nextMs: fromMs }`
+ *  - state-based suppression → `{ permanentBlock: true, nextMs: null }` (no date — state must change)
+ *  - time/frequency block    → scans forward at 15-min steps to the next ALLOW within 30 days
+ *  - no opening in horizon    → `{ nextMs: null }`
+ */
+export function nextEligibleDial(
+  debtor: DialEvaluableDebtor | null | undefined,
+  fromMs: number,
+  opts: CanDialOptions = {},
+): NextDialResult {
+  const current = canDialNow(debtor, fromMs, opts);
+  if (current.decision === 'ALLOW') {
+    return { allowedNow: true, nextMs: fromMs, permanentBlock: false, reasons: [] };
+  }
+  const permanentBlock = current.reasons.some((r) => PERMANENT_BLOCK_CODES.has(r.code));
+  if (permanentBlock || !Number.isFinite(fromMs)) {
+    return { allowedNow: false, nextMs: null, permanentBlock, reasons: current.reasons };
+  }
+  // Time/frequency block only — walk forward to the next opening the engine permits.
+  for (let t = fromMs + NEXT_DIAL_STEP_MS; t <= fromMs + NEXT_DIAL_HORIZON_MS; t += NEXT_DIAL_STEP_MS) {
+    const at = canDialNow(debtor, t, opts);
+    if (at.decision === 'ALLOW') {
+      return { allowedNow: false, nextMs: t, permanentBlock: false, reasons: current.reasons };
+    }
+    // Defensive: if a permanent suppression appears mid-scan, stop (no date can be given).
+    if (at.reasons.some((r) => PERMANENT_BLOCK_CODES.has(r.code))) break;
+  }
+  return { allowedNow: false, nextMs: null, permanentBlock: false, reasons: current.reasons };
+}

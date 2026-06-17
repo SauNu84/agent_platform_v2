@@ -14,6 +14,7 @@ import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
   Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
 } from '@/domain/collections';
+import type { NewCallAttempt, CallAttemptRecord } from '@/domain/collections-outcome';
 
 export type ContentEntityType = 'scenario' | 'coach' | 'course';
 
@@ -676,6 +677,14 @@ export interface Store {
   recordCollectionsAudit(entry: CollectionsAuditInput): Promise<CollectionsAuditRecord>;
   /** Query the compliance ledger (RLS-scoped to the caller's tenant), newest first. */
   listCollectionsAudit(filter: CollectionsAuditFilter): Promise<CollectionsAuditRecord[]>;
+
+  // ── Collections call-attempt outcomes (SAU-335, WS-4) ───────────────────────
+  /** Record one call-attempt outcome and append the matching compliance audit event. */
+  recordCallAttempt(input: NewCallAttempt): Promise<CallAttemptRecord>;
+  /** All attempts for one debtor (RLS-scoped), newest first. */
+  listCallAttemptsForDebtor(clinicId: string, debtorId: string): Promise<CallAttemptRecord[]>;
+  /** All attempts for a lender/tenant (RLS-scoped), newest first. */
+  listCallAttemptsForClinic(clinicId: string): Promise<CallAttemptRecord[]>;
 
   // ── AuthN + RBAC (Slice 5, SAU-229) ─────────────────────────────────────────
   createUser(input: NewUser): Promise<UserRecord>;

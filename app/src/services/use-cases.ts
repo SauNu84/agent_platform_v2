@@ -239,6 +239,11 @@ export const USE_CASES: UseCase[] = [
     summary:
       "An AI agent places outbound payment-reminder calls to a lender’s debtors — strictly inside hard compliance guardrails (calling window, frequency cap, do-not-call), fully logged. Compliant outbound payment reminders.",
     body: COLLECTIONS_AGENT_BODY,
+    // SAU-335 WS-4: per-lender ops dashboard — cadence/next-eligible dial, suppression
+    // list, compliance-block counts + the read-only guardrail-10 audit trail.
+    subLinks: [
+      { href: "/use-cases/call-center-agent/dashboard", label: "Ops dashboard" },
+    ],
   },
 ];
 

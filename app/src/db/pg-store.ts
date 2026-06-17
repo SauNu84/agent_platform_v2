@@ -30,6 +30,8 @@ import type {
 import type {
   Debtor, DebtorPii, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
 } from '@/domain/collections';
+import type { NewCallAttempt, CallAttemptRecord } from '@/domain/collections-outcome';
+import { outcomeHadConversation } from '@/domain/collections-outcome';
 import { genShareCode } from '@/lib/short-code';
 import { encryptJson, decryptJson } from '@/lib/phi';
 import { phiAuditIntegrity } from '@/lib/phi-audit';
@@ -262,6 +264,20 @@ function rowToCollectionsAudit(r: Row): CollectionsAuditRecord {
     refs: (r.refs ?? {}) as Record<string, unknown>,
     prevIntegrity: r.prev_integrity ?? '',
     integrity: r.integrity,
+  };
+}
+
+function rowToCallAttempt(r: Row): CallAttemptRecord {
+  return {
+    id: r.id,
+    clinicId: r.clinic_id,
+    debtorId: r.debtor_id,
+    outcome: r.outcome,
+    hadConversation: Boolean(r.had_conversation),
+    blockReason: r.block_reason ?? null,
+    attemptedAt: new Date(r.attempted_at).toISOString(),
+    simulated: Boolean(r.simulated),
+    createdAt: new Date(r.created_at).toISOString(),
   };
 }
 
@@ -1591,6 +1607,52 @@ export class PgStore implements Store {
       params,
     );
     return rows.map(rowToCollectionsAudit);
+  }
+
+  // ── Collections call-attempt outcomes (SAU-335, WS-4) — migration 0023 ───────
+  async recordCallAttempt(input: NewCallAttempt): Promise<CallAttemptRecord> {
+    const { outcome } = input;
+    const hadConversation = outcomeHadConversation(outcome);
+    const blockReason = outcome === 'blocked_by_compliance' ? (input.blockReason ?? 'blocked') : null;
+    const attemptedAt = new Date(input.attemptedAtMs ?? Date.now()).toISOString();
+    const { rows } = await this.q(
+      `INSERT INTO collections_call_attempt
+         (clinic_id, debtor_id, outcome, had_conversation, block_reason, attempted_at, simulated)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [input.clinicId, input.debtorId, outcome, hadConversation, blockReason, attemptedAt, input.simulated ?? true],
+    );
+    const rec = rowToCallAttempt(rows[0]);
+    // Guardrail 10: every outcome is mirrored into the append-only compliance ledger.
+    // A compliance BLOCK is a refused dial_decision; any placed call is a call_outcome.
+    if (outcome === 'blocked_by_compliance') {
+      await this.recordCollectionsAudit({
+        clinicId: input.clinicId, debtorRef: input.debtorRef, eventType: 'dial_decision',
+        decision: 'BLOCK', reason: blockReason,
+        refs: { blockReasons: input.blockReasons ?? (blockReason ? [blockReason] : []) },
+      });
+    } else {
+      await this.recordCollectionsAudit({
+        clinicId: input.clinicId, debtorRef: input.debtorRef, eventType: 'call_outcome',
+        reason: outcome, refs: { hadConversation },
+      });
+    }
+    return rec;
+  }
+
+  async listCallAttemptsForDebtor(clinicId: string, debtorId: string): Promise<CallAttemptRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM collections_call_attempt WHERE clinic_id = $1 AND debtor_id = $2 ORDER BY attempted_at DESC',
+      [clinicId, debtorId],
+    );
+    return rows.map(rowToCallAttempt);
+  }
+
+  async listCallAttemptsForClinic(clinicId: string): Promise<CallAttemptRecord[]> {
+    const { rows } = await this.q(
+      'SELECT * FROM collections_call_attempt WHERE clinic_id = $1 ORDER BY attempted_at DESC',
+      [clinicId],
+    );
+    return rows.map(rowToCallAttempt);
   }
 
   // ── AuthN + RBAC (Slice 5, SAU-229) — no RLS on these tables; pool-direct ───
