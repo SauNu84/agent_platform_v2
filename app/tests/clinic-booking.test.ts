@@ -199,3 +199,44 @@ test('finalizeClinicSession persists outcome + intake against a session', async 
   const fetched = await store.getClinicOutcome(session.id);
   assert.equal(fetched?.outcome, 'booked');
 });
+
+test('SAU-358: finalizeClinicSession emits PII-free clinic value events per outcome', async () => {
+  const store = new MemoryStore();
+  const { scenario } = await createScenarioFromMarkdown(
+    store,
+    `---\nid: emit-clinic\nname: Emit\npersona: be Robin\nvisibility: public\ntools: [check_availability, create_appointment]\n---\n`,
+    { repoPath: 'e.md', revision: null },
+  );
+
+  // 1) Booked session → session.completed (always) + booking.completed (value step).
+  const booked = await store.createSession({ scenarioId: scenario.id, userId: 'u1', clinicId: 'c1', vendor: 'mock' });
+  await finalizeClinicSession({
+    store, scenario, sessionId: booked.id, userId: 'u1', clinicId: 'c1',
+    transcript: {
+      turns: [{ role: 'user' as const, text: 'book me with Dr Chen', at: 1 }],
+      toolCalls: [
+        { name: 'create_appointment', args: {}, result: { booked: true, eventId: 'sim-evt-1', start: '2026-06-15T09:00:00.000Z', simulated: true }, at: 2 },
+      ],
+    },
+  });
+
+  // 2) Escalated session (no successful tool calls) → session.completed + escalated.
+  const esc = await store.createSession({ scenarioId: scenario.id, userId: 'u1', clinicId: 'c1', vendor: 'mock' });
+  await finalizeClinicSession({
+    store, scenario, sessionId: esc.id, userId: 'u1', clinicId: 'c1',
+    transcript: { turns: [{ role: 'user' as const, text: 'talk to a human', at: 1 }], toolCalls: [] },
+  });
+
+  const events = await store.queryProductEvents({ archetype: 'clinic', tenantId: 'c1' });
+  const names = events.map((e) => e.event);
+  assert.equal(names.filter((n) => n === 'clinic.session.completed').length, 2, 'one session.completed per finalize');
+  assert.ok(names.includes('clinic.booking.completed'), 'booked → value event');
+  assert.ok(names.includes('clinic.session.escalated'), 'escalated → branch event');
+  // Every emitted prop bag stayed enum/count/bool only (the track() guard would
+  // have dropped a PII-bearing event — assert none were silently lost).
+  for (const e of events) {
+    for (const v of Object.values(e.props ?? {})) {
+      assert.ok(['string', 'number', 'boolean'].includes(typeof v) || v === null);
+    }
+  }
+});
