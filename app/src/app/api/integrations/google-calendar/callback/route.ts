@@ -13,6 +13,7 @@ import { getStore } from '@/db';
 import { exchangeCodeForTokens, resolveRedirectUri } from '@/services/calendar/google-oauth';
 import { resolveGoogleOAuthConfig } from '@/services/calendar/google-oauth-config';
 import { verifyOAuthState, saveGoogleConnection } from '@/services/calendar/calendar-connection';
+import { emitClinicCalendarConnected } from '@/services/clinic-funnel';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +47,14 @@ export async function GET(req: NextRequest) {
   try {
     const tokens = await exchangeCodeForTokens(cfg, code, resolveRedirectUri(origin));
     await saveGoogleConnection(getStore(), gate.actor.userId, tokens, verified.calendarId);
+    // SAU-359 (WS5 §6): ACTIVATION ★ — the clinic connected its booking calendar
+    // (the capability gate: no calendar → no bookings). Best-effort, post-save.
+    await emitClinicCalendarConnected(getStore(), {
+      actorId: gate.actor.userId,
+      clinicId: gate.actor.clinicId,
+      calendarId: verified.calendarId,
+      fromDemoConfig: verified.returnTo === '/use-cases/clinic-agent/configure',
+    });
     return back(origin, 'connected', dest);
   } catch (e) {
     console.warn('[calendar] OAuth callback failed:', (e as Error).message);

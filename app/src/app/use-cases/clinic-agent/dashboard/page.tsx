@@ -8,8 +8,10 @@
  */
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { getStore } from '@/db';
 import { requirePageActor } from '@/services/current-user';
 import { toUseCaseLinks } from '@/services/use-cases';
+import { emitClinicDemoViewed } from '@/services/clinic-funnel';
 import UseCaseShell from '@/components/UseCaseShell';
 import ClinicDashboard from './ClinicDashboard';
 
@@ -24,7 +26,14 @@ export default async function ClinicDashboardPage() {
   // Auth-gate the page; the metrics + switcher are loaded client-side from the API
   // (withActor) which binds app.clinic_id reliably under the app_rw role (SAU-275),
   // unlike an RSC enterWith data read.
-  await requirePageActor();
+  const actor = await requirePageActor();
+
+  // SAU-359 (WS5 §6): top-of-funnel — the operator viewed the per-clinic clinic-agent
+  // demo/ops surface (funnel entry step). Best-effort; tenant = the active clinic.
+  await emitClinicDemoViewed(getStore(), {
+    actorId: actor.userId,
+    clinicId: actor.clinicId,
+  });
 
   return (
     <UseCaseShell links={toUseCaseLinks()} activeSlug="clinic-agent">
