@@ -16,6 +16,7 @@ import { getCalendarConnectionView } from '@/services/calendar/calendar-connecti
 import { getGoogleOAuthAppView } from '@/services/calendar/google-oauth-config';
 import { getClinicPhoneView } from '@/services/clinic-phone';
 import { getClinicConfigView } from '@/services/clinic-config';
+import { emitClinicSetupStarted } from '@/services/clinic-funnel';
 import ClinicDemoConfig from './ClinicDemoConfig';
 import type { ClinicConfigForm } from './ClinicDefinitionCard';
 
@@ -42,6 +43,18 @@ export default async function ClinicConfigurePage() {
     getClinicPhoneView(store, actor.userId),
     getClinicConfigView(store, actor.userId),
   ]);
+
+  // SAU-359 (WS5 §6): top-of-funnel — the operator entered the "Set up a demo"
+  // wizard. Best-effort; the snapshot props (bools only) let the funnel read-model
+  // see how far setup has progressed. tenant = the operator's active clinic.
+  await emitClinicSetupStarted(store, {
+    actorId: actor.userId,
+    clinicId: actor.clinicId,
+    calendarConnected: calendarOAuth.connected,
+    oauthConfigured: oauthApp.configured,
+    clinicConfigured: clinicConfig.configured,
+    numbersConfigured: phone.configured,
+  });
 
   return (
     <UseCaseShell links={toUseCaseLinks()} activeSlug="clinic-agent">
