@@ -11,8 +11,8 @@ import { toUseCaseLinks } from '@/services/use-cases';
 const THEME_INIT = `(function(){try{var t=localStorage.getItem('theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=d?'dark':'light';e.dataset.themePref=t;}catch(e){}})();`;
 
 export const metadata: Metadata = {
-  title: 'Agent Platform — Scenarios',
-  description: 'Hyper-realistic AI roleplay to practice high-stakes conversations.',
+  title: 'Proviso',
+  description: 'Provably compliant AI agents for regulated service operations — across voice, text, and SMS.',
 };
 
 // Left nav, reordered + grouped to mirror the reference rail (SAU-250 board ask):
@@ -95,7 +95,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body>
         <div className="app-shell">
           <nav className="side-nav">
-            <div className="brand">Agent Platform</div>
+            <div className="brand">Proviso</div>
             <div className="side-nav-scroll">
               {groups.map((g, i) => (
                 <div className="side-nav-group" key={g.heading ?? `g${i}`}>

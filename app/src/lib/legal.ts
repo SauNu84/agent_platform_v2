@@ -37,7 +37,7 @@
 // SECURITY-REVIEW §6.0/§6.1 grounding noted above), not copied from any third party.
 
 // Interim placeholders — see "PRODUCT NAME" note above (SAU-234 / SAU-236).
-export const LEGAL_COMPANY = 'Agent Platform';
+export const LEGAL_COMPANY = 'Proviso';
 export const LEGAL_CONTACT = 'privacy@example.com';
 
 // 'approved' removes the "pending legal review" draft banner. Cleared by

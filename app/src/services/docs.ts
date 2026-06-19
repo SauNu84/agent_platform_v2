@@ -43,10 +43,10 @@ export const DOC_SECTIONS: DocSection[] = [
       {
         slug: 'introduction',
         title: 'Introduction',
-        summary: 'What Agent Platform is and how practising with an AI roleplay partner works.',
+        summary: 'What Proviso is and how practising with an AI roleplay partner works.',
         body: `# Introduction
 
-Agent Platform lets you **practise high-stakes conversations** against a realistic
+Proviso lets you **practise high-stakes conversations** against a realistic
 AI roleplay partner — a tough customer, a skeptical hiring panel, a direct report
 who needs feedback — and get scored on how you did.
 

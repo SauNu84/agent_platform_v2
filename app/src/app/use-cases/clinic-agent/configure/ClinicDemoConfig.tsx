@@ -514,7 +514,7 @@ export default function ClinicDemoConfig({
           <ul className="billing-muted">
             <li>
               Open the live agent at <code>/scenarios/clinic-intake-booking</code> (browser voice), or run a
-              synthetic caller over the real bridge.
+              test caller over the phone bridge.
             </li>
             <li>
               Complete an intake and confirm a slot — <code>create_appointment</code> writes the event into the
@@ -523,8 +523,7 @@ export default function ClinicDemoConfig({
             <li>Open Google Calendar and confirm the appointment landed in the target calendar.</li>
           </ul>
           <p className="billing-muted">
-            Synthetic / internal-test only for now. Real patient data waits on a signed clinic and the HIPAA
-            program.
+            Test data only for now. Real patient data waits on a signed clinic and the HIPAA program.
           </p>
         </div>
       </div>

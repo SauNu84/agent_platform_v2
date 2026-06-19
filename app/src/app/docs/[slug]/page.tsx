@@ -22,7 +22,7 @@ export function generateStaticParams() {
 
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
   const article = getArticle(params.slug);
-  if (!article) return { title: 'Documentation — Agent Platform' };
+  if (!article) return { title: 'Documentation — Proviso' };
   return {
     title: `${article.title} — Documentation`,
     description: article.summary,
