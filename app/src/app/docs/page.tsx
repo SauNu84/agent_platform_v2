@@ -12,7 +12,7 @@ import { DOC_SECTIONS, toSidebarSections } from '@/services/docs';
 import DocsShell from '@/components/DocsShell';
 
 export const metadata: Metadata = {
-  title: 'Documentation — Agent Platform',
+  title: 'Documentation — Proviso',
   description: 'Guides for practising, building, and managing scenarios, courses, and coaches.',
 };
 

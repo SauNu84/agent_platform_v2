@@ -195,8 +195,8 @@ export default function CollectionsDashboard({
       <h1>Collections ops dashboard</h1>
       <p className="billing-muted">
         Per-lender cadence, next-eligible dial, suppression list and the compliance audit trail for the
-        AI Call Center Agent. Each lender is fully isolated (per-lender RLS on the SAU-275 foundation);
-        switch lenders below. Synthetic debtors only — nothing here places a real call.
+        AI Call Center Agent. Each lender is fully isolated; switch lenders below. Showing test data —
+        nothing here places a real call.
       </p>
 
       {/* ── Lender switcher ─────────────────────────────────────────────── */}
@@ -241,13 +241,13 @@ export default function CollectionsDashboard({
         <p className="settings-pending-note">Loading dashboard…</p>
       ) : !hasLenders || !metrics ? (
         <p className="settings-pending-note">
-          Create a lender and load a synthetic debtor list (seed: <code>npm run seed:collections</code>) to populate this dashboard.
+          Create a lender and load a debtor list to populate this dashboard.
         </p>
       ) : (
         <>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
             <Tile label="Debtors" value={String(metrics.totalDebtors)} />
-            <Tile label="Eligible now" value={String(metrics.eligibleNow)} hint="cleared all WS-1 guardrails" />
+            <Tile label="Eligible now" value={String(metrics.eligibleNow)} hint="cleared all compliance guardrails" />
             <Tile label="Suppressed" value={String(metrics.suppressed)} hint="opt-out or open dispute" />
             <Tile label="Attempts" value={String(metrics.totalAttempts)} hint="calls placed (excl. blocks)" />
             <Tile label="Contact rate" value={pct(metrics.contactRate)} hint="contacted + promised / placed" />
@@ -315,7 +315,7 @@ export default function CollectionsDashboard({
           {/* ── Compliance audit trail (guardrail 10, read-only) ──────────── */}
           <h2 style={{ marginTop: 24 }}>Compliance audit trail</h2>
           <p className="billing-muted" style={{ marginTop: -8 }}>
-            Read-only, append-only ledger (WS-2 guardrail 10) — why each debtor was or wasn’t called.
+            Read-only, append-only ledger — why each debtor was or wasn’t called.
           </p>
           {metrics.recentAudit.length === 0 ? (
             <p className="billing-muted">No audit events recorded yet for this lender.</p>

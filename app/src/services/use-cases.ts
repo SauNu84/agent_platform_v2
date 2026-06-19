@@ -55,7 +55,7 @@ Most scenarios on this platform are **training simulators**: the AI plays a role
 |---|---|---|
 | Who is the AI? | The persona you practice **against** | The receptionist that **does the work** |
 | Who is the human? | A learner being scored | A real patient with a real need |
-| What is "success"? | A rubric score (0–100) | An appointment **actually created** |
+| What is "success"? | A practice score (0–100) | An appointment **actually created** |
 | What you get | A report card | A booked slot + intake record + confirmation |
 
 The good news: under the hood, **the clinic agent *is* a scenario** — a persona (warm, efficient receptionist) + a knowledge base (clinic hours, doctors, insurance accepted) + tools (check availability, create appointment) + a goal (intake + book). We reuse everything the platform already does for conversations and add the "action + outcome" layer.
@@ -120,14 +120,14 @@ sequenceDiagram
 - **A structured intake record** — the patient's details captured as clean, validated data (not just a transcript).
 - **An outcome status** — \`booked\`, \`no_slot\` (offered alternatives, none worked), or \`escalated\` (handed to a human).
 
-## What's live today vs. coming next
+## What's live today
 
-- **Today (the platform already has):** real-time voice in the browser (OpenAI / Gemini), persona authoring, the tool-calling framework, and knowledge-base injection.
-- **Phase 0 (the spike we're building now):** the \`clinic-intake-booking\` scenario with **real booking tools** and a **sandbox calendar** — talk to it in the browser and watch it create a real event. Synthetic patients only, no real patient data.
-- **Phase 1 (next):** real **phone calls** (telephony), a real clinic calendar with sign-in, SMS/email confirmations, and a human hand-off path.
-- **Phase 2 (gated):** healthcare-grade hardening (HIPAA program), self-service clinic setup, multi-clinic support.
+- **Real-time voice** in the browser and over the phone (telephony bridge), persona authoring, the tool-calling framework, and knowledge-base injection.
+- **Real booking** against a connected clinic calendar (Google Calendar sign-in) — talk to the agent and watch it create a real event.
+- **SMS / email confirmations** and a **human hand-off** path for anything the agent shouldn't handle alone.
+- **Self-service clinic setup** and **multi-clinic** support, each clinic fully isolated, with an ops dashboard for outcomes and ROI.
 
-> **Privacy note:** while this is a demo, it uses **made-up patients only**. Before any real patient data flows through it, our security team scopes the healthcare (HIPAA/PHI) requirements first.
+> **Privacy by design.** Patient data is encrypted at rest, every access is audited, and no real patient is called until the clinic's HIPAA program is signed off. Demos run on test data only — compliance is enforced in the system, not promised in a prompt.
 `;
 
 // SAU-329 (parent SAU-328): second use case. CPO-authored explainer for an
@@ -191,24 +191,14 @@ flowchart TD
 
 ---
 
-## What it would reuse (already built for the Clinic Agent)
-- **Voice + telephony bridge** (Twilio, [SAU-292](/SAU/issues/SAU-292)) — here used for **outbound** dialing.
-- **Tool-calling framework + server-side outcome model** ([SAU-267](/SAU/issues/SAU-267)).
-- **No-code authoring + multi-tenant config + ops dashboard** ([SAU-300](/SAU/issues/SAU-300)/[SAU-301](/SAU/issues/SAU-301)) — per-lender rules and reporting.
+## What's live today
+- **Compliance engine + cadence scheduler** — calling-window, frequency-cap, do-not-call and holiday guardrails enforced server-side. The engine refuses any dial it isn't allowed to place.
+- **Debtor-list ingestion** with validation, and **outbound dialing** with voicemail handling.
+- **Required disclosures & opt-out** handling, plus a read-only, append-only **compliance audit trail** — why each debtor was or wasn't called.
+- **Per-lender rule authoring, multi-tenant isolation and an ops dashboard** for cadence, suppression and compliance reporting.
 
-## What's new to build
-- **Debtor-list ingestion** (upload + validate the call list).
-- **Compliance engine + cadence scheduler** — the calling-window / frequency / do-not-call / holiday guardrails (the heart of this use case).
-- **Outbound dialer orchestration** + voicemail handling.
-- **Disclosures & opt-out** handling and a **compliance audit log**.
-
-## Phased plan (mirrors how the Clinic Agent was built)
-- **Phase 0 — explainer + this page** *(in progress now).*
-- **Phase 0.5 — Legal/Compliance scoping** (CISO/Legal): FDCPA, TCPA, Reg F, state laws — the go/no-go boundary before any real debtor call. *(Analogous to the clinic's HIPAA program.)*
-- **Phase 1 — build** the compliance engine + cadence scheduler + debtor ingestion + outbound calling, proven on **synthetic debtors**.
-- **Phase 2 — productize** (per-lender rule authoring, dashboards, scale) — much of it reused from the clinic work.
-
-> **Compliance note:** this is a **compliant-by-design** outreach tool — the regulatory rules are enforced guardrails, not optional. No real debtor is called until the Legal/Compliance scoping is signed off; the demo uses **synthetic debtors only**.
+## The compliance posture
+This is a **compliant-by-design** outreach tool — FDCPA, TCPA and Reg F rules are enforced guardrails in the system, not optional prompt instructions. Every attempt, outcome and consent state is logged. No real debtor is called until the lender's compliance program is signed off; demos run on test data only.
 `;
 
 export const USE_CASES: UseCase[] = [

@@ -1,14 +1,14 @@
 /**
- * POC home — the product front door (SAU-214).
+ * Product home — the in-app front door.
  *
- * Replaces the bare redirect-to-/library with an overview that frames the MVP
- * for a first-time viewer: what the product is, the live capabilities shipped
- * across Slices 1–4 (SAU-210), and a direct entry point into each. Counts are
- * read live from the store so the landing reflects the seeded demo content with
- * zero infra. Server component — no client JS.
+ * Frames Proviso for a first-time viewer: what the product does, the flagship
+ * action-taking agents, and the practice studio — each a direct entry point.
+ * Counts are read live from the store so the home reflects real content. Server
+ * component — no client JS.
  */
 import Link from 'next/link';
 import { getStore } from '@/db';
+import { getAllUseCases } from '@/services/use-cases';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +43,7 @@ const CAPABILITIES: Capability[] = [
   {
     href: '/analytics',
     title: 'Analytics',
-    blurb: 'Creator analytics across sessions — engagement, scoring, and voice-minute consumption projected from the event log.',
+    blurb: 'Analytics across sessions — engagement, scoring, and voice-minute consumption projected from the event log.',
     count: () => 'live',
   },
   {
@@ -69,23 +69,36 @@ export default async function Home() {
     /* keep zeros */
   }
 
+  const useCases = getAllUseCases();
+
   return (
     <div className="poc-home">
       <header className="hero">
-        <span className="badge">MVP · Proof of Concept</span>
-        <h1>Practice the conversations that actually matter.</h1>
+        <h1>AI agents that take action — and stay compliant.</h1>
         <p className="subtitle">
-          Hyper-realistic AI voice roleplay for high-stakes conversations — sales objections, stakeholder
-          pushback, system-design interviews. Author a scenario in Markdown, talk to it live, and get a scored
-          transcript back. Compose scenarios into courses and persistent coaches.
+          Proviso ships action-taking AI agents across voice, text, and SMS for regulated,
+          high-stakes operations — with guardrails enforced in code and audited, not promised in a
+          prompt. Plus a practice studio to author and rehearse the conversations that matter.
         </p>
         <div className="hero-cta">
-          <Link href="/library" className="btn join">Browse Scenarios</Link>
-          <Link href="/courses" className="btn-sm">View a Course</Link>
+          <Link href="/use-cases" className="btn join">Explore agents</Link>
+          <Link href="/library" className="btn-sm">Browse scenarios</Link>
         </div>
       </header>
 
-      <h2>What&apos;s live in this POC</h2>
+      <h2>AI agents</h2>
+      <div className="grid">
+        {useCases.map((u) => (
+          <Link key={u.slug} href={`/use-cases/${u.slug}`} className="card">
+            <h3>
+              <span aria-hidden="true">{u.icon}</span> {u.title}
+            </h3>
+            <p>{u.summary}</p>
+          </Link>
+        ))}
+      </div>
+
+      <h2>Practice &amp; coaching</h2>
       <div className="grid">
         {CAPABILITIES.map((cap) => (
           <Link key={cap.href} href={cap.href} className="card">
@@ -97,12 +110,6 @@ export default async function Home() {
           </Link>
         ))}
       </div>
-
-      <p className="notice">
-        Demo runs on an in-memory store seeded from <code>content/</code> — zero infra required. Voice uses the
-        OpenAI Realtime adapter behind a seam; with no live key the Join flow runs in mock mode. Set{' '}
-        <code>DATABASE_URL</code> for durable Postgres.
-      </p>
     </div>
   );
 }

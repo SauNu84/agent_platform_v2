@@ -12,7 +12,7 @@ import { getAllUseCases, toUseCaseLinks } from '@/services/use-cases';
 import UseCaseShell from '@/components/UseCaseShell';
 
 export const metadata: Metadata = {
-  title: 'Use Cases — Agent Platform',
+  title: 'Use Cases — Proviso',
   description: 'Real things this platform can do — action-taking agents, explained for first-time readers.',
 };
 

@@ -20,7 +20,7 @@ export function generateStaticParams() {
 
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
   const useCase = getUseCase(params.slug);
-  if (!useCase) return { title: 'Use Cases — Agent Platform' };
+  if (!useCase) return { title: 'Use Cases — Proviso' };
   return {
     title: `${useCase.title} — Use Cases`,
     description: useCase.summary,

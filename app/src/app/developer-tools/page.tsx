@@ -36,7 +36,7 @@ export default async function DeveloperToolsPage() {
     <div className="devtools">
       <h1>Developer Tools</h1>
       <p className="subtitle">
-        Build on the Agent Platform API — mint keys, subscribe to events, and explore the reference.
+        Build on the Proviso API — mint keys, subscribe to events, and explore the reference.
       </p>
 
       <DeveloperToolsClient

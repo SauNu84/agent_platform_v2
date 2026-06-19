@@ -149,8 +149,8 @@ export default function ClinicDashboard({
     <div className="settings-section">
       <h1>Ops dashboard</h1>
       <p className="billing-muted">
-        Per-clinic call outcomes and ROI for the AI Clinic Agent. Each clinic is fully isolated
-        (per-clinic RLS on the SAU-275 foundation); switch clinics below. Synthetic/test data only.
+        Per-clinic call outcomes and ROI for the AI Clinic Agent. Each clinic is fully isolated;
+        switch clinics below. Showing test data.
       </p>
 
       {/* ── Clinic switcher ─────────────────────────────────────────────── */}
@@ -197,7 +197,7 @@ export default function ClinicDashboard({
         <p className="settings-pending-note">Loading dashboard…</p>
       ) : !hasClinics || !metrics ? (
         <p className="settings-pending-note">
-          Create a clinic and run a few demo calls (Set up a demo → run the scenario) to populate outcomes here.
+          Create a clinic and run a few demo calls (Set up a demo → run a call) to populate outcomes here.
         </p>
       ) : (
         <>
