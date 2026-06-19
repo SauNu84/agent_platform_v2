@@ -17,7 +17,8 @@
  * Synthetic debtors only (SAU-328 / SAU-330 §8).
  */
 import type { Store } from '@/db/store';
-import type { Debtor } from '@/domain/collections';
+import type { Debtor, ValidationNoticeStatus } from '@/domain/collections';
+import { disputeWindowEndsAt, validationNoticeStatus } from '@/domain/collections';
 import type { CallAttemptRecord, CollectionsOutcome } from '@/domain/collections-outcome';
 import { COLLECTIONS_OUTCOMES, outcomeWasPlaced } from '@/domain/collections-outcome';
 import {
@@ -46,6 +47,12 @@ export interface DebtorCadenceRow {
   permanentBlock: boolean;
   /** Current WS-1 block reason codes ([] when eligible now). */
   blockReasons: string[];
+  /** §1692g validation-notice obligation state (SAU-356/F2). */
+  validationNoticeStatus: ValidationNoticeStatus;
+  /** When the §1692g notice was sent (ISO), or null. */
+  validationNoticeSentAt: string | null;
+  /** Derived end of the 30-day §1692g dispute window (ISO), or null when no notice. */
+  disputeWindowEndsAt: string | null;
 }
 
 /** One {reason → count} compliance-block tally from the audit ledger. */
@@ -71,6 +78,8 @@ export interface CollectionsDashboardMetrics {
   eligibleNow: number;
   /** Debtors currently suppressed (opted out OR open dispute). */
   suppressed: number;
+  /** §1692g validation-notice obligation breakdown across all debtors (SAU-356/F2). */
+  validationNotice: Record<ValidationNoticeStatus, number>;
   /** Placed attempts (excludes compliance blocks). */
   totalAttempts: number;
   /** Outcome → count over all attempts (every enum value present, 0 if none). */
@@ -142,8 +151,15 @@ export async function getCollectionsDashboard(
       nextEligibleAt: next.nextMs != null ? new Date(next.nextMs).toISOString() : null,
       permanentBlock: next.permanentBlock,
       blockReasons: next.reasons.map((r) => r.code),
+      validationNoticeStatus: validationNoticeStatus(d, nowMs),
+      validationNoticeSentAt: d.validationNoticeSentAt,
+      disputeWindowEndsAt: disputeWindowEndsAt(d),
     };
   });
+
+  // §1692g validation-notice obligation breakdown (SAU-356/F2).
+  const validationNotice: Record<ValidationNoticeStatus, number> = { not_sent: 0, in_window: 0, window_elapsed: 0 };
+  for (const c of cadence) validationNotice[c.validationNoticeStatus] += 1;
 
   // Outcome tallies (every enum value present).
   const outcomes = Object.fromEntries(COLLECTIONS_OUTCOMES.map((o) => [o, 0])) as Record<CollectionsOutcome, number>;
@@ -171,6 +187,7 @@ export async function getCollectionsDashboard(
     totalDebtors: debtors.length,
     eligibleNow: cadence.filter((c) => c.allowedNow).length,
     suppressed: suppressionList.length,
+    validationNotice,
     totalAttempts: placedAttempts.length,
     outcomes,
     contactRate: rate(contacts, placedAttempts.length),

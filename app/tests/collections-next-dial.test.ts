@@ -133,3 +133,40 @@ test('dashboard aggregates outcomes, cadence, suppression and compliance blocks 
   assert.equal(okRow.attempts, 1);
   assert.equal(okRow.lastOutcome, 'contacted');
 });
+
+test('dashboard surfaces the §1692g validation-notice breakdown (SAU-356/F2)', async () => {
+  const store = new MemoryStore();
+  const clinicId = 'lender-B';
+
+  // Notice sent 10 days ago → still inside the 30-day dispute window.
+  const inWin = await store.upsertDebtor({
+    clinicId, externalRef: 'V-IN', name: 'A', phone: '+12125550201', balanceCents: 1000,
+    timezone: 'America/New_York', state: 'NY', consent: true,
+    validationNoticeSentAt: new Date(WED_2PM_ET - 10 * DAY).toISOString(),
+  });
+  // Notice sent 40 days ago → window elapsed.
+  await store.upsertDebtor({
+    clinicId, externalRef: 'V-OLD', name: 'B', phone: '+12125550202', balanceCents: 2000,
+    timezone: 'America/New_York', state: 'NY', consent: true,
+    validationNoticeSentAt: new Date(WED_2PM_ET - 40 * DAY).toISOString(),
+  });
+  // No notice recorded → not_sent.
+  await store.upsertDebtor({
+    clinicId, externalRef: 'V-NONE', name: 'C', phone: '+12125550203', balanceCents: 3000,
+    timezone: 'America/New_York', state: 'NY', consent: true,
+  });
+
+  const m = await getCollectionsDashboard(store, clinicId, WED_2PM_ET);
+
+  assert.deepEqual(m.validationNotice, { not_sent: 1, in_window: 1, window_elapsed: 1 });
+
+  const inRow = m.cadence.find((c) => c.externalRef === 'V-IN')!;
+  assert.equal(inRow.validationNoticeStatus, 'in_window');
+  assert.equal(inRow.validationNoticeSentAt, inWin.validationNoticeSentAt);
+  // Derived window end = sent + 30 days.
+  assert.equal(inRow.disputeWindowEndsAt, new Date(Date.parse(inWin.validationNoticeSentAt!) + 30 * DAY).toISOString());
+
+  const noneRow = m.cadence.find((c) => c.externalRef === 'V-NONE')!;
+  assert.equal(noneRow.validationNoticeStatus, 'not_sent');
+  assert.equal(noneRow.disputeWindowEndsAt, null);
+});
