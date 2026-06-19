@@ -65,6 +65,13 @@ export interface Debtor extends DebtorPii {
   optedOutAt: string | null;
   /** An open validation dispute PAUSES calling for this debtor (WS-1 guardrail 9). */
   disputeOpen: boolean;
+  /**
+   * §1692g (SAU-356/F2): when the validation notice was sent to this debtor (ISO), or
+   * null if not yet sent/unknown. The 30-day dispute window is DERIVED from this
+   * ({@link disputeWindowEndsAt}); tracked so the §1692g obligation is evidenced per
+   * debtor (SAU-330 §6 #9). NOT PII.
+   */
+  validationNoticeSentAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -78,6 +85,8 @@ export interface NewDebtor extends DebtorPii {
   consent?: boolean;
   optedOut?: boolean;
   disputeOpen?: boolean;
+  /** §1692g validation-notice timestamp (ISO), if known at ingest. Default null. */
+  validationNoticeSentAt?: string | null;
 }
 
 // ── Compliance audit (guardrail 10) write contract ──────────────────────────
@@ -182,6 +191,16 @@ function parseBalanceCents(v: unknown): number | null {
   return null;
 }
 
+/** Parse an optional ISO timestamp cell into a normalized ISO string, or null. Invalid
+ *  or empty → null (the §1692g notice is simply "not recorded" rather than a hard reject). */
+function parseIsoTimestamp(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (s === '') return null;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
 /** A single row's validation result. */
 export interface DebtorRowResult {
   ok: boolean;
@@ -242,8 +261,54 @@ export function validateDebtorRow(
       consent: parseBool(get('consent'), false),
       optedOut: parseBool(get('optedOut') ?? get('opted_out') ?? get('doNotCall') ?? get('do_not_call'), false),
       disputeOpen: parseBool(get('disputeOpen') ?? get('dispute_open') ?? get('dispute'), false),
+      validationNoticeSentAt: parseIsoTimestamp(
+        get('validationNoticeSentAt') ?? get('validation_notice_sent_at') ?? get('validationNoticeAt'),
+      ),
     },
   };
+}
+
+// ── §1692g validation-notice window (SAU-356/F2) ─────────────────────────────
+
+/** §1692g consumer dispute window: 30 days from receipt of the validation notice. */
+export const VALIDATION_DISPUTE_WINDOW_DAYS = 30;
+const VALIDATION_WINDOW_MS = VALIDATION_DISPUTE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+/** The operational subset needed to reason about the §1692g window (a full Debtor fits). */
+export interface ValidationNoticeTrackable {
+  validationNoticeSentAt: string | null;
+}
+
+/**
+ * Derived end of the §1692g 30-day dispute window (ISO), or null when no notice has been
+ * recorded. DERIVED (sent + 30d) — not stored — so there is a single source of truth.
+ */
+export function disputeWindowEndsAt(debtor: ValidationNoticeTrackable): string | null {
+  if (!debtor || !debtor.validationNoticeSentAt) return null;
+  const sentMs = Date.parse(debtor.validationNoticeSentAt);
+  if (!Number.isFinite(sentMs)) return null;
+  return new Date(sentMs + VALIDATION_WINDOW_MS).toISOString();
+}
+
+/**
+ * True iff `nowMs` falls within the §1692g 30-day dispute window (notice recorded and
+ * not yet 30 days elapsed). False when no notice is recorded (window not started) or it
+ * has elapsed. Used by reporting to evidence where each debtor sits in the obligation.
+ */
+export function isWithinValidationWindow(debtor: ValidationNoticeTrackable, nowMs: number): boolean {
+  if (!debtor || !debtor.validationNoticeSentAt || !Number.isFinite(nowMs)) return false;
+  const sentMs = Date.parse(debtor.validationNoticeSentAt);
+  if (!Number.isFinite(sentMs)) return false;
+  return nowMs >= sentMs && nowMs < sentMs + VALIDATION_WINDOW_MS;
+}
+
+/** Reporting status of a debtor's §1692g validation-notice obligation. */
+export type ValidationNoticeStatus = 'not_sent' | 'in_window' | 'window_elapsed';
+
+/** Classify the §1692g obligation state for ops reporting (WS-4 surfacing). */
+export function validationNoticeStatus(debtor: ValidationNoticeTrackable, nowMs: number): ValidationNoticeStatus {
+  if (!debtor || !debtor.validationNoticeSentAt) return 'not_sent';
+  return isWithinValidationWindow(debtor, nowMs) ? 'in_window' : 'window_elapsed';
 }
 
 /** Aggregate result of validating a whole synthetic debtor list. */

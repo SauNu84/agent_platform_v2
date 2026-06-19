@@ -245,6 +245,7 @@ function rowToDebtor(r: Row): Debtor {
     optedOut: Boolean(r.opted_out),
     optedOutAt: r.opted_out_at ? new Date(r.opted_out_at).toISOString() : null,
     disputeOpen: Boolean(r.dispute_open),
+    validationNoticeSentAt: r.validation_notice_sent_at ? new Date(r.validation_notice_sent_at).toISOString() : null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -1522,14 +1523,16 @@ export class PgStore implements Store {
     // PII at rest (SAU-274): name/phone/balance go into ONE encrypted envelope.
     const pii: DebtorPii = { name: input.name, phone: input.phone, balanceCents: input.balanceCents };
     const { rows } = await this.q(
-      `INSERT INTO debtor (clinic_id, external_ref, pii, timezone, state, consent, opted_out, dispute_open)
-       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8)
+      `INSERT INTO debtor (clinic_id, external_ref, pii, timezone, state, consent, opted_out, dispute_open, validation_notice_sent_at)
+       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (clinic_id, external_ref) DO UPDATE SET
          pii = EXCLUDED.pii, timezone = EXCLUDED.timezone, state = EXCLUDED.state,
-         consent = EXCLUDED.consent, opted_out = EXCLUDED.opted_out, dispute_open = EXCLUDED.dispute_open
+         consent = EXCLUDED.consent, opted_out = EXCLUDED.opted_out, dispute_open = EXCLUDED.dispute_open,
+         validation_notice_sent_at = EXCLUDED.validation_notice_sent_at
        RETURNING *`,
       [input.clinicId, input.externalRef, JSON.stringify(encryptJson(pii)), input.timezone,
-        input.state ?? null, input.consent ?? false, input.optedOut ?? false, input.disputeOpen ?? false],
+        input.state ?? null, input.consent ?? false, input.optedOut ?? false, input.disputeOpen ?? false,
+        input.validationNoticeSentAt ?? null],
     );
     return rowToDebtor(rows[0]);
   }
