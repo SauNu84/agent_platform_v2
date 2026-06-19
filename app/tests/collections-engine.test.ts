@@ -17,6 +17,7 @@ import type { Debtor } from '@/domain/collections';
 import {
   canDialNow,
   isDialAllowed,
+  nextEligibleDial,
   resolveTimeZone,
   areaCodeOf,
   getLocalParts,
@@ -163,6 +164,55 @@ test('BLOCK: open validation dispute pauses calling', () => {
   const d = canDialNow(healthyDebtor({ disputeOpen: true }), WED_2PM_ET);
   assert.equal(d.decision, 'BLOCK');
   assert.ok(codes(d).includes('dispute_open'));
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// §4 / §8 #2 State licensing allow-list — default-deny enforcement seam (SAU-355)
+// ──────────────────────────────────────────────────────────────────────────
+
+test('ALLOW: in-list state passes the licensing allow-list', () => {
+  const d = canDialNow(healthyDebtor({ state: 'NY' }), WED_2PM_ET, { config: { allowedStates: ['NY', 'CA'] } });
+  assert.equal(d.decision, 'ALLOW');
+});
+
+test('ALLOW: allow-list match is case-insensitive on both sides', () => {
+  const d = canDialNow(healthyDebtor({ state: 'ny' }), WED_2PM_ET, { config: { allowedStates: ['Ny', 'ca'] } });
+  assert.equal(d.decision, 'ALLOW');
+});
+
+test('BLOCK: out-of-list state is hard-excluded (default-deny)', () => {
+  const d = canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET, { config: { allowedStates: ['NY', 'CA'] } });
+  assert.equal(d.decision, 'BLOCK');
+  assert.ok(codes(d).includes('state_not_licensed'));
+});
+
+test('BLOCK: null/unknown state is fail-closed when an allow-list is configured', () => {
+  const d = canDialNow(healthyDebtor({ state: null }), WED_2PM_ET, { config: { allowedStates: ['NY'] } });
+  assert.equal(d.decision, 'BLOCK');
+  assert.ok(codes(d).includes('state_not_licensed'));
+});
+
+test('absent allow-list preserves prior behavior (no licensing gate)', () => {
+  // No allowedStates → an unknown-state debtor is NOT blocked on state-licensing grounds.
+  const d = canDialNow(healthyDebtor({ state: null }), WED_2PM_ET);
+  assert.ok(!codes(d).includes('state_not_licensed'));
+  // And a plain healthy debtor with no licensing config still ALLOWs.
+  assert.equal(canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET).decision, 'ALLOW');
+});
+
+test('empty allow-list disables the gate (documented choice — opt-in seam)', () => {
+  // An empty list is treated as "gate off", NOT "license zero states" (avoids silently
+  // suppressing every debtor on a half-configured tenant). See TenantCollectionsConfig docs.
+  const d = canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET, { config: { allowedStates: [] } });
+  assert.equal(d.decision, 'ALLOW');
+  assert.ok(!codes(d).includes('state_not_licensed'));
+});
+
+test('state_not_licensed is a PERMANENT block — nextEligibleDial gives no date', () => {
+  const r = nextEligibleDial(healthyDebtor({ state: 'TX' }), WED_2PM_ET, { config: { allowedStates: ['NY'] } });
+  assert.equal(r.permanentBlock, true);
+  assert.equal(r.nextMs, null);
+  assert.ok(r.reasons.some((x) => x.code === 'state_not_licensed'));
 });
 
 // ──────────────────────────────────────────────────────────────────────────
