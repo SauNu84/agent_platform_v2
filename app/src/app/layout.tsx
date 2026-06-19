@@ -29,6 +29,9 @@ const NAV_GROUPS: {
   {
     heading: null,
     items: [
+      // Proviso — the commercial product landing page (SAU-349, WS4). The
+      // public-facing front door for the compliance-grade Agent Framework.
+      { href: '/proviso', label: 'Proviso', icon: '✦' },
       { href: '/library', label: 'Scenarios', icon: '🎯' },
       { href: '/courses', label: 'Course', icon: '📚' },
       { href: '/coaches', label: 'Coach', icon: '🧭' },
