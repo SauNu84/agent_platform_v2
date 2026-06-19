@@ -9,9 +9,21 @@ import {
   scenarioFrontmatterSchema, normalizeFrontmatter, validateAgentTypeMetadata,
   type CompiledScenarioRecord,
 } from '@/domain/scenario';
-import { SuperAgentConfigError } from '@/domain/super-agent';
+import { SuperAgentConfigError, isSuperAgent } from '@/domain/super-agent';
 import { compileScenarioContent, sha256, ScenarioCompileError } from '@/compiler/compile';
 import type { OwnerOpts, ScenarioFilter, ScenarioRecord, Store } from '@/db/store';
+import { trackSafe } from '@/services/product-analytics';
+import { PRODUCT_EVENTS } from '@/domain/analytics-events';
+
+/** Emit the PII-free 'agent created' product event (SAU-350). Best-effort. */
+async function trackAgentCreated(store: Store, scenario: ScenarioRecord, owner?: OwnerOpts): Promise<void> {
+  await trackSafe(store, {
+    event: PRODUCT_EVENTS.AGENT_CREATED,
+    actorId: owner?.ownerUserId ?? null,
+    scenarioId: scenario.id,
+    props: { topology: isSuperAgent(scenario.metadata) ? 'super-agent' : 'single-agent' },
+  });
+}
 
 export { ScenarioCompileError };
 
@@ -51,6 +63,7 @@ export async function createScenarioFromMarkdown(
     contentHash,
     revision: opts.revision ?? null,
   }, owner);
+  if (res.created) await trackAgentCreated(store, res.scenario, owner);
   return { scenario: res.scenario, created: res.created };
 }
 
@@ -74,6 +87,7 @@ export async function createScenarioFromJson(store: Store, body: unknown, owner?
     contentHash: sha256(JSON.stringify(body)),
     revision: null,
   }, owner);
+  if (res.created) await trackAgentCreated(store, res.scenario, owner);
   return res.scenario;
 }
 

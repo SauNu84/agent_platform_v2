@@ -16,6 +16,7 @@ import type {
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
   PhiAccessInput, PhiAccessRecord, PhiAccessFilter,
+  ProductEventInput, ProductEventRecord, ProductEventFilter,
 } from './store';
 import type {
   Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
@@ -61,6 +62,7 @@ export class MemoryStore implements Store {
   private consents: ConsentRecord[] = [];                     // append-only
   private audit: (AuditEvent & { ts: string })[] = [];        // append-only
   private phiAccess: PhiAccessRecord[] = [];                  // append-only (SAU-275)
+  private productEvents: ProductEventRecord[] = [];           // append-only (SAU-350)
   private debtors = new Map<string, Debtor>();                // by id (SAU-333 WS-2)
   private collectionsAudit: CollectionsAuditRecord[] = [];    // append-only, HMAC-chained (SAU-333)
   private callAttempts: CallAttemptRecord[] = [];             // per-attempt outcomes (SAU-335 WS-4)
@@ -874,6 +876,34 @@ export class MemoryStore implements Store {
     return this.audit
       .filter((e) => e.subjectUserId === subjectUserId)
       .sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  }
+
+  // ── Product analytics events (SAU-350, WS5) — append-only, PII/PHI-FREE ──────
+  async recordProductEvent(ev: ProductEventInput): Promise<void> {
+    this.productEvents.push({
+      id: randomUUID(),
+      ts: ev.ts != null ? new Date(ev.ts).toISOString() : nowIso(),
+      event: ev.event,
+      archetype: ev.archetype ?? ev.event.split('.', 1)[0] ?? 'platform',
+      surface: ev.surface ?? null,
+      actorId: ev.actorId ?? null,
+      tenantId: ev.tenantId ?? null,
+      sessionId: ev.sessionId ?? null,
+      scenarioId: ev.scenarioId ?? null,
+      props: ev.props ?? {},
+    });
+  }
+
+  async queryProductEvents(filter: ProductEventFilter): Promise<ProductEventRecord[]> {
+    const eventSet = filter.events ? new Set(filter.events) : null;
+    return this.productEvents
+      .filter((e) => (filter.archetype ? e.archetype === filter.archetype : true))
+      .filter((e) => (eventSet ? eventSet.has(e.event) : true))
+      .filter((e) => (filter.tenantId ? e.tenantId === filter.tenantId : true))
+      .filter((e) => (filter.since ? e.ts >= filter.since : true))
+      .filter((e) => (filter.until ? e.ts < filter.until : true))
+      .sort((a, b) => (a.ts < b.ts ? -1 : 1))
+      .slice(0, filter.limit ?? Number.MAX_SAFE_INTEGER);
   }
 
   // ── PHI access audit log (SAU-275) ──────────────────────────────────────────
