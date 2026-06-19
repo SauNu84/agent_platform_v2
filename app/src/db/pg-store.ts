@@ -26,6 +26,7 @@ import type {
   SessionEventRow, SessionHistoryRow, SessionRecord, SessionTranscript, ShareLinkRecord, Store,
   UserRecord, UserSettingRecord, VoiceUsageRecord, VoiceUsageByTierRow, WebhookRecord,
   PhiAccessInput, PhiAccessRecord, PhiAccessFilter,
+  ProductEventInput, ProductEventRecord, ProductEventFilter,
 } from './store';
 import type {
   Debtor, DebtorPii, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
@@ -1435,6 +1436,43 @@ export class PgStore implements Store {
       actor: r.actor, event: r.event, subjectUserId: r.subject_user_id ?? null,
       coachId: r.coach_id ?? null, refs: (r.refs ?? {}) as Record<string, unknown>,
       ts: new Date(r.ts).toISOString(),
+    }));
+  }
+
+  // ── Product analytics events (SAU-350, WS5) — append-only, PII/PHI-FREE ──────
+  async recordProductEvent(ev: ProductEventInput): Promise<void> {
+    const archetype = ev.archetype ?? ev.event.split('.', 1)[0] ?? 'platform';
+    await this.q(
+      `INSERT INTO product_event (ts, event, archetype, surface, actor_id, tenant_id, session_id, scenario_id, props)
+       VALUES (COALESCE($1, now()), $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+      [
+        ev.ts != null ? new Date(ev.ts).toISOString() : null,
+        ev.event, archetype, ev.surface ?? null,
+        ev.actorId ?? null, ev.tenantId ?? null, ev.sessionId ?? null, ev.scenarioId ?? null,
+        JSON.stringify(ev.props ?? {}),
+      ],
+    );
+  }
+
+  async queryProductEvents(filter: ProductEventFilter): Promise<ProductEventRecord[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filter.archetype) { params.push(filter.archetype); where.push(`archetype = $${params.length}`); }
+    if (filter.events?.length) { params.push(filter.events); where.push(`event = ANY($${params.length})`); }
+    if (filter.tenantId) { params.push(filter.tenantId); where.push(`tenant_id = $${params.length}`); }
+    if (filter.since) { params.push(filter.since); where.push(`ts >= $${params.length}`); }
+    if (filter.until) { params.push(filter.until); where.push(`ts < $${params.length}`); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    params.push(filter.limit ?? 100000);
+    const { rows } = await this.q(
+      `SELECT * FROM product_event ${clause} ORDER BY ts ASC LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map((r: Row) => ({
+      id: r.id, ts: new Date(r.ts).toISOString(), event: r.event, archetype: r.archetype,
+      surface: r.surface ?? null, actorId: r.actor_id ?? null, tenantId: r.tenant_id ?? null,
+      sessionId: r.session_id ?? null, scenarioId: r.scenario_id ?? null,
+      props: (r.props ?? {}) as Record<string, unknown>,
     }));
   }
 

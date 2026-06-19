@@ -338,6 +338,52 @@ export interface PhiAccessFilter {
   limit?: number;
 }
 
+// ── Product analytics events (SAU-350, WS5) — append-only, PII/PHI-FREE ───────
+// Powers the CMO funnel/activation/retention read-models. `props` holds
+// ids/enums/counts only (taxonomy + PII guard in domain/analytics-events.ts).
+export interface ProductEventInput {
+  /** canonical taxonomy name, e.g. 'clinic.session.completed'. */
+  event: string;
+  /** archetype dimension; defaults to the event-name prefix when omitted. */
+  archetype?: string;
+  /** modality the event came from (web/voice/sms/batch/...). */
+  surface?: string | null;
+  /** INTERNAL non-PII id for unique/retention cohorts (NOT a name/email/phone). */
+  actorId?: string | null;
+  /** owning clinic/org; null = platform-wide event. */
+  tenantId?: string | null;
+  sessionId?: string | null;
+  scenarioId?: string | null;
+  /** ids/enums/counts ONLY — validated PII-free at the track() boundary. */
+  props?: Record<string, string | number | boolean | null>;
+  /** event time (epoch ms); defaults to now(). Lets tests pin a window. */
+  ts?: number;
+}
+
+export interface ProductEventRecord {
+  id: string;
+  ts: string;
+  event: string;
+  archetype: string;
+  surface: string | null;
+  actorId: string | null;
+  tenantId: string | null;
+  sessionId: string | null;
+  scenarioId: string | null;
+  props: Record<string, unknown>;
+}
+
+export interface ProductEventFilter {
+  archetype?: string;
+  /** restrict to these event names (e.g. one journey's steps). */
+  events?: string[];
+  tenantId?: string;
+  /** ISO timestamps bounding the window (inclusive `since`, exclusive `until`). */
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
 // ── Knowledge Base (SAU-243, Phase 1) — reusable multi-doc corpus ────────────
 export interface KnowledgeBaseRecord {
   id: string;
@@ -653,6 +699,13 @@ export interface Store {
   listConsent(userId: string, scope: string): Promise<ConsentRecord[]>;
   recordAuditEvent(ev: AuditEvent): Promise<void>;
   listAuditEvents(subjectUserId: string): Promise<(AuditEvent & { ts: string })[]>;
+
+  // ── Product analytics events (SAU-350, WS5) — append-only, PII/PHI-FREE ──────
+  /** Append one product-usage event. Callers MUST go through track() so props are
+   *  validated PII-free before this write. */
+  recordProductEvent(ev: ProductEventInput): Promise<void>;
+  /** Query the product-event stream for the CMO read-models (funnel/retention). */
+  queryProductEvents(filter: ProductEventFilter): Promise<ProductEventRecord[]>;
 
   // ── PHI access audit log (SAU-275) — append-only, tamper-evident ────────────
   /** Append one PHI read/write record (who/what/when), HMAC-stamped at write. */

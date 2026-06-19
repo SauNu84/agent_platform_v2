@@ -22,6 +22,24 @@ import type {
 import { MockProvider } from './adapters/mock';
 import { resolveSessionEngine, voiceKbCharBudget, type VoiceTier, type VoiceVendor } from './engine-router';
 import type { Store, SessionTranscript, VoiceUsageRecord } from '@/db/store';
+import { trackSafe } from '@/services/product-analytics';
+import { PRODUCT_EVENTS } from '@/domain/analytics-events';
+
+/** Emit the PII-free engagement event for a completed session (SAU-350). */
+async function trackSessionCompleted(
+  store: Store,
+  ctx: { sessionId: string; scenarioId: string; userId: string | null; clinicId: string | null; vendor: string; transcript: SessionTranscript },
+): Promise<void> {
+  await trackSafe(store, {
+    event: PRODUCT_EVENTS.SESSION_COMPLETED,
+    surface: 'voice',
+    actorId: ctx.userId,
+    tenantId: ctx.clinicId,
+    sessionId: ctx.sessionId,
+    scenarioId: ctx.scenarioId,
+    props: { vendor: ctx.vendor, turns: ctx.transcript.turns.length, tool_calls: ctx.transcript.toolCalls.length },
+  });
+}
 
 export type Vendor = 'openai' | 'gemini' | 'mock';
 
@@ -203,6 +221,7 @@ export async function runVoiceSession(opts: RunVoiceSessionOptions): Promise<Voi
     transcript,
   );
   await store.recordVoiceUsage(usage);
+  await trackSessionCompleted(store, { sessionId: sessionRow.id, scenarioId: scenario.id, userId, clinicId, vendor, transcript: sessionTranscript });
 
   return {
     sessionId: sessionRow.id,
@@ -245,5 +264,6 @@ export async function persistClientSession(opts: {
   await store.completeSession(sessionRow.id, { status: 'completed', startedAt: transcript.startedAt, endedAt: transcript.endedAt, transcript: sessionTranscript });
   const usage = usageToRecord({ sessionId: sessionRow.id, userId, scenarioId: scenario.id, vendor, tier, engine: engine.model }, transcript);
   await store.recordVoiceUsage(usage);
+  await trackSessionCompleted(store, { sessionId: sessionRow.id, scenarioId: scenario.id, userId, clinicId, vendor, transcript: sessionTranscript });
   return { sessionId: sessionRow.id, transcript: sessionTranscript, usage, firstAudioMs: null };
 }
