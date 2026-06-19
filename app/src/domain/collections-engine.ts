@@ -98,6 +98,20 @@ export interface TenantCollectionsConfig {
   stateCaps?: Record<string, StateCallCap>;
   /** Extra observed holidays as 'YYYY-MM-DD' (debtor-local), merged with the built-in set (§6 #7). */
   holidays?: string[];
+  /**
+   * State licensing allow-list (SAU-330 §4 / §8 item 2) — the 2-letter state codes this
+   * tenant is licensed to collect in. The *values* are counsel's call (SAU-354 §9 Q3);
+   * this field is the enforcement SEAM only.
+   *
+   * Semantics (default-deny / fail-closed): when a NON-EMPTY allow-list is configured, a
+   * debtor whose `state` is not in it — including `null`/unknown — is hard-BLOCKED with
+   * `state_not_licensed`, a PERMANENT block (the debtor's state must change, like
+   * opt-out/consent/dispute). An ABSENT or EMPTY list disables the gate and preserves the
+   * prior behavior (no state-licensing block): the gate is opt-in, so a half-configured
+   * tenant is never silently allowed-through OR silently suppressed-entirely. A tenant
+   * licensed in zero states must not enable this seam at all.
+   */
+  allowedStates?: string[];
 }
 
 /**
@@ -111,6 +125,7 @@ export type DialBlockCode =
   | 'opted_out' // do-not-call / revocation on file (§6 #3)
   | 'no_consent' // no prior-express-consent record (§6 #4)
   | 'dispute_open' // open §1692g validation dispute pauses calling (§6 #9)
+  | 'state_not_licensed' // debtor state absent from the tenant licensing allow-list (default-deny, §4 / §8 #2)
   | 'non_working_day' // weekend (working-days-only window, §6 #1)
   | 'holiday' // observed holiday (§6 #7)
   | 'outside_calling_window' // outside 9 AM–5 PM debtor-local (§6 #1)
@@ -303,6 +318,25 @@ export function canDialNow(
     reasons.push(reason('dispute_open', 'An open validation dispute is pausing calls to this debtor.'));
   }
 
+  // §4 / §8 #2 State licensing allow-list (default-deny). Only enforced when a NON-EMPTY
+  // list is configured: out-of-list AND null/unknown states are hard-excluded here at the
+  // suppression layer (fail-closed), classed PERMANENT — the debtor's state must change.
+  const allowedStates = config.allowedStates;
+  if (allowedStates && allowedStates.length > 0) {
+    const licensed = new Set(allowedStates.map((s) => s.toUpperCase()));
+    const debtorState = debtor.state ? debtor.state.toUpperCase() : null;
+    if (debtorState === null || !licensed.has(debtorState)) {
+      reasons.push(
+        reason(
+          'state_not_licensed',
+          debtorState === null
+            ? 'Debtor state is unknown; not in the licensing allow-list (default-deny).'
+            : `Debtor state ${debtorState} is not in the tenant licensing allow-list (default-deny).`,
+        ),
+      );
+    }
+  }
+
   // ── Calling-window gates require the debtor's local time → resolve TZ (§6 #6). ──
   const tz = resolveTimeZone(debtor);
   const local = tz ? getLocalParts(nowMs, tz) : null;
@@ -370,8 +404,9 @@ export function isDialAllowed(debtor: DialEvaluableDebtor | null | undefined, no
 
 /**
  * Block codes that are NOT time-resolvable: the debtor's *state* must change first
- * (an opt-out cleared, consent recorded, dispute closed, a resolvable TZ). Waiting does
- * nothing, so the forward search short-circuits and the UI shows "suppressed", not a date.
+ * (an opt-out cleared, consent recorded, dispute closed, a resolvable TZ, a licensed
+ * state). Waiting does nothing, so the forward search short-circuits and the UI shows
+ * "suppressed", not a date.
  */
 const PERMANENT_BLOCK_CODES: ReadonlySet<DialBlockCode> = new Set([
   'unknown_input',
@@ -379,6 +414,7 @@ const PERMANENT_BLOCK_CODES: ReadonlySet<DialBlockCode> = new Set([
   'opted_out',
   'no_consent',
   'dispute_open',
+  'state_not_licensed',
 ]);
 
 /** Minutes-granularity of the forward scan. The calling window is hours wide, so a
