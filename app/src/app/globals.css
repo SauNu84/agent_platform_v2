@@ -700,6 +700,51 @@ td.warn { color: #d97706; font-weight: 600; }
   .ld-verify, .ld-live { grid-template-columns: 1fr; }
 }
 
+/* ── Pre-join "Get Ready" screen (SAU-344) ────────────────────────────────────
+ * Avatar-led pre-join panel. Mic-free; consumes the P1 light/cyan tokens only.
+ */
+.get-ready .gr-head { margin-bottom: 6px; }
+.gr-hero {
+  max-width: 560px;
+  margin: 18px auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+.gr-avatar { border: 3px solid var(--accent); border-radius: 50%; padding: 6px; }
+.gr-avatar .avatar-monogram { border-radius: 50%; }
+.gr-avatar .avatar-monogram span { font-size: 42px; }
+.gr-name { margin: 4px 0 0; }
+.gr-persona { margin: 0; color: var(--muted); font-size: 15px; max-width: 46ch; }
+.gr-ready-label { margin: 10px 0 0; font-family: var(--mono); color: var(--accent-2); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+.gr-tips {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+}
+.gr-sim-note {
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 13px;
+  margin: 6px 0 0;
+  text-align: left;
+}
+.gr-join { margin-top: 4px; min-width: 160px; }
+
+/* Honest simulated-demo banner on the recap (SAU-344/SAU-217). */
+.session-demo-banner { background: var(--accent-soft); border-color: var(--border); }
+
 /* ── Knowledge Base (SAU-243) ─────────────────────────────────────────────── */
 .kb-section-head { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer; font: inherit; font-weight: 600; color: var(--fg, inherit); padding: 0; }
 .kb-linked-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

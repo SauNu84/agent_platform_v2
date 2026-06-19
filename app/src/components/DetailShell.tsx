@@ -13,7 +13,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { RubricItem } from '@/domain/scenario';
 import ChatPanel from './ChatPanel';
-import LiveDemo from './LiveDemo';
+import GetReadyPanel from './GetReadyPanel';
 import { aiModelLabel, aiModelById } from '@/lib/ai-models';
 
 /** Subset of the SAU-257 voice meter the detail surface renders. */
@@ -101,8 +101,11 @@ export default function DetailShell(props: DetailShellProps) {
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
   // Text chat overlay (SAU-224) — replaces the live/simulated demo on this surface.
   const [chatOpen, setChatOpen] = useState(false);
-  // Live demo flow (SAU-238) — camera/mic verify → live interaction window.
-  const [liveDemoOpen, setLiveDemoOpen] = useState(false);
+  // Pre-join "Get Ready" screen (SAU-344) — the non-gated half of the live-voice
+  // UX. Avatar-led, sends NO audio to any vendor, and routes "Join Now" into the
+  // honestly-labelled simulated recap (SAU-217). The live in-session dock (real
+  // mic round-trip) stays in SAU-218, gated on SAU-208 + Gate-2 DPA (SAU-221).
+  const [getReadyOpen, setGetReadyOpen] = useState(false);
   // Voice-minute cap (SAU-257): the live meter + a graceful "cap reached" state.
   // When the monthly voice budget is spent, voice is blocked and we steer the
   // learner into unlimited text Chat + an upgrade CTA — never a crash/silent fail.
@@ -220,19 +223,23 @@ export default function DetailShell(props: DetailShellProps) {
     }
   }
 
-  // Live demo flow (SAU-238) — camera/mic verify, then the live interaction window
-  // with the transcript on the right. Sessions land in the Sessions tab via upsert.
-  if (liveDemoOpen) {
+  // Pre-join "Get Ready" screen (SAU-344). Avatar-led, mic-free pre-flight. "Join
+  // Now" runs the simulated session through join() and closes this panel; the
+  // inline simulated recap (the liveSession branch below) then renders the result.
+  if (getReadyOpen) {
     return (
-      <LiveDemo
+      <GetReadyPanel
         name={props.name}
-        instructions={userInstructions || props.instructions}
         category={String(props.metadata?.role ?? props.metadata?.category ?? props.kind)}
         slug={props.slug}
         avatarUrl={avatarUrl}
-        sessionsEndpoint={props.sessionsEndpoint}
-        onClose={() => setLiveDemoOpen(false)}
-        onSession={upsertSession}
+        personaLine={aiPersona || props.overview || undefined}
+        joining={joining}
+        onJoin={async () => {
+          await join();
+          setGetReadyOpen(false);
+        }}
+        onClose={() => setGetReadyOpen(false)}
       />
     );
   }
@@ -266,6 +273,15 @@ export default function DetailShell(props: DetailShellProps) {
         </nav>
         <h1 className="session-title">{props.name}</h1>
         <p className="subtitle">Practice session</p>
+        {/* SAU-344/SAU-217: honest framing. The simulated recap must never read as
+            a live mic-based run. When the session came from the mock vendor (no
+            user audio sent anywhere), say so plainly. */}
+        {liveSession.vendor === 'mock' && (
+          <div className="notice session-demo-banner" role="status">
+            <strong>Simulated demo.</strong> This is a self-scripted walkthrough — no microphone was
+            used and no audio was sent anywhere. Live mic-based voice is the next increment.
+          </div>
+        )}
         {liveSession.turns.length === 0 ? (
           <div className="session-empty">
             <p>Session ran but produced no transcript turns. Try again or check the voice adapter.</p>
@@ -323,28 +339,31 @@ export default function DetailShell(props: DetailShellProps) {
             </button>
           )}
           {props.chatEndpoint ? (
-            // Board direction (2026-06-10): the scenario detail surface offers BOTH
-            // a live voice roleplay demo AND a text Chat. `join()` runs the
-            // server-driven voice session through the seam — deterministic mock by
-            // default, live OpenAI Realtime when keyed (real end-user audio at scale
-            // stays gated by SAU-193/SAU-208).
+            // SAU-344: the scenario detail surface offers a simulated practice
+            // **demo** (via the mic-free "Get Ready" pre-join screen → join()'s
+            // deterministic simulated recap, SAU-217) AND a text Chat. The live
+            // in-session voice dock (real mic round-trip) is carved into SAU-218,
+            // gated on SAU-208 (live-mic E2E) + Gate-2 DPA (SAU-221) — so it is
+            // intentionally NOT surfaced here as a control.
             <>
               <button
                 className="btn btn-secondary"
-                onClick={() => { setError(null); if (capReached) { setChatOpen(true); } else { setLiveDemoOpen(true); } }}
+                onClick={() => { setError(null); if (capReached) { setChatOpen(true); } else { setGetReadyOpen(true); } }}
                 disabled={capReached}
                 title={capReached
                   ? 'You’ve used your voice minutes this month — continue in text Chat'
-                  : 'Verify your camera & mic, then join a live roleplay'}
+                  : 'See a short simulated practice session — no microphone needed yet'}
               >
-                🎙 Live demo
+                ▶ Try demo
               </button>
               <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>
                 💬 Chat
               </button>
             </>
           ) : (
-            <button className="btn join" onClick={join} disabled={joining || capReached}>
+            // Coach / Course surfaces (no text chat): Join opens the same mic-free
+            // "Get Ready" pre-join screen (SAU-344), which runs the simulated recap.
+            <button className="btn join" onClick={() => { setError(null); setGetReadyOpen(true); }} disabled={joining || capReached}>
               {joining ? 'Connecting…' : capReached ? 'Voice cap reached' : 'Join'}
             </button>
           )}
