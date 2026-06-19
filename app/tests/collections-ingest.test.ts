@@ -38,7 +38,7 @@ test('validateDebtorRow accepts a complete synthetic row and normalizes it', () 
   assert.deepEqual(r.debtor, {
     clinicId: CLINIC, externalRef: 'A-100', name: 'Jane Doe', phone: '+14155550123',
     balanceCents: 123456, timezone: 'America/Los_Angeles', state: 'CA',
-    consent: true, optedOut: false, disputeOpen: false,
+    consent: true, optedOut: false, disputeOpen: false, validationNoticeSentAt: null,
   });
 });
 

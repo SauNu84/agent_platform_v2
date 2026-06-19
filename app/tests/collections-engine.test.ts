@@ -73,6 +73,7 @@ test('a full WS-2 Debtor is assignable to the engine and evaluates', () => {
     optedOut: false,
     optedOutAt: null,
     disputeOpen: false,
+    validationNoticeSentAt: null,
     createdAt: '2026-06-01T00:00:00Z',
     updatedAt: '2026-06-01T00:00:00Z',
   };

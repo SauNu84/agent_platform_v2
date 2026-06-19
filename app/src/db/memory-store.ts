@@ -928,6 +928,7 @@ export class MemoryStore implements Store {
       optedOut: input.optedOut ?? false,
       optedOutAt: existing?.optedOutAt ?? null,
       disputeOpen: input.disputeOpen ?? false,
+      validationNoticeSentAt: input.validationNoticeSentAt ?? existing?.validationNoticeSentAt ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
