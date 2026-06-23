@@ -11,10 +11,12 @@
  * converting", and they carry NO PHI and NO PII by construction (see the guard
  * below + the matching DB contract in migration 0024).
  *
- * Grounded in the WS2 archetype PRDs (SAU-347): Clinic Secretary, HRM Interview
- * Panel, Meeting Notetaker. Each archetype's journey is an ORDERED funnel whose
- * steps are event names; the read-model converts a step list + a window into a
- * conversion/activation/retention picture.
+ * Grounded in the WS2 archetype PRDs (SAU-347): Clinic Secretary and the HRM
+ * Interview Panel. (The Meeting Notetaker archetype was shelved — SAU-371/362
+ * cancelled per the SAU-352 design-partner rollback — and its inert taxonomy
+ * entries were stripped under SAU-380.) Each archetype's journey is an ORDERED
+ * funnel whose steps are event names; the read-model converts a step list + a
+ * window into a conversion/activation/retention picture.
  */
 
 /** The product surfaces an event can originate from (PRD modalities). */
@@ -22,7 +24,7 @@ export const SURFACES = ['web', 'voice', 'sms', 'batch', 'slack', 'email'] as co
 export type Surface = (typeof SURFACES)[number];
 
 /** The flagship archetypes (SAU-347) plus the cross-cutting platform bucket. */
-export const ARCHETYPES = ['platform', 'clinic', 'hrm', 'meeting', 'collections'] as const;
+export const ARCHETYPES = ['platform', 'clinic', 'hrm', 'collections'] as const;
 export type Archetype = (typeof ARCHETYPES)[number];
 
 /**
@@ -57,14 +59,6 @@ export const PRODUCT_EVENTS = {
   HRM_SESSION_COMPLETED: 'hrm.session.completed',
   HRM_ASSESSMENT_GENERATED: 'hrm.assessment.generated',
   HRM_ASSESSMENT_RATED: 'hrm.assessment.rated',
-
-  // ── Meeting Notetaker (meeting agent · async ingest → report) ─────────────
-  MEETING_SOURCE_CONNECTED: 'meeting.source.connected',
-  MEETING_INGEST_STARTED: 'meeting.ingest.started',
-  MEETING_SYNTHESIS_COMPLETED: 'meeting.synthesis.completed',
-  MEETING_REPORT_DELIVERED: 'meeting.report.delivered',
-  MEETING_REPORT_VIEWED: 'meeting.report.viewed',
-  MEETING_REPORT_RATED: 'meeting.report.rated',
 } as const;
 
 export type ProductEventName = (typeof PRODUCT_EVENTS)[keyof typeof PRODUCT_EVENTS];
@@ -121,18 +115,6 @@ export const JOURNEYS: Record<Exclude<Archetype, 'platform' | 'collections'>, Jo
       { event: PRODUCT_EVENTS.HRM_SESSION_COMPLETED, label: 'Ran a panel session' },
       { event: PRODUCT_EVENTS.HRM_ASSESSMENT_GENERATED, label: 'Got assessment', value: true },
       { event: PRODUCT_EVENTS.HRM_ASSESSMENT_RATED, label: 'Rated assessment' },
-    ],
-  },
-  meeting: {
-    archetype: 'meeting',
-    title: 'Meeting Notetaker',
-    cohort: 'actor',
-    steps: [
-      { event: PRODUCT_EVENTS.MEETING_SOURCE_CONNECTED, label: 'Connected a source', activation: true },
-      { event: PRODUCT_EVENTS.MEETING_INGEST_STARTED, label: 'Started ingest' },
-      { event: PRODUCT_EVENTS.MEETING_SYNTHESIS_COMPLETED, label: 'Got synthesis', value: true },
-      { event: PRODUCT_EVENTS.MEETING_REPORT_DELIVERED, label: 'Report delivered' },
-      { event: PRODUCT_EVENTS.MEETING_REPORT_RATED, label: 'Rated report' },
     ],
   },
 };
