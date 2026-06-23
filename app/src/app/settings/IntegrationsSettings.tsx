@@ -16,6 +16,9 @@ interface FieldSpec {
   placeholder: string;
   options?: { value: string; label: string }[];
   multi?: boolean;
+  optional?: boolean;
+  secret?: boolean;
+  help?: string;
 }
 
 interface IntegrationView {
@@ -125,7 +128,10 @@ function initialForm(iv: IntegrationView): Record<string, string | string[]> {
   const form: Record<string, string | string[]> = {};
   for (const f of iv.fields) {
     const v = iv.config[f.name];
-    if (f.multi) form[f.name] = Array.isArray(v) ? (v as string[]) : v != null ? [String(v)] : [];
+    // Secrets are never prefilled — the input stays blank; a blank submit keeps the
+    // stored value (the masked `••••last4` hint is shown beside the field instead).
+    if (f.secret) form[f.name] = '';
+    else if (f.multi) form[f.name] = Array.isArray(v) ? (v as string[]) : v != null ? [String(v)] : [];
     else form[f.name] = v != null ? String(v) : f.options?.[0]?.value ?? '';
   }
   return form;
@@ -201,18 +207,27 @@ function IntegrationCard({ initial, calendarOAuth }: { initial: IntegrationView;
       <div className="settings-integration-form">
         {iv.fields.map((f) => (
           <div className="settings-field" key={f.name}>
-            <label htmlFor={`${iv.id}-${f.name}`}>{f.label}</label>
+            <label htmlFor={`${iv.id}-${f.name}`}>
+              {f.label}
+              {f.optional && <span className="billing-muted"> (optional)</span>}
+            </label>
             {!f.options && (
               <input
                 id={`${iv.id}-${f.name}`}
-                type="text"
+                type={f.secret ? 'password' : 'text'}
+                autoComplete={f.secret ? 'off' : undefined}
                 className="settings-input"
-                placeholder={f.placeholder}
+                placeholder={
+                  f.secret && typeof iv.config[f.name] === 'string' && iv.config[f.name]
+                    ? `Saved ${iv.config[f.name]} — leave blank to keep`
+                    : f.placeholder
+                }
                 value={(form[f.name] as string) ?? ''}
                 onChange={(e) => setField(f.name, e.target.value)}
                 disabled={busy}
               />
             )}
+            {f.help && <p className="billing-muted settings-field-help">{f.help}</p>}
             {f.options && f.multi && (
               <div className="settings-options">
                 {f.options.map((o) => (

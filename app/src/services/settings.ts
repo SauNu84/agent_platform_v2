@@ -28,6 +28,7 @@
  */
 import type { Store, UserSettingRecord } from '@/db/store';
 import { encrypt, decryptIfEncrypted } from '@/lib/crypto';
+import type { PhoneIntegrationSetting } from '@/services/telephony';
 
 export class SettingsError extends Error {
   status: number;
@@ -316,6 +317,18 @@ interface IntegrationField {
   options?: { value: string; label: string }[];
   /** When true (with `options`), multiple values may be selected (checkboxes). */
   multi?: boolean;
+  /** When true the field may be left blank (not required to save the integration). */
+  optional?: boolean;
+  /**
+   * When true the value is a secret (e.g. a Twilio auth token): it is encrypted at
+   * rest (AES-256-GCM) and NEVER echoed back to the client — only a masked `…last4`
+   * hint surfaces in the view. A blank value on update preserves the stored secret.
+   */
+  secret?: boolean;
+  /** Helper text shown under the input (env-precedence notes, format hints, …). */
+  help?: string;
+  /** Optional format check for a non-empty value; return an error message or null. */
+  validate?: (value: string) => string | null;
 }
 
 interface IntegrationSpec {
@@ -330,8 +343,50 @@ export const INTEGRATIONS: IntegrationSpec[] = [
   {
     id: 'phone',
     title: 'Phone call',
-    description: 'Route practice calls over your own telephony by adding a SIP trunk.',
-    fields: [{ name: 'sipTrunkUri', label: 'SIP trunk URI', placeholder: 'sip:trunk@provider.example.com' }],
+    description:
+      'Route practice calls over your own telephony. Add a SIP trunk, or Twilio account ' +
+      'credentials to bridge inbound calls to the AI agent. Live dialing stays gated behind ' +
+      'the SAU-331 go-live gate (COLLECTIONS_LIVE_DIAL_CONFIRMED) regardless of saved creds.',
+    fields: [
+      {
+        name: 'sipTrunkUri',
+        label: 'SIP trunk URI',
+        placeholder: 'sip:trunk@provider.example.com',
+        optional: true,
+      },
+      {
+        name: 'twilioAccountSid',
+        label: 'Twilio Account SID',
+        placeholder: 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        optional: true,
+        help: 'Found in your Twilio Console. The TWILIO_ACCOUNT_SID env var, when set, overrides this.',
+        validate: (v) => (/^AC[0-9a-fA-F]{32}$/.test(v) ? null : 'Account SID must look like AC followed by 32 hex characters.'),
+      },
+      {
+        name: 'twilioAuthToken',
+        label: 'Twilio Auth Token',
+        placeholder: 'Your Twilio auth token',
+        optional: true,
+        secret: true,
+        help: 'Stored encrypted; never shown again. Used only to verify inbound webhook signatures. The TWILIO_AUTH_TOKEN env var overrides this.',
+      },
+      {
+        name: 'twilioPhoneNumber',
+        label: 'Twilio Phone Number',
+        placeholder: '+15551234567',
+        optional: true,
+        help: 'The provisioned number in E.164 format. The TWILIO_PHONE_NUMBER env var overrides this.',
+        validate: (v) => (/^\+[1-9]\d{6,14}$/.test(v) ? null : 'Phone number must be in E.164 format, e.g. +15551234567.'),
+      },
+      {
+        name: 'bridgePublicUrl',
+        label: 'Bridge public URL',
+        placeholder: 'wss://abc123.ngrok.io',
+        optional: true,
+        help: 'Public wss:// base of your media-stream bridge. The TELEPHONY_PUBLIC_URL env var overrides this. With no Twilio creds (here or in env), telephony falls back to a simulated mock.',
+        validate: (v) => (/^wss:\/\/.+/.test(v) ? null : 'Bridge URL must start with wss://'),
+      },
+    ],
   },
   {
     id: 'calendar',
@@ -373,26 +428,57 @@ const INTEGRATION_SPECS = new Map(INTEGRATIONS.map((s) => [s.id, s]));
 
 export type IntegrationStatus = 'not_connected' | 'configured';
 
+/** Client-safe field descriptor (the `validate` fn is server-only and stripped). */
+export interface IntegrationFieldView {
+  name: string;
+  label: string;
+  placeholder: string;
+  options?: { value: string; label: string }[];
+  multi?: boolean;
+  optional?: boolean;
+  secret?: boolean;
+  help?: string;
+}
+
 export interface IntegrationView {
   id: IntegrationId;
   title: string;
   description: string;
-  fields: IntegrationField[];
+  fields: IntegrationFieldView[];
   status: IntegrationStatus;
   /** Saved config values (echoed back to pre-fill the form). */
   config: Record<string, unknown>;
   updatedAt: string | null;
 }
 
+/** Mask a secret as a `…last4` hint — never the raw value. */
+function maskSecret(raw: string): string {
+  const plain = decryptIfEncrypted(raw);
+  return plain.length >= 4 ? `••••${plain.slice(-4)}` : '••••';
+}
+
+/** Drop the server-only `validate` fn so the spec is safe to send to the client. */
+function toFieldView(f: IntegrationField): IntegrationFieldView {
+  const { validate: _validate, ...view } = f;
+  void _validate;
+  return view;
+}
+
 function toView(spec: IntegrationSpec, rec: UserSettingRecord | null): IntegrationView {
   const status = rec?.value?.status === 'configured' ? 'configured' : 'not_connected';
   const config = rec ? { ...rec.value } : {};
   delete (config as Record<string, unknown>).status;
+  // Never echo a stored secret back in plaintext — replace it with a masked hint.
+  for (const field of spec.fields) {
+    if (field.secret && typeof config[field.name] === 'string' && config[field.name]) {
+      config[field.name] = maskSecret(config[field.name] as string);
+    }
+  }
   return {
     id: spec.id,
     title: spec.title,
     description: spec.description,
-    fields: spec.fields,
+    fields: spec.fields.map(toFieldView),
     status,
     config,
     updatedAt: rec?.updatedAt ?? null,
@@ -415,24 +501,87 @@ export async function configureIntegration(
   const spec = INTEGRATION_SPECS.get(id as IntegrationId);
   if (!spec) throw new SettingsError(`Unknown integration: ${id}`, 404);
 
+  // Existing record — used to carry forward a secret the user didn't re-enter.
+  const existing = await store.getUserSetting(userId, integrationKey(spec.id));
+  const prior = (existing?.value ?? {}) as Record<string, unknown>;
+
   const config: Record<string, unknown> = {};
+  let provided = 0;
   for (const field of spec.fields) {
     const raw = rawConfig[field.name];
     if (field.options) {
       // Multi/single select against the allowed option values.
       const values = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
       const cleaned = values.filter((v) => field.options!.some((o) => o.value === v));
-      if (cleaned.length === 0) throw new SettingsError(`Select at least one option for "${field.label}".`);
+      if (cleaned.length === 0) {
+        if (field.optional) continue;
+        throw new SettingsError(`Select at least one option for "${field.label}".`);
+      }
       config[field.name] = cleaned.length === 1 && !Array.isArray(raw) ? cleaned[0] : cleaned;
-    } else {
-      const value = typeof raw === 'string' ? raw.trim() : '';
-      if (!value) throw new SettingsError(`"${field.label}" is required.`);
-      config[field.name] = value;
+      provided++;
+      continue;
     }
+
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (field.secret) {
+      // Blank (or the masked hint we echoed) ⇒ keep the previously stored ciphertext.
+      const isMaskedEcho = value.startsWith('••••');
+      if (!value || isMaskedEcho) {
+        if (typeof prior[field.name] === 'string' && prior[field.name]) {
+          config[field.name] = prior[field.name];
+          provided++;
+        } else if (!field.optional) {
+          throw new SettingsError(`"${field.label}" is required.`);
+        }
+        continue;
+      }
+      const err = field.validate?.(value);
+      if (err) throw new SettingsError(err);
+      config[field.name] = encrypt(value); // encrypt at rest — plaintext never hits the DB
+      provided++;
+      continue;
+    }
+
+    if (!value) {
+      if (field.optional) continue;
+      throw new SettingsError(`"${field.label}" is required.`);
+    }
+    const err = field.validate?.(value);
+    if (err) throw new SettingsError(err);
+    config[field.name] = value;
+    provided++;
+  }
+
+  // An all-optional integration still needs at least one value to be "configured".
+  if (provided === 0) {
+    throw new SettingsError(`Enter at least one value to connect "${spec.title}".`);
   }
 
   const rec = await store.putUserSetting(userId, integrationKey(spec.id), { ...config, status: 'configured' });
   return toView(spec, rec);
+}
+
+/**
+ * Load the saved `integration:phone` user_setting as a {@link PhoneIntegrationSetting}
+ * for the telephony factory ({@link resolveTwilioConfig}). The auth token is decrypted
+ * here (server-side only) so the live adapter can verify webhook signatures. Returns
+ * null when the phone integration isn't configured. Env vars still take precedence —
+ * that ordering lives in `resolveTwilioConfig`, not here.
+ */
+export async function getPhoneIntegrationSetting(
+  store: Store,
+  userId: string,
+): Promise<PhoneIntegrationSetting | null> {
+  const rec = await store.getUserSetting(userId, integrationKey('phone'));
+  const v = rec?.value as Record<string, unknown> | undefined;
+  if (!v || v.status !== 'configured') return null;
+  const setting: PhoneIntegrationSetting = { status: 'configured' };
+  if (typeof v.sipTrunkUri === 'string') setting.sipTrunkUri = v.sipTrunkUri;
+  if (typeof v.twilioAccountSid === 'string') setting.twilioAccountSid = v.twilioAccountSid;
+  if (typeof v.twilioAuthToken === 'string') setting.twilioAuthToken = decryptIfEncrypted(v.twilioAuthToken);
+  if (typeof v.twilioPhoneNumber === 'string') setting.twilioPhoneNumber = v.twilioPhoneNumber;
+  if (typeof v.bridgePublicUrl === 'string') setting.bridgePublicUrl = v.bridgePublicUrl;
+  return setting;
 }
 
 export async function disconnectIntegration(store: Store, userId: string, id: string): Promise<IntegrationView> {
