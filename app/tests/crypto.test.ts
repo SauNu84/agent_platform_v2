@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encrypt, decrypt, isEncrypted, decryptIfEncrypted } from '@/lib/crypto';
+import { encrypt, decrypt, isEncrypted, decryptIfEncrypted, tryDecryptIfEncrypted } from '@/lib/crypto';
 import { reencryptStoredKey } from '@/db/migrate-encrypt-model-keys';
 
 /** The shape SAU-261 / the CISO regression check asserts: three base64 segments. */
@@ -58,6 +58,25 @@ test('decryptIfEncrypted passes legacy plaintext through unchanged', () => {
   const plain = 'sk-legacy-plaintext-key-0123456789';
   assert.equal(decryptIfEncrypted(plain), plain);
   assert.equal(decryptIfEncrypted(encrypt(plain)), plain);
+});
+
+test('tryDecryptIfEncrypted: passes plaintext, decrypts ciphertext, returns null on undecryptable', () => {
+  const plain = 'sk-legacy-plaintext-key-0123456789';
+  // Legacy plaintext passes through unchanged.
+  assert.equal(tryDecryptIfEncrypted(plain), plain);
+  // Valid ciphertext round-trips.
+  assert.equal(tryDecryptIfEncrypted(encrypt(plain)), plain);
+
+  // Undecryptable ciphertext (simulating a rotated key / tampered row) → null,
+  // NOT a throw — this is the SAU-382 fix that keeps the settings page rendering.
+  const ct = encrypt('secret-encrypted-under-another-key');
+  const [iv, body, tag] = ct.split(':');
+  const buf = Buffer.from(body, 'base64');
+  buf[0] ^= 0xff; // flip a byte so the GCM auth tag fails
+  const tampered = `${iv}:${buf.toString('base64')}:${tag}`;
+  assert.equal(isEncrypted(tampered), true, 'still has ciphertext wire shape');
+  assert.throws(() => decryptIfEncrypted(tampered), 'strict variant still throws');
+  assert.equal(tryDecryptIfEncrypted(tampered), null, 'fail-soft variant returns null');
 });
 
 test('reencryptStoredKey: encrypts plaintext, skips ciphertext, skips empty', () => {

@@ -15,7 +15,7 @@
  * a later refinement; for the synthetic demo the operator is the clinic.
  */
 import type { Store } from '@/db/store';
-import { encrypt, decryptIfEncrypted } from '@/lib/crypto';
+import { encrypt, tryDecryptIfEncrypted } from '@/lib/crypto';
 import { readGoogleOAuthConfig, resolveRedirectUri, type GoogleOAuthConfig } from './google-oauth';
 
 /** user_setting key for the stored Google OAuth app credentials. */
@@ -50,7 +50,12 @@ function maskClientId(clientId: string): string {
   return `…${tail}`;
 }
 
-/** Read + decrypt the stored OAuth app credentials, or null when none/invalid. */
+/**
+ * Read + decrypt the stored OAuth app credentials, or null when none/invalid.
+ * Fail-soft: an undecryptable secret (SETTINGS_ENCRYPTION_KEY rotated/mismatched or
+ * a tampered row) reads as null — the connect flow degrades to "not configured"
+ * rather than throwing and crashing the settings page.
+ */
 export async function readStoredGoogleOAuthConfig(store: Store, userId: string): Promise<GoogleOAuthConfig | null> {
   if (!userId) return null;
   const rec = await store.getUserSetting(userId, GOOGLE_OAUTH_APP_KEY);
@@ -58,7 +63,7 @@ export async function readStoredGoogleOAuthConfig(store: Store, userId: string):
   const clientId = typeof value?.clientId === 'string' ? value.clientId.trim() : '';
   const rawSecret = typeof value?.clientSecret === 'string' ? value.clientSecret : '';
   if (!clientId || !rawSecret) return null;
-  const clientSecret = decryptIfEncrypted(rawSecret);
+  const clientSecret = tryDecryptIfEncrypted(rawSecret);
   if (!clientSecret) return null;
   return { clientId, clientSecret };
 }

@@ -116,6 +116,24 @@ export function decryptIfEncrypted(value: string): string {
 }
 
 /**
+ * Fail-soft variant of {@link decryptIfEncrypted}: returns `null` when the value is
+ * ciphertext that can't be authenticated/decrypted — e.g. the SETTINGS_ENCRYPTION_KEY
+ * was rotated (or a dev key was swapped for a prod one), or the row was tampered.
+ * Legacy plaintext passes through unchanged. Read paths that merely surface OPTIONAL
+ * stored secrets use this so one undecryptable row degrades to "not configured"
+ * instead of throwing and crashing the whole page render. (Same fail-soft policy
+ * already applied to the calendar OAuth token blob in calendar-connection.ts.)
+ */
+export function tryDecryptIfEncrypted(value: string): string | null {
+  if (!isEncrypted(value)) return value;
+  try {
+    return decrypt(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Keyed integrity tag (HMAC-SHA256, base64) over `message`, under the same
  * platform key as {@link encrypt}. Used by the PHI access log (SAU-275) to make
  * each append-only audit row tamper-evident: the row's content is HMAC'd at write

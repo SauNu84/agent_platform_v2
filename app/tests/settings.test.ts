@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '@/db/memory-store';
+import { encrypt } from '@/lib/crypto';
 import {
   SUPPORTED_LANGUAGES,
   DEFAULT_LANGUAGE,
@@ -156,6 +157,26 @@ test('removing a key clears it; gemini falls back to the legacy slot then is ful
   assert.equal(await getModelApiKeyRaw(store, USER, 'gemini'), null);
 });
 
+test('SAU-382: a key encrypted under a different SETTINGS_ENCRYPTION_KEY reads as not-configured, not a crash', async () => {
+  const store = new MemoryStore();
+  // Simulate a row written under a now-rotated/mismatched key: valid ciphertext
+  // wire-shape, but the GCM auth tag fails under the current key (flip a byte).
+  const ct = encrypt(OPENAI_KEY);
+  const [iv, body, tag] = ct.split(':');
+  const buf = Buffer.from(body, 'base64');
+  buf[0] ^= 0xff;
+  const undecryptable = `${iv}:${buf.toString('base64')}:${tag}`;
+  await store.putUserSetting(USER, 'model_api_key:openai', { key: undecryptable });
+
+  // The settings page render path (listModelApiKeys) must NOT throw.
+  const views = await listModelApiKeys(store, USER);
+  const openai = views.find((v) => v.provider === 'openai')!;
+  assert.equal(openai.configured, false);
+  assert.equal(openai.last4, null);
+  // Server-side raw read also degrades to null rather than throwing.
+  assert.equal(await getModelApiKeyRaw(store, USER, 'openai'), null);
+});
+
 test('getModelApiKeyRaw with an empty userId is null (never leaks across no-actor)', async () => {
   const store = new MemoryStore();
   assert.equal(await getModelApiKeyRaw(store, '', 'gemini'), null);
@@ -221,6 +242,35 @@ test('SAU-381: saving Twilio creds encrypts the token, masks on reload, never ec
   // Reload masks too.
   const reloaded = (await listIntegrations(store, USER)).find((i) => i.id === 'phone')!;
   assert.equal(reloaded.config.twilioAuthToken, '••••1234');
+});
+
+test('SAU-382: an undecryptable Twilio token degrades gracefully (mask + omitted), not a crash', async () => {
+  const store = new MemoryStore();
+  // Store a phone integration whose token is ciphertext that won't authenticate
+  // under the current key (rotated/mismatched key); flip a byte in the body.
+  const ct = encrypt('super-secret-token-1234');
+  const [iv, body, tag] = ct.split(':');
+  const buf = Buffer.from(body, 'base64');
+  buf[0] ^= 0xff;
+  const undecryptable = `${iv}:${buf.toString('base64')}:${tag}`;
+  await store.putUserSetting(USER, 'integration:phone', {
+    status: 'configured',
+    twilioAccountSid: VALID_SID,
+    twilioAuthToken: undecryptable,
+    twilioPhoneNumber: '+15551234567',
+  });
+
+  // The settings render path (listIntegrations → maskSecret) must NOT throw.
+  const phone = (await listIntegrations(store, USER)).find((i) => i.id === 'phone')!;
+  assert.equal(phone.status, 'configured');
+  assert.equal(phone.config.twilioAuthToken, '••••'); // generic mask, no crash
+
+  // The server-side read omits the unreadable token rather than throwing.
+  await withEnv(TWILIO_ENV_KEYS, async () => {
+    const setting = await getPhoneIntegrationSetting(store, USER);
+    assert.equal(setting!.twilioAuthToken, undefined);
+    assert.equal(setting!.twilioAccountSid, VALID_SID);
+  });
 });
 
 test('SAU-381: re-saving with a blank auth token preserves the stored secret', async () => {

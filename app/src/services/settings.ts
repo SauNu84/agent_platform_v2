@@ -27,7 +27,7 @@
  * SAU-261) — no plaintext key survives a round-trip through the DB.
  */
 import type { Store, UserSettingRecord } from '@/db/store';
-import { encrypt, decryptIfEncrypted } from '@/lib/crypto';
+import { encrypt, tryDecryptIfEncrypted } from '@/lib/crypto';
 import type { PhoneIntegrationSetting } from '@/services/telephony';
 
 export class SettingsError extends Error {
@@ -223,10 +223,14 @@ export async function validateModelApiKey(provider: ModelProvider, key: string):
  * Values written by {@link saveModelApiKey} are AES-256-GCM ciphertext; legacy /
  * not-yet-migrated rows may still be plaintext, which we pass through unchanged so
  * the read path stays back-compatible until migration 0014 runs.
+ *
+ * Fail-soft: a stored key that can't be decrypted (SETTINGS_ENCRYPTION_KEY rotated /
+ * mismatched, or a tampered row) reads as "" so the provider shows as not-configured
+ * and the user can re-enter it — rather than throwing and crashing the settings page.
  */
 function readStoredKey(rec: UserSettingRecord | null): string {
   const raw = typeof rec?.value?.key === 'string' ? (rec.value.key as string) : '';
-  return raw ? decryptIfEncrypted(raw) : '';
+  return raw ? (tryDecryptIfEncrypted(raw) ?? '') : '';
 }
 
 function toModelKeyView(spec: ModelProviderSpec, rec: UserSettingRecord | null): ModelKeyView {
@@ -453,7 +457,9 @@ export interface IntegrationView {
 
 /** Mask a secret as a `…last4` hint — never the raw value. */
 function maskSecret(raw: string): string {
-  const plain = decryptIfEncrypted(raw);
+  // Fail-soft: an undecryptable secret (key rotated/mismatched) still renders a
+  // generic mask rather than throwing and crashing the settings page (SAU-382).
+  const plain = tryDecryptIfEncrypted(raw) ?? '';
   return plain.length >= 4 ? `••••${plain.slice(-4)}` : '••••';
 }
 
@@ -578,7 +584,12 @@ export async function getPhoneIntegrationSetting(
   const setting: PhoneIntegrationSetting = { status: 'configured' };
   if (typeof v.sipTrunkUri === 'string') setting.sipTrunkUri = v.sipTrunkUri;
   if (typeof v.twilioAccountSid === 'string') setting.twilioAccountSid = v.twilioAccountSid;
-  if (typeof v.twilioAuthToken === 'string') setting.twilioAuthToken = decryptIfEncrypted(v.twilioAuthToken);
+  // Fail-soft: an undecryptable token (key rotated/mismatched) is omitted so the
+  // adapter degrades to env/not-configured instead of throwing (SAU-382).
+  if (typeof v.twilioAuthToken === 'string') {
+    const token = tryDecryptIfEncrypted(v.twilioAuthToken);
+    if (token) setting.twilioAuthToken = token;
+  }
   if (typeof v.twilioPhoneNumber === 'string') setting.twilioPhoneNumber = v.twilioPhoneNumber;
   if (typeof v.bridgePublicUrl === 'string') setting.bridgePublicUrl = v.bridgePublicUrl;
   return setting;
