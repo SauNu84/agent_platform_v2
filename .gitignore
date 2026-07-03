@@ -21,6 +21,11 @@ build/
 .idea/
 .vscode/
 
+# Agent scratch — Claude Code worktrees & local agent config live outside product code.
+# (Reusable skills for continuing this project live in the agent home / claude-skills repo,
+# not in-repo; see PLAN.md → "Continuing development".)
+.claude/
+
 # Generated demo/audio fixtures (regenerated locally; real audio supplied out-of-band)
 **/fixtures/driver.wav
 **/coach/coach-driver.wav
