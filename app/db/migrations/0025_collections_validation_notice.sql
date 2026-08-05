@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 0024 — Collections F2 (SAU-356): per-debtor §1692g validation-notice
+-- Migration 0025 — Collections F2 (SAU-356): per-debtor §1692g validation-notice
 --                   tracking. Finding F2 from the SAU-353 gate verification.
 -- ----------------------------------------------------------------------------
 -- The dispute-PAUSE half of §6 #9 was already enforced (debtor.dispute_open →
@@ -12,6 +12,10 @@
 -- (validation_notice_sent_at + 30d), not stored — single source of truth, no
 -- drift. Expand-contract + idempotent (IF NOT EXISTS), forward-only runner.
 -- No RLS change: debtor's existing lender(clinic)-tenant policy already covers it.
+--
+-- Renumbered 0024 -> 0025 during the SAU-504 landing: this branch forked at
+-- b0a19c6, and main independently took 0024_product_event.sql (SAU-350). The
+-- runner sorts by filename, so two 0024s would apply in an ambiguous order.
 -- ============================================================================
 
 ALTER TABLE debtor
