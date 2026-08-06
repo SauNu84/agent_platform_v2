@@ -26,6 +26,7 @@ import {
   type CallAttempt,
   type TenantCollectionsConfig,
 } from '@/domain/collections-engine';
+import { loadTenantCollectionsConfig } from '@/services/collections-policy';
 
 /** Per-debtor cadence + next-eligible-dial row for the dashboard. */
 export interface DebtorCadenceRow {
@@ -113,14 +114,23 @@ function toCallAttempts(attempts: CallAttemptRecord[]): CallAttempt[] {
     .filter((a) => Number.isFinite(a.atMs));
 }
 
-/** Build the per-tenant dashboard metrics. `nowMs` anchors the next-eligible-dial math. */
+/**
+ * Build the per-tenant dashboard metrics. `nowMs` anchors the next-eligible-dial math.
+ *
+ * `config` is OPTIONAL and, when omitted, is LOADED FROM THE STORE for this tenant
+ * (SAU-521 AC 3) — the same `loadTenantCollectionsConfig` the dialer uses. That shared
+ * load is the point: before SAU-521 this defaulted to `{}`, so the dashboard computed
+ * "next eligible dial" under a policy nobody was actually dialing under. Pass `config`
+ * explicitly only to pin a policy in tests.
+ */
 export async function getCollectionsDashboard(
   store: Store,
   clinicId: string,
   nowMs: number,
-  config: TenantCollectionsConfig = {},
+  config?: TenantCollectionsConfig,
   recentAuditLimit = 25,
 ): Promise<CollectionsDashboardMetrics> {
+  const effectiveConfig = config ?? (await loadTenantCollectionsConfig(store, clinicId));
   const debtors = await store.listDebtorsForClinic(clinicId);
   const allAttempts = await store.listCallAttemptsForClinic(clinicId);
   const auditLog = await store.listCollectionsAudit({ clinicId, limit: 500 });
@@ -136,7 +146,7 @@ export async function getCollectionsDashboard(
   const cadence: DebtorCadenceRow[] = debtors.map((d: Debtor) => {
     const attemptsForDebtor = (byDebtor.get(d.id) ?? []).slice().sort((x, y) => y.attemptedAt.localeCompare(x.attemptedAt));
     const placed = attemptsForDebtor.filter((a) => outcomeWasPlaced(a.outcome));
-    const next = nextEligibleDial(d, nowMs, { attempts: toCallAttempts(attemptsForDebtor), config });
+    const next = nextEligibleDial(d, nowMs, { attempts: toCallAttempts(attemptsForDebtor), config: effectiveConfig });
     return {
       debtorId: d.id,
       externalRef: d.externalRef,

@@ -30,6 +30,7 @@ import type {
 } from './store';
 import type {
   Debtor, DebtorPii, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
+  CollectionsPolicyRecord, CollectionsPolicyInput,
 } from '@/domain/collections';
 import type { NewCallAttempt, CallAttemptRecord } from '@/domain/collections-outcome';
 import { outcomeHadConversation } from '@/domain/collections-outcome';
@@ -226,6 +227,20 @@ function rowToPhiAccess(r: Row): PhiAccessRecord {
     clinicId: r.clinic_id ?? null,
     refs: (r.refs ?? {}) as Record<string, unknown>,
     integrity: r.integrity,
+  };
+}
+
+function rowToCollectionsPolicy(r: Row): CollectionsPolicyRecord {
+  return {
+    clinicId: r.clinic_id,
+    // Postgres text[] arrives as a JS array via node-pg; normalise anyway so a null
+    // column (possible only if the NOT NULL default were ever dropped) reads as "not
+    // configured" rather than throwing — the safe direction under SAU-521.
+    allowedStates: Array.isArray(r.allowed_states) ? r.allowed_states : [],
+    stateCaps: (r.state_caps ?? {}) as CollectionsPolicyRecord['stateCaps'],
+    updatedBy: r.updated_by ?? null,
+    createdAt: new Date(r.created_at).toISOString(),
+    updatedAt: new Date(r.updated_at).toISOString(),
   };
 }
 
@@ -1540,6 +1555,33 @@ export class PgStore implements Store {
   async getDebtor(id: string): Promise<Debtor | null> {
     const { rows } = await this.q('SELECT * FROM debtor WHERE id = $1', [id]);
     return rows[0] ? rowToDebtor(rows[0]) : null;
+  }
+
+  // ── Per-lender collections policy (SAU-521) — migration 0026 ────────────────
+  async getCollectionsPolicy(clinicId: string): Promise<CollectionsPolicyRecord | null> {
+    const { rows } = await this.q('SELECT * FROM collections_policy WHERE clinic_id = $1', [clinicId]);
+    return rows[0] ? rowToCollectionsPolicy(rows[0]) : null;
+  }
+
+  async upsertCollectionsPolicy(input: CollectionsPolicyInput): Promise<CollectionsPolicyRecord> {
+    // COALESCE-on-null keeps this a partial update: a caller editing only the caps must
+    // not silently wipe the allow-list (which, post-SAU-521, would stop the tenant dead).
+    const { rows } = await this.q(
+      `INSERT INTO collections_policy (clinic_id, allowed_states, state_caps, updated_by)
+       VALUES ($1, COALESCE($2::text[], '{}'::text[]), COALESCE($3::jsonb, '{}'::jsonb), $4)
+       ON CONFLICT (clinic_id) DO UPDATE SET
+         allowed_states = COALESCE($2::text[], collections_policy.allowed_states),
+         state_caps     = COALESCE($3::jsonb,  collections_policy.state_caps),
+         updated_by     = COALESCE($4, collections_policy.updated_by)
+       RETURNING *`,
+      [
+        input.clinicId,
+        input.allowedStates ?? null,
+        input.stateCaps ? JSON.stringify(input.stateCaps) : null,
+        input.updatedBy ?? null,
+      ],
+    );
+    return rowToCollectionsPolicy(rows[0]);
   }
 
   async getDebtorByRef(clinicId: string, externalRef: string): Promise<Debtor | null> {

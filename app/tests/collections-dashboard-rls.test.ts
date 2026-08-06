@@ -54,6 +54,12 @@ test('per-lender dashboard isolation + outcome persistence + next-eligible dial 
 
     // ── Lender A: 3 debtors + attempts (one placed, one opted-out, one blocked) ──
     await runWithActor({ userId: '', isAdmin: false, clinicId: ids.lenderA! }, async () => {
+      // SAU-521 AC 3: configure the tenant's licensing policy in the STORE. The dashboard
+      // is then called with NO explicit config below, so this test also proves it LOADS
+      // the persisted policy — before SAU-521 it silently defaulted to `{}` and reported
+      // "next eligible" under a policy the dialer was not using.
+      await store.upsertCollectionsPolicy({ clinicId: ids.lenderA!, allowedStates: ['NY'] });
+
       const ok = await store.upsertDebtor({
         clinicId: ids.lenderA!, externalRef: 'A-OK', name: 'Ann Able', phone: '+12125550101',
         balanceCents: 5000, timezone: 'America/New_York', state: 'NY', consent: true,
@@ -75,6 +81,8 @@ test('per-lender dashboard isolation + outcome persistence + next-eligible dial 
 
     // ── Lender B: one unrelated debtor + attempt ──
     await runWithActor({ userId: '', isAdmin: false, clinicId: ids.lenderB! }, async () => {
+      await store.upsertCollectionsPolicy({ clinicId: ids.lenderB!, allowedStates: ['CA'] });
+
       const d = await store.upsertDebtor({
         clinicId: ids.lenderB!, externalRef: 'B-1', name: 'Dave Dunn', phone: '+14155550201',
         balanceCents: 8000, timezone: 'America/Los_Angeles', state: 'CA', consent: true,

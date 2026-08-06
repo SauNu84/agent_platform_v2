@@ -29,6 +29,10 @@
  * and the IANA timezone check. Persistence (encryption, RLS, audit) is the store's job.
  */
 
+// Type-only (erased at compile time), so this does NOT create a runtime import cycle
+// with collections-engine, which imports `isValidTimeZone` back out of this module.
+import type { StateCallCap } from '@/domain/collections-engine';
+
 // ── Debtor record (the WS-1 contract) ───────────────────────────────────────
 
 /** PII fields, held together in one AES-256-GCM envelope at rest (lib/phi). */
@@ -145,6 +149,46 @@ export interface CollectionsAuditFilter {
   debtorRef?: string;
   eventType?: CollectionsAuditEventType;
   limit?: number;
+}
+
+// ── Per-lender collections policy (SAU-521, migration 0026) ─────────────────
+
+/**
+ * The persisted, per-lender operating policy that backs `TenantCollectionsConfig`
+ * (domain/collections-engine). Before SAU-521 this object had no storage at all, so
+ * `allowedStates` was unreachable in production and the engine's licensing gate could
+ * never fire. This is the record; `services/collections-policy` is the loader.
+ *
+ * These are the tenant's own limits, not PII and not secrets — stored plaintext so a
+ * compliance reviewer can read them straight out of the table.
+ */
+export interface CollectionsPolicyRecord {
+  /** Owning lender/tenant id (the `clinic` tenant primitive). One policy per lender. */
+  clinicId: string;
+  /**
+   * USPS 2-letter codes this lender is licensed to collect in, uppercase.
+   * EMPTY means NOT CONFIGURED — every dial is blocked `licensing_unconfigured`.
+   * It does NOT mean "unrestricted". Values are counsel's call (SAU-354 §9 Q3).
+   */
+  allowedStates: string[];
+  /**
+   * Stricter-only per-state frequency caps, keyed by 2-letter state code. The federal
+   * Reg-F 7-in-7 is a hard constant that fires beneath these regardless, which is why an
+   * empty map here is safe and an empty {@link allowedStates} is not.
+   */
+  stateCaps: Record<string, StateCallCap>;
+  /** User who last edited the policy, when known (not an FK — users outlive/predecease policies). */
+  updatedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Fields accepted when writing a lender's policy. Absent keys are left unchanged. */
+export interface CollectionsPolicyInput {
+  clinicId: string;
+  allowedStates?: string[];
+  stateCaps?: Record<string, StateCallCap>;
+  updatedBy?: string | null;
 }
 
 // ── Synthetic-list ingestion (CSV/JSON) ─────────────────────────────────────

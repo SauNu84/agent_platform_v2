@@ -20,6 +20,7 @@ import type {
 } from './store';
 import type {
   Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
+  CollectionsPolicyRecord, CollectionsPolicyInput,
 } from '@/domain/collections';
 import type { NewCallAttempt, CallAttemptRecord } from '@/domain/collections-outcome';
 import { outcomeHadConversation } from '@/domain/collections-outcome';
@@ -64,6 +65,7 @@ export class MemoryStore implements Store {
   private phiAccess: PhiAccessRecord[] = [];                  // append-only (SAU-275)
   private productEvents: ProductEventRecord[] = [];           // append-only (SAU-350)
   private debtors = new Map<string, Debtor>();                // by id (SAU-333 WS-2)
+  private collectionsPolicies = new Map<string, CollectionsPolicyRecord>(); // by clinicId (SAU-521)
   private collectionsAudit: CollectionsAuditRecord[] = [];    // append-only, HMAC-chained (SAU-333)
   private callAttempts: CallAttemptRecord[] = [];             // per-attempt outcomes (SAU-335 WS-4)
   private shareLinks = new Map<string, ShareLinkRecord>();    // by code
@@ -968,6 +970,31 @@ export class MemoryStore implements Store {
 
   async getDebtor(id: string): Promise<Debtor | null> {
     return this.debtors.get(id) ?? null;
+  }
+
+  // ── Per-lender collections policy (SAU-521) ────────────────────────────────
+  // NOTE: no RLS here — this store is a single-tenant test double. Cross-tenant
+  // isolation for this table is proven against real Postgres as app_rw in
+  // tests/collections-policy-rls.test.ts, never here.
+  async getCollectionsPolicy(clinicId: string): Promise<CollectionsPolicyRecord | null> {
+    return this.collectionsPolicies.get(clinicId) ?? null;
+  }
+
+  async upsertCollectionsPolicy(input: CollectionsPolicyInput): Promise<CollectionsPolicyRecord> {
+    const existing = this.collectionsPolicies.get(input.clinicId);
+    const now = nowIso();
+    const rec: CollectionsPolicyRecord = {
+      clinicId: input.clinicId,
+      // Absent (undefined) means "leave alone" — mirrors the COALESCE in PgStore, so a
+      // caps-only edit cannot silently clear the allow-list and stop the tenant dead.
+      allowedStates: input.allowedStates ?? existing?.allowedStates ?? [],
+      stateCaps: input.stateCaps ?? existing?.stateCaps ?? {},
+      updatedBy: input.updatedBy ?? existing?.updatedBy ?? null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.collectionsPolicies.set(rec.clinicId, rec);
+    return rec;
   }
 
   async getDebtorByRef(clinicId: string, externalRef: string): Promise<Debtor | null> {

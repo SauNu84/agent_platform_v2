@@ -37,6 +37,10 @@ import {
   type OutboundDialer,
   type OutboundCallResult,
 } from '@/services/telephony/outbound-origination';
+import {
+  loadTenantCollectionsConfig,
+  assertCollectionsGoLiveReady,
+} from '@/services/collections-policy';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -44,7 +48,14 @@ export interface CollectionsDialerDeps {
   store: Store;
   /** Origination backend; defaults to the env-resolved dialer (mock unless go-live). */
   origination?: OutboundDialer;
-  /** Per-tenant policy (stricter-only). Passed straight to `canDialNow`. */
+  /**
+   * Per-tenant policy. Passed straight to `canDialNow`.
+   *
+   * Construct via {@link createTenantDialer} rather than setting this by hand: that
+   * factory loads the tenant's PERSISTED policy (SAU-521 AC 3). Omitting it here does
+   * NOT mean "no restrictions" — post-SAU-521 an absent/empty `allowedStates` makes the
+   * engine block every debtor with `licensing_unconfigured`.
+   */
   config?: TenantCollectionsConfig;
   /** Injectable clock for deterministic tests. */
   now?: () => number;
@@ -224,6 +235,43 @@ export class CollectionsDialer {
     });
     return rows.map(toCallAttempt);
   }
+}
+
+/**
+ * Build a dialer for ONE lender tenant with that tenant's PERSISTED policy loaded
+ * (SAU-521 AC 3) — the production construction path.
+ *
+ * Two things happen here that a bare `new CollectionsDialer(...)` cannot do:
+ *
+ *  1. **The policy is loaded, not assumed.** Before SAU-521 every production call site
+ *     passed no `config` at all, so `allowedStates` was permanently undefined and the
+ *     licensing gate was unreachable. The dashboard loads through the same function, so
+ *     its "next eligible dial" and this dialer's decisions cannot drift apart.
+ *
+ *  2. **Live origination is preflighted.** When the resolved backend is NOT the
+ *     simulated one — i.e. we are actually about to place real calls — an unconfigured
+ *     tenant is refused HERE, with a remediation message, rather than surfacing as a
+ *     queue that silently dials nobody. The mock path deliberately skips the preflight
+ *     so synthetic/POC runs and tests still exercise the engine's own block.
+ *
+ * The preflight is the early warning, NOT the control: `canDialNow` re-checks on every
+ * single dial, so a tenant whose allow-list is cleared after this factory ran is still
+ * blocked. Both layers are required (SAU-521 AC 4).
+ */
+export async function createTenantDialer(
+  deps: Omit<CollectionsDialerDeps, 'config'> & { clinicId: string },
+): Promise<CollectionsDialer> {
+  const { clinicId, ...rest } = deps;
+  const origination = rest.origination ?? resolveOutboundDialer();
+
+  if (!origination.simulated) {
+    // Real vendor + go-live confirmed: refuse to stand up a live dialer for a tenant
+    // with no licensing allow-list. Throws CollectionsPolicyError (409).
+    await assertCollectionsGoLiveReady(rest.store, clinicId);
+  }
+
+  const config = await loadTenantCollectionsConfig(rest.store, clinicId);
+  return new CollectionsDialer({ ...rest, origination, config });
 }
 
 /** Map an audit `call_outcome` row to a WS-1 `CallAttempt`. */

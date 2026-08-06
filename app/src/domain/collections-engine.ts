@@ -101,15 +101,31 @@ export interface TenantCollectionsConfig {
   /**
    * State licensing allow-list (SAU-330 §4 / §8 item 2) — the 2-letter state codes this
    * tenant is licensed to collect in. The *values* are counsel's call (SAU-354 §9 Q3);
-   * this field is the enforcement SEAM only.
+   * this field is the enforcement seam only, and it ships EMPTY.
    *
-   * Semantics (default-deny / fail-closed): when a NON-EMPTY allow-list is configured, a
-   * debtor whose `state` is not in it — including `null`/unknown — is hard-BLOCKED with
-   * `state_not_licensed`, a PERMANENT block (the debtor's state must change, like
-   * opt-out/consent/dispute). An ABSENT or EMPTY list disables the gate and preserves the
-   * prior behavior (no state-licensing block): the gate is opt-in, so a half-configured
-   * tenant is never silently allowed-through OR silently suppressed-entirely. A tenant
-   * licensed in zero states must not enable this seam at all.
+   * Semantics — fail-closed in BOTH directions (SAU-521). This field is NOT optional in
+   * effect: it is the one control in this engine with no floor beneath it, so there is no
+   * safe "unconfigured" state.
+   *
+   *   • CONFIGURED (non-empty): a debtor whose `state` is not in the list — including
+   *     `null`/unknown — is hard-BLOCKED with `state_not_licensed`.
+   *   • ABSENT or EMPTY: EVERY debtor is hard-BLOCKED with `licensing_unconfigured`.
+   *     A tenant with no allow-list is not "ungated", it is "not cleared to dial".
+   *
+   * Both are PERMANENT blocks (waiting changes nothing), and the two codes are kept
+   * distinct on purpose so an operator can tell a *stopped* queue (nobody configured
+   * this tenant) from a *filtered* one (this debtor is out of area).
+   *
+   * Why the engine and not just an onboarding preflight: a preflight is a point-in-time
+   * check on a property that must hold continuously. It cannot cover a tenant that passes
+   * onboarding and later has its allow-list cleared by a settings edit, a migration, a
+   * restore, or a bug. The engine is the single decision point every present and future
+   * call site inherits for free.
+   *
+   * Scope note: this treatment is deliberately NOT generalized to `stateCaps` or
+   * `holidays`. Those are stricter-only layers sitting above an enforced floor (the
+   * hard-constant Reg-F 7-in-7, and DEFAULT_US_HOLIDAYS respectively), so unconfigured is
+   * already safe for them. Only `allowedStates` has nothing underneath it.
    */
   allowedStates?: string[];
 }
@@ -126,6 +142,7 @@ export type DialBlockCode =
   | 'no_consent' // no prior-express-consent record (§6 #4)
   | 'dispute_open' // open §1692g validation dispute pauses calling (§6 #9)
   | 'state_not_licensed' // debtor state absent from the tenant licensing allow-list (default-deny, §4 / §8 #2)
+  | 'licensing_unconfigured' // NO licensing allow-list configured for this tenant — fail-closed (SAU-521)
   | 'non_working_day' // weekend (working-days-only window, §6 #1)
   | 'holiday' // observed holiday (§6 #7)
   | 'outside_calling_window' // outside 9 AM–5 PM debtor-local (§6 #1)
@@ -318,11 +335,22 @@ export function canDialNow(
     reasons.push(reason('dispute_open', 'An open validation dispute is pausing calls to this debtor.'));
   }
 
-  // §4 / §8 #2 State licensing allow-list (default-deny). Only enforced when a NON-EMPTY
-  // list is configured: out-of-list AND null/unknown states are hard-excluded here at the
-  // suppression layer (fail-closed), classed PERMANENT — the debtor's state must change.
+  // §4 / §8 #2 State licensing allow-list — fail-closed in both directions (SAU-521).
+  // Unlike every other config-driven guardrail here, this one has NO enforced floor
+  // beneath it, so an unconfigured tenant cannot be allowed through: no allow-list means
+  // no authority to dial anyone, not "gate disabled". Both outcomes are classed PERMANENT
+  // (waiting changes nothing) and carry DISTINCT codes so a stopped queue is
+  // distinguishable from a filtered one.
   const allowedStates = config.allowedStates;
-  if (allowedStates && allowedStates.length > 0) {
+  if (!allowedStates || allowedStates.length === 0) {
+    reasons.push(
+      reason(
+        'licensing_unconfigured',
+        'No licensing allow-list is configured for this tenant; refusing to dial. ' +
+          'Set the collections policy `allowedStates` to the states this tenant is licensed to collect in.',
+      ),
+    );
+  } else {
     const licensed = new Set(allowedStates.map((s) => s.toUpperCase()));
     const debtorState = debtor.state ? debtor.state.toUpperCase() : null;
     if (debtorState === null || !licensed.has(debtorState)) {
@@ -415,6 +443,7 @@ const PERMANENT_BLOCK_CODES: ReadonlySet<DialBlockCode> = new Set([
   'no_consent',
   'dispute_open',
   'state_not_licensed',
+  'licensing_unconfigured',
 ]);
 
 /** Minutes-granularity of the forward scan. The calling window is hours wide, so a

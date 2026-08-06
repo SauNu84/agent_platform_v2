@@ -33,6 +33,7 @@ import {
   REG_F_WINDOW_DAYS,
   type CallAttempt,
   type DialBlockCode,
+  type TenantCollectionsConfig,
 } from '@/domain/collections-engine';
 import { COLLECTIONS_REQUIRED_DISCLOSURE, screenVoicemailForDebtDetails } from '@/domain/collections-voice';
 import { verifyCollectionsAuditIntegrity } from '@/domain/collections-audit';
@@ -132,9 +133,25 @@ async function main(): Promise<void> {
     balanceCents: 60000, timezone: 'America/New_York', state: 'MA', consent: true,
   });
 
+  // SAU-521: an unconfigured tenant now fails closed (`licensing_unconfigured`), so this
+  // case study must state which states its SYNTHETIC lenders are licensed in — otherwise
+  // every criterion below would trivially "pass" by blocking everything, which proves
+  // nothing. These are FIXTURE values for fake lenders over fake debtors; they are NOT a
+  // claim about where we are licensed (that is counsel's, SAU-354 §9 Q3) and must never
+  // be copied into a real tenant's policy.
+  //
+  // Both lenders are licensed in every state their own debtors are in, so the criteria
+  // below still exercise the guardrail they are each named for rather than all collapsing
+  // onto a licensing block. The one exception is the unknown-timezone debtor (state
+  // `null`), which now also draws `state_not_licensed` — that is the CONFIGURED path's
+  // default-deny doing its job, and it is a different code from the unconfigured-tenant
+  // block, which is exactly the distinction SAU-521 preserves.
+  const POLICY_A: TenantCollectionsConfig = { allowedStates: ['NY', 'CA', 'IL'] };
+  const POLICY_B: TenantCollectionsConfig = { allowedStates: ['MA'] };
+
   // One dialer per tenant context (the store scopes reads/writes by clinic).
-  const dialerA = new CollectionsDialer({ store, origination, now: () => clock.ms, agencyName: 'Acme Recovery Services', callbackNumber: '+18005550100' });
-  const dialerB = new CollectionsDialer({ store, origination, now: () => clock.ms, agencyName: 'Acme Recovery Services', callbackNumber: '+18005550100' });
+  const dialerA = new CollectionsDialer({ store, origination, config: POLICY_A, now: () => clock.ms, agencyName: 'Acme Recovery Services', callbackNumber: '+18005550100' });
+  const dialerB = new CollectionsDialer({ store, origination, config: POLICY_B, now: () => clock.ms, agencyName: 'Acme Recovery Services', callbackNumber: '+18005550100' });
 
   // Helper: find the most recent audit row for a debtorRef (newest-first list).
   async function latestAudit(clinicId: string, debtorRef: string) {
@@ -340,8 +357,8 @@ async function main(): Promise<void> {
 
   // ── Criterion 10 — Tenant isolation: Lender A cannot see Lender B's debtors/outcomes. ──
   {
-    const dashA = await getCollectionsDashboard(store, LENDER_A, IN_WINDOW);
-    const dashB = await getCollectionsDashboard(store, LENDER_B, IN_WINDOW);
+    const dashA = await getCollectionsDashboard(store, LENDER_A, IN_WINDOW, POLICY_A);
+    const dashB = await getCollectionsDashboard(store, LENDER_B, IN_WINDOW, POLICY_B);
     const aRefs = dashA.cadence.map((d) => d.externalRef);
     const bRefs = dashB.cadence.map((d) => d.externalRef);
 

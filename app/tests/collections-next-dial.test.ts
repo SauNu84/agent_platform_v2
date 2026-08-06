@@ -18,6 +18,7 @@ import {
   nextEligibleDial,
   type CallAttempt,
   type DialEvaluableDebtor,
+  type TenantCollectionsConfig,
 } from '@/domain/collections-engine';
 import { MemoryStore } from '@/db/memory-store';
 import { getCollectionsDashboard } from '@/services/collections-dashboard';
@@ -27,6 +28,13 @@ const DAY = 86_400_000;
 // Deterministic instants in America/New_York (EDT = UTC-4 in June).
 const WED_2PM_ET = Date.parse('2026-06-17T14:00:00-04:00'); // in-window working day
 const SAT_2PM_ET = Date.parse('2026-06-20T14:00:00-04:00'); // weekend
+
+/**
+ * SAU-521: an unconfigured tenant blocks every dial, so the scheduling tests below must
+ * evaluate against a LICENSED tenant — otherwise every "next eligible" answer would be
+ * "never", and the cadence/window math these tests exist to prove would be untested.
+ */
+const LICENSED: TenantCollectionsConfig = { allowedStates: ['NY'] };
 
 function healthyDebtor(over: Partial<DialEvaluableDebtor> = {}): DialEvaluableDebtor {
   return {
@@ -43,7 +51,7 @@ function healthyDebtor(over: Partial<DialEvaluableDebtor> = {}): DialEvaluableDe
 // ── nextEligibleDial ────────────────────────────────────────────────────────
 
 test('eligible now → nextMs is the current instant', () => {
-  const r = nextEligibleDial(healthyDebtor(), WED_2PM_ET);
+  const r = nextEligibleDial(healthyDebtor(), WED_2PM_ET, { config: LICENSED });
   assert.equal(r.allowedNow, true);
   assert.equal(r.nextMs, WED_2PM_ET);
   assert.equal(r.permanentBlock, false);
@@ -62,22 +70,22 @@ test('opt-out / no-consent / dispute are PERMANENT blocks — no date is fabrica
 test('a time/frequency block returns a FUTURE instant that itself passes canDialNow', () => {
   // An attempt 2 days ago trips the 14-day default cadence → blocked now, eligible later.
   const attempts: CallAttempt[] = [{ atMs: WED_2PM_ET - 2 * DAY }];
-  const r = nextEligibleDial(healthyDebtor(), WED_2PM_ET, { attempts });
+  const r = nextEligibleDial(healthyDebtor(), WED_2PM_ET, { attempts, config: LICENSED });
   assert.equal(r.allowedNow, false);
   assert.equal(r.permanentBlock, false);
   assert.ok(r.nextMs && r.nextMs > WED_2PM_ET, 'a future date is returned');
   // The crux: the proposed instant is one the engine actually permits — not a guess.
-  assert.equal(canDialNow(healthyDebtor(), r.nextMs!, { attempts }).decision, 'ALLOW');
+  assert.equal(canDialNow(healthyDebtor(), r.nextMs!, { attempts, config: LICENSED }).decision, 'ALLOW');
   // …and it is at/after the cadence floor (≥12 days out from now).
   assert.ok(r.nextMs! - WED_2PM_ET >= 11 * DAY, 'respects the ~14-day cadence');
 });
 
 test('a weekend block resolves forward to a permitted weekday/in-window instant', () => {
-  const r = nextEligibleDial(healthyDebtor(), SAT_2PM_ET);
+  const r = nextEligibleDial(healthyDebtor(), SAT_2PM_ET, { config: LICENSED });
   assert.equal(r.allowedNow, false);
   assert.equal(r.permanentBlock, false);
   assert.ok(r.nextMs, 'a next instant exists');
-  assert.equal(canDialNow(healthyDebtor(), r.nextMs!).decision, 'ALLOW');
+  assert.equal(canDialNow(healthyDebtor(), r.nextMs!, { config: LICENSED }).decision, 'ALLOW');
 });
 
 // ── getCollectionsDashboard (against the in-memory store) ─────────────────────
@@ -105,6 +113,11 @@ test('dashboard aggregates outcomes, cadence, suppression and compliance blocks 
   await store.recordCallAttempt({ clinicId, debtorId: ok.id, debtorRef: ok.externalRef, outcome: 'contacted', attemptedAtMs: WED_2PM_ET - 40 * DAY });
   await store.recordCallAttempt({ clinicId, debtorId: opt.id, debtorRef: opt.externalRef, outcome: 'opted_out', attemptedAtMs: WED_2PM_ET - 5 * DAY });
   await store.recordCallAttempt({ clinicId, debtorId: noc.id, debtorRef: noc.externalRef, outcome: 'blocked_by_compliance', blockReason: 'no_consent', blockReasons: ['no_consent'], attemptedAtMs: WED_2PM_ET - 1 * DAY });
+
+  // SAU-521 AC 3: configure the tenant's policy in the STORE and pass NO config here —
+  // the dashboard must load the same policy the dialer would, so its "when next" cannot
+  // disagree with what the dialer will actually do.
+  await store.upsertCollectionsPolicy({ clinicId, allowedStates: ['NY'] });
 
   const m = await getCollectionsDashboard(store, clinicId, WED_2PM_ET);
 

@@ -53,7 +53,22 @@ function healthyDebtor(over: Partial<DialEvaluableDebtor> = {}): DialEvaluableDe
   };
 }
 
-const attemptsOpt = (attempts: CallAttempt[], config?: TenantCollectionsConfig) => ({ attempts, config });
+/**
+ * SAU-521: an unconfigured tenant now BLOCKS every dial (`licensing_unconfigured`), so a
+ * fixture that omits `allowedStates` is a fixture that proves nothing about any other
+ * guardrail. This is the "tenant is properly licensed" baseline — it covers every state
+ * the fixtures below use, so each test still isolates the gate it is named for.
+ * Tests that are ABOUT the unconfigured case deliberately do NOT use it.
+ */
+const LICENSED: TenantCollectionsConfig = { allowedStates: ['NY', 'CA', 'IL', 'MA', 'TX'] };
+
+/** Merge extra config over the licensed baseline (so callers only state what they vary). */
+const licensed = (config: TenantCollectionsConfig = {}): TenantCollectionsConfig => ({ ...LICENSED, ...config });
+
+const attemptsOpt = (attempts: CallAttempt[], config?: TenantCollectionsConfig) => ({
+  attempts,
+  config: licensed(config),
+});
 const codes = (d: DialEvaluation): DialBlockCode[] => d.reasons.map((r) => r.code);
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -79,7 +94,7 @@ test('a full WS-2 Debtor is assignable to the engine and evaluates', () => {
     updatedAt: '2026-06-01T00:00:00Z',
   };
   // The Debtor flows straight into canDialNow with no adaptation (the WS-1↔WS-2 contract).
-  assert.equal(canDialNow(debtor, WED_2PM_ET).decision, 'ALLOW');
+  assert.equal(canDialNow(debtor, WED_2PM_ET, { config: LICENSED }).decision, 'ALLOW');
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -87,10 +102,10 @@ test('a full WS-2 Debtor is assignable to the engine and evaluates', () => {
 // ──────────────────────────────────────────────────────────────────────────
 
 test('ALLOW: healthy debtor, in-window working day, consent on file, no history', () => {
-  const d = canDialNow(healthyDebtor(), WED_2PM_ET);
+  const d = canDialNow(healthyDebtor(), WED_2PM_ET, { config: LICENSED });
   assert.equal(d.decision, 'ALLOW');
   assert.equal(d.reasons.length, 0);
-  assert.equal(isDialAllowed(healthyDebtor(), WED_2PM_ET), true);
+  assert.equal(isDialAllowed(healthyDebtor(), WED_2PM_ET, { config: LICENSED }), true);
 });
 
 test('ALLOW: old history (attempts + conversation > windows ago) does not block', () => {
@@ -118,7 +133,7 @@ test('window is evaluated in debtor-local time, not server time', () => {
   // 14:00 in Los Angeles is in-window; the SAME instant is 17:00 ET (out of window).
   const pacific = healthyDebtor({ timezone: 'America/Los_Angeles', phone: '+1-415-555-0100', state: 'CA' });
   const laAfternoon = Date.parse('2026-06-17T14:00:00-07:00'); // 14:00 PT == 17:00 ET
-  assert.equal(canDialNow(pacific, laAfternoon).decision, 'ALLOW');
+  assert.equal(canDialNow(pacific, laAfternoon, { config: LICENSED }).decision, 'ALLOW');
   assert.ok(codes(canDialNow(healthyDebtor(), laAfternoon)).includes('outside_calling_window'));
 });
 
@@ -193,20 +208,73 @@ test('BLOCK: null/unknown state is fail-closed when an allow-list is configured'
   assert.ok(codes(d).includes('state_not_licensed'));
 });
 
-test('absent allow-list preserves prior behavior (no licensing gate)', () => {
-  // No allowedStates → an unknown-state debtor is NOT blocked on state-licensing grounds.
-  const d = canDialNow(healthyDebtor({ state: null }), WED_2PM_ET);
+// ── SAU-521: an UNCONFIGURED tenant fails closed ──────────────────────────
+// These two tests replace `absent allow-list preserves prior behavior` and `empty
+// allow-list disables the gate`, which asserted ALLOW and were the de-facto spec for
+// the fail-OPEN this ticket removes. They are inverted deliberately: if either ever
+// goes back to asserting ALLOW, gate item 2 has been reopened.
+//
+// `allowedStates` is the one control in this engine with no floor beneath it — there
+// is no federal minimum that fires when it is unset, unlike stateCaps (Reg-F 7-in-7)
+// or holidays (DEFAULT_US_HOLIDAYS). So "unconfigured" cannot mean "unrestricted".
+
+test('BLOCK: an ABSENT allow-list blocks every debtor (licensing_unconfigured)', () => {
+  // A perfectly healthy, in-window, consented debtor in a real state — the case most
+  // likely to be waved through. No policy configured ⇒ no authority to dial.
+  const d = canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET);
+  assert.equal(d.decision, 'BLOCK');
+  assert.ok(codes(d).includes('licensing_unconfigured'));
+  // The unconfigured code is distinct from the out-of-list one, so an operator can tell
+  // "nobody configured this tenant" from "this debtor is out of area".
   assert.ok(!codes(d).includes('state_not_licensed'));
-  // And a plain healthy debtor with no licensing config still ALLOWs.
-  assert.equal(canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET).decision, 'ALLOW');
+
+  // Unknown state is blocked too — it was the original fail-open path.
+  const unknown = canDialNow(healthyDebtor({ state: null }), WED_2PM_ET);
+  assert.equal(unknown.decision, 'BLOCK');
+  assert.ok(codes(unknown).includes('licensing_unconfigured'));
 });
 
-test('empty allow-list disables the gate (documented choice — opt-in seam)', () => {
-  // An empty list is treated as "gate off", NOT "license zero states" (avoids silently
-  // suppressing every debtor on a half-configured tenant). See TenantCollectionsConfig docs.
+test('BLOCK: an EMPTY allow-list is "not configured", not "gate off"', () => {
+  // The half-configured tenant: a policy row exists, the list was never filled in.
+  // Pre-SAU-521 this ALLOWed. An empty list is not a licence to dial everywhere.
   const d = canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET, { config: { allowedStates: [] } });
-  assert.equal(d.decision, 'ALLOW');
+  assert.equal(d.decision, 'BLOCK');
+  assert.ok(codes(d).includes('licensing_unconfigured'));
   assert.ok(!codes(d).includes('state_not_licensed'));
+
+  // Other config present but no allow-list is still unconfigured — a tenant that set
+  // caps/holidays and forgot the licensing list must not be treated as configured.
+  const partial = canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET, {
+    config: { cadenceDays: 21, stateCaps: { TX: { maxAttempts: 1, windowDays: 7 } } },
+  });
+  assert.equal(partial.decision, 'BLOCK');
+  assert.ok(codes(partial).includes('licensing_unconfigured'));
+});
+
+test('licensing_unconfigured is PERMANENT — nextEligibleDial gives no date', () => {
+  // Waiting cannot fix a missing policy, so the forward search must not offer a time.
+  const r = nextEligibleDial(healthyDebtor({ state: 'TX' }), WED_2PM_ET);
+  assert.equal(r.permanentBlock, true);
+  assert.equal(r.nextMs, null);
+  assert.ok(r.reasons.some((x) => x.code === 'licensing_unconfigured'));
+});
+
+test('the block message names the remediation, not just the fault', () => {
+  // An operator reading a stopped queue must be told what to set. A bare code sends
+  // them to the source.
+  const d = canDialNow(healthyDebtor({ state: 'TX' }), WED_2PM_ET);
+  const msg = d.reasons.find((r) => r.code === 'licensing_unconfigured')?.message ?? '';
+  assert.match(msg, /allowedStates/);
+  assert.match(msg, /licensing allow-list/i);
+});
+
+test('scope limit: unconfigured stateCaps and holidays do NOT block (they have floors)', () => {
+  // Guards against over-generalizing SAU-521. These sit above an enforced floor — the
+  // hard-constant Reg-F 7-in-7 and the built-in holiday set — so unconfigured is
+  // already safe for them, and blocking on them would stop tenants for no safety gain.
+  const d = canDialNow(healthyDebtor({ state: 'NY' }), WED_2PM_ET, { config: { allowedStates: ['NY'] } });
+  assert.equal(d.decision, 'ALLOW');
+  assert.ok(!codes(d).some((c) => c.includes('unconfigured')));
 });
 
 test('state_not_licensed is a PERMANENT block — nextEligibleDial gives no date', () => {
@@ -233,7 +301,7 @@ test('BLOCK: invalid IANA tz string fails closed', () => {
 
 test('area-code fallback resolves TZ when no explicit zone is set', () => {
   // 617 (Boston) → America/New_York; in-window instant ⇒ ALLOW.
-  const d = canDialNow(healthyDebtor({ timezone: '', phone: '+1 (617) 555-0142' }), WED_2PM_ET);
+  const d = canDialNow(healthyDebtor({ timezone: '', phone: '+1 (617) 555-0142' }), WED_2PM_ET, { config: LICENSED });
   assert.equal(d.decision, 'ALLOW');
 });
 

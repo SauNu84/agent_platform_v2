@@ -20,7 +20,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '@/db/memory-store';
 import type { NewDebtor } from '@/domain/collections';
-import { CollectionsDialer } from '@/services/collections-dialer';
+import { CollectionsDialer, createTenantDialer } from '@/services/collections-dialer';
+import type { TenantCollectionsConfig } from '@/domain/collections-engine';
 import {
   MockOutboundDialer,
   resolveOutboundDialer,
@@ -42,6 +43,14 @@ const WED_8PM_ET = Date.parse('2026-06-17T20:00:00-04:00'); // out of the 9–5 
 const at = (ms: number) => () => ms;
 
 const CLINIC = 'lender-1';
+
+/**
+ * SAU-521: an unconfigured tenant blocks every dial, so the fixture lender must state
+ * the states it is licensed in — otherwise the tests below would "pass" by blocking
+ * everything and prove nothing about disclosure, voicemail or the audit trail. The
+ * unconfigured case gets its own explicit test at the end of this file.
+ */
+const LICENSED: TenantCollectionsConfig = { allowedStates: ['NY'] };
 
 function newDebtor(over: Partial<NewDebtor> = {}): NewDebtor {
   return {
@@ -87,7 +96,7 @@ test('opt-out debtor is BLOCKED and never originated', async () => {
   const store = new MemoryStore();
   const debtor = await store.upsertDebtor(newDebtor({ optedOut: true }));
   const origination = spyDialer('connected');
-  const dialer = new CollectionsDialer({ store, origination, now: at(WED_2PM_ET) });
+  const dialer = new CollectionsDialer({ config: LICENSED, store, origination, now: at(WED_2PM_ET) });
 
   const res = await dialer.attemptDial(debtor.id);
 
@@ -107,7 +116,7 @@ test('out-of-window dial is BLOCKED and never originated', async () => {
   const store = new MemoryStore();
   const debtor = await store.upsertDebtor(newDebtor());
   const origination = spyDialer('connected');
-  const dialer = new CollectionsDialer({ store, origination, now: at(WED_8PM_ET) });
+  const dialer = new CollectionsDialer({ config: LICENSED, store, origination, now: at(WED_8PM_ET) });
 
   const res = await dialer.attemptDial(debtor.id);
 
@@ -120,7 +129,7 @@ test('out-of-window dial is BLOCKED and never originated', async () => {
 test('unknown debtor fails closed (BLOCK, no origination)', async () => {
   const store = new MemoryStore();
   const origination = spyDialer('connected');
-  const dialer = new CollectionsDialer({ store, origination, now: at(WED_2PM_ET) });
+  const dialer = new CollectionsDialer({ config: LICENSED, store, origination, now: at(WED_2PM_ET) });
 
   const res = await dialer.attemptDial('does-not-exist');
 
@@ -136,7 +145,7 @@ test('unknown debtor fails closed (BLOCK, no origination)', async () => {
 test('connected call injects the required disclosure as its first utterance', async () => {
   const store = new MemoryStore();
   const debtor = await store.upsertDebtor(newDebtor());
-  const dialer = new CollectionsDialer({
+  const dialer = new CollectionsDialer({ config: LICENSED,
     store,
     origination: new MockOutboundDialer({ simulate: () => 'connected' }),
     now: at(WED_2PM_ET),
@@ -165,7 +174,7 @@ test('disclosure is present on EVERY connected call across a batch', async () =>
   await store.upsertDebtor(newDebtor({ externalRef: 'A', phone: '+12125550101' }));
   await store.upsertDebtor(newDebtor({ externalRef: 'B', phone: '+13125550102', timezone: 'America/Chicago' }));
   await store.upsertDebtor(newDebtor({ externalRef: 'C', phone: '+14155550103', timezone: 'America/Los_Angeles' }));
-  const dialer = new CollectionsDialer({
+  const dialer = new CollectionsDialer({ config: LICENSED,
     store,
     origination: new MockOutboundDialer({ simulate: () => 'connected' }),
     now: at(WED_2PM_ET),
@@ -186,7 +195,7 @@ test('disclosure is present on EVERY connected call across a batch', async () =>
 test('voicemail path uses the limited-content script with no debt details', async () => {
   const store = new MemoryStore();
   const debtor = await store.upsertDebtor(newDebtor());
-  const dialer = new CollectionsDialer({
+  const dialer = new CollectionsDialer({ config: LICENSED,
     store,
     origination: new MockOutboundDialer({ simulate: () => 'voicemail' }),
     now: at(WED_2PM_ET),
@@ -268,4 +277,74 @@ test('limited-content voicemail builder produces no debt details', () => {
 test('assertNoDebtDetails throws on a script that reveals a debt', () => {
   assert.throws(() => assertNoDebtDetails('You owe a balance of $125.00. Please pay.'));
   assert.equal(screenVoicemailForDebtDetails('Your account balance is $125').ok, false);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// SAU-521 — the licensing gate fires THROUGH THE DIALER, not just in the engine
+// ──────────────────────────────────────────────────────────────────────────
+// SAU-331 gate item 2 is about out-of-bounds states being excluded at the real dial
+// path. A direct `canDialNow` unit call cannot prove that: the whole defect was that
+// production callers never passed a config at all, so the engine's verdict was correct
+// and irrelevant. These tests go through `attemptDial` and assert that origination is
+// never reached.
+
+test('UNCONFIGURED tenant: every dial is blocked and origination is never reached', async () => {
+  const store = new MemoryStore();
+  const debtor = await store.upsertDebtor(newDebtor());
+  const origination = spyDialer('connected');
+  // No `config` at all — exactly how every production call site constructed this
+  // before SAU-521. That used to dial. It must not.
+  const dialer = new CollectionsDialer({ store, origination, now: at(WED_2PM_ET) });
+
+  const res = await dialer.attemptDial(debtor.id);
+
+  assert.equal(res.decision, 'BLOCK');
+  assert.equal(res.originated, false);
+  assert.equal(res.call, null);
+  assert.ok(res.reasons.some((r) => r.code === 'licensing_unconfigured'));
+  assert.equal(origination.calls.length, 0, 'origination must NOT be reached for an unconfigured tenant');
+
+  // The reason is recorded in the compliance ledger, so a stopped queue is diagnosable
+  // from the audit trail alone.
+  const audit = await store.listCollectionsAudit({ clinicId: CLINIC, debtorRef: debtor.id });
+  const decision = audit.find((a) => a.eventType === 'dial_decision');
+  assert.equal(decision?.decision, 'BLOCK');
+  assert.ok((decision?.reason ?? '').includes('licensing_unconfigured'));
+});
+
+test('CONFIGURED tenant: an out-of-list debtor is blocked through the dialer', async () => {
+  const store = new MemoryStore();
+  // Licensed in NY only; this debtor is in TX.
+  const debtor = await store.upsertDebtor(newDebtor({ externalRef: 'TX-1', state: 'TX' }));
+  const origination = spyDialer('connected');
+  const dialer = new CollectionsDialer({ store, origination, config: LICENSED, now: at(WED_2PM_ET) });
+
+  const res = await dialer.attemptDial(debtor.id);
+
+  assert.equal(res.decision, 'BLOCK');
+  assert.equal(res.originated, false);
+  assert.equal(origination.calls.length, 0);
+  // Distinct code from the unconfigured case — a filtered queue, not a stopped one.
+  assert.ok(res.reasons.some((r) => r.code === 'state_not_licensed'));
+  assert.ok(!res.reasons.some((r) => r.code === 'licensing_unconfigured'));
+});
+
+test('createTenantDialer loads the PERSISTED policy for the tenant', async () => {
+  const store = new MemoryStore();
+  const debtor = await store.upsertDebtor(newDebtor({ externalRef: 'LOADED-1' }));
+  const origination = spyDialer('connected');
+
+  // Before any policy is stored, the loaded config blocks.
+  const before = await createTenantDialer({ store, clinicId: CLINIC, origination, now: at(WED_2PM_ET) });
+  const blocked = await before.attemptDial(debtor.id);
+  assert.equal(blocked.decision, 'BLOCK');
+  assert.ok(blocked.reasons.some((r) => r.code === 'licensing_unconfigured'));
+
+  // Configure the tenant through the store, rebuild, and the same debtor now dials —
+  // proving the factory reads persistence rather than a hardcoded default.
+  await store.upsertCollectionsPolicy({ clinicId: CLINIC, allowedStates: ['NY'] });
+  const after = await createTenantDialer({ store, clinicId: CLINIC, origination, now: at(WED_2PM_ET) });
+  const allowed = await after.attemptDial(debtor.id);
+  assert.equal(allowed.decision, 'ALLOW');
+  assert.equal(allowed.originated, true);
 });

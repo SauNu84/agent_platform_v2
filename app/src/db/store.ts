@@ -13,6 +13,7 @@ import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
   Debtor, NewDebtor, CollectionsAuditInput, CollectionsAuditRecord, CollectionsAuditFilter,
+  CollectionsPolicyRecord, CollectionsPolicyInput,
 } from '@/domain/collections';
 import type { NewCallAttempt, CallAttemptRecord } from '@/domain/collections-outcome';
 
@@ -726,6 +727,16 @@ export interface Store {
   setDebtorOptOut(id: string, optedOut: boolean): Promise<Debtor | null>;
   /** Set the open-dispute flag for a debtor (an open dispute pauses calling). */
   setDebtorDispute(id: string, disputeOpen: boolean): Promise<Debtor | null>;
+  // ── Per-lender collections policy (SAU-521, migration 0026) ────────────────
+  /**
+   * Read one lender's collections policy (RLS-scoped), or null when none has been
+   * configured. Null is a MEANINGFUL state, not an error: under SAU-521 it means the
+   * tenant is not cleared to dial anyone.
+   */
+  getCollectionsPolicy(clinicId: string): Promise<CollectionsPolicyRecord | null>;
+  /** Create or update one lender's collections policy (RLS-scoped). Absent fields are left as-is. */
+  upsertCollectionsPolicy(input: CollectionsPolicyInput): Promise<CollectionsPolicyRecord>;
+
   /** Append one compliance event (dial decision / outcome / opt-out / purge) — HMAC hash-chained. */
   recordCollectionsAudit(entry: CollectionsAuditInput): Promise<CollectionsAuditRecord>;
   /** Query the compliance ledger (RLS-scoped to the caller's tenant), newest first. */
