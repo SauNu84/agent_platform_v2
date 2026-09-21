@@ -10,7 +10,7 @@ import assert from 'node:assert';
 import {
   computeTurnMetric, percentile, costPerConversationMinute, summarize,
   usageCost, usageCostUncached, projectCostPerMin, costBand, computeMeasuredCost,
-  REALTIME_RATES,
+  REALTIME_RATES, ratesForModel,
 } from './bench.ts';
 import type { SessionEvent, TurnUsage, SessionUsage } from './realtime-interface.ts';
 import type { FixtureTurn } from './fixtures/fixture.ts';
@@ -110,6 +110,21 @@ check('bills cached input at the cached rate, rest at full rate', () => {
   assert.ok(Math.abs(usageCost(u, r) - 80.20) < 1e-9, `got ${usageCost(u, r)}`);
   // uncached counterfactual: 1M*$32 + 1M*$64 = 96
   assert.ok(Math.abs(usageCostUncached(u, r) - 96.0) < 1e-9, `got ${usageCostUncached(u, r)}`);
+});
+
+console.log('ratesForModel() — engine → rate card (SAU-519 mini)');
+check('mini ids (incl. 2.1-mini + dated snapshots) resolve to the mini card; 2.x → gpt-realtime-2', () => {
+  for (const id of ['gpt-realtime-mini', 'gpt-realtime-2.1-mini', 'gpt-realtime-mini-2025-12-15']) {
+    assert.equal(ratesForModel(id).id, 'gpt-realtime-mini', id);
+  }
+  assert.equal(ratesForModel('gpt-realtime-2.1').id, 'gpt-realtime-2');
+  assert.equal(ratesForModel('gpt-realtime').id, 'gpt-realtime');
+  assert.equal(ratesForModel(undefined).id, 'gpt-realtime');
+  // same token profile, mini vs premium: audio-dominated ⇒ ~3.2× cheaper
+  const u: TurnUsage = { inputTextTokens: 0, inputAudioTokens: 1_000_000, cachedTextTokens: 0, cachedAudioTokens: 0,
+    outputTextTokens: 0, outputAudioTokens: 1_000_000, totalTokens: 2_000_000 };
+  const ratio = usageCost(u, REALTIME_RATES['gpt-realtime']) / usageCost(u, REALTIME_RATES['gpt-realtime-mini']);
+  assert.ok(Math.abs(ratio - 3.2) < 1e-9, `ratio ${ratio}`);
 });
 
 console.log('projectCostPerMin() — 6-min projection w/ context accumulation');

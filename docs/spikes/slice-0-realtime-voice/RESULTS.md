@@ -103,6 +103,56 @@ The bench was run end-to-end against the deterministic `mock` adapter (`tsx benc
 - **Verdict for Gate 1:** measured cost **confirms the 🔴 band** that the estimate flagged, but at roughly half the estimated magnitude ($0.262 vs $0.48). The CFO can now finalize the Gate-1 cost band on measured data, not the rate card. Disposition is unchanged — OpenAI was adopted on the end-to-end/latency basis with the cost gap accepted eyes-open (see Recommendation).
 - **Latency note (transparency):** this cost re-run also re-sampled latency at **TTFA p50/p95 1410 / 2576 ms** (net-of-VAD 910 / 2076) — a second sample, higher than the canonical 2026-06-06 run (1288 / 1905, kept as the headline latency row above) but **the same FAIL verdict** (network/region variance on WebSocket from this host; well over the 800 ms bar either way). `out/openai-report.json` now holds this 2026-06-07 re-run's metrics + usage; barge-in (36 ms) and mid-turn tool (1 ms) re-confirmed ✅.
 
+## Mini engine bench — `gpt-realtime-2.1-mini` vs premium (SAU-519, live N=50, 2026-09-21)
+
+> **Go/no-go gate for Clinic Secretary pricing** ([SAU-519](/SAU/issues/SAU-519), spun out of [SAU-455](/SAU/issues/SAU-455) §packaging). Question: does mini hold the turn count and TTFA of the premium engine, so the 69.7% COGS reduction assumed by the price sheet is real? Same N=50 fixture, same harness, same host, only `OPENAI_REALTIME_MODEL` changed. Because the SAU-197 baseline is 3 months old and a different model version (`gpt-realtime`), a **same-day premium control on `gpt-realtime-2.1`** (the engine the price sheet names) was run back-to-back as the paired comparator. Raw archives: `out/openai-mini-report.json`, `out/openai-2.1-control-report.json` (+ `*-run.log`). Spend: ~$0.17 (mini) + ~$0.63 (control).
+
+**Rate table used** (USD per 1M tokens · source: OpenAI published pricing, developers.openai.com/api/docs/pricing, fetched 2026-09-21):
+
+| Model | Text in | Cached text in | Text out | Audio in | Cached audio in | Audio out |
+|---|---:|---:|---:|---:|---:|---:|
+| `gpt-realtime-2.1` | 4.00 | 0.40 | 24.00 | 32.00 | 0.40 | 64.00 |
+| `gpt-realtime-2.1-mini` | 0.60 | 0.06 | 2.40 | 10.00 | 0.30 | 20.00 |
+
+**Turn count + token profile (`response.done.usage`, session totals):**
+
+| | SAU-197 baseline `gpt-realtime` (2026-06-07) | Control `gpt-realtime-2.1` (2026-09-21) | **Mini `gpt-realtime-2.1-mini` (2026-09-21)** | Mini vs control |
+|---|---:|---:|---:|---:|
+| Model responses (usage samples) / 50 fixture turns | 93 | 70 | **75** | **+7.1%** (vs baseline −19.4%) |
+| Session wall-clock (min) | 4.07 | 4.12 | 4.39 | +6.3% |
+| Tool calls (8 scripted tool turns) | 7 | 12 | 10 | — |
+| Audio input tokens (cached) | 77,661 (66,368) | 37,481 (32,192) | 40,482 (36,672) | +8.0% |
+| Text input tokens (cached) | 82,009 (75,520) | 65,003 (57,536) | 71,707 (64,832) | +10.3% |
+| Input total · cached % | 159,670 · 88.9% | 102,484 · 87.6% | 112,189 · 90.5% | +9.5% |
+| Audio output tokens | 8,241 | 5,207 | **4,952** | −4.9% |
+| Text output tokens | 2,412 | 2,498 | 4,616 | +84.8% (cheap bucket: $2.40/1M) |
+| Total tokens | 170,323 | 110,189 | 121,757 | +10.5% |
+| Session cost (as-run) | $1.0101 | $0.6282 | **$0.1672** | **−73.4%** |
+| As-run $/conv-min | $0.248 | $0.152 | **$0.038** | −75.0% |
+| **6-min $/conv-min (projection)** | $0.262 🔴 | $0.138 🟡 | **$0.035 🟢** | **−74.3%** (vs baseline −86.5%) |
+
+**Latency (TTFA gross = includes the 500 ms server-VAD window; net = −500 ms):**
+
+| | Baseline `gpt-realtime` (06-07) | Control `gpt-realtime-2.1` | **Mini** | Mini vs control |
+|---|---:|---:|---:|---:|
+| TTFA p50 / p95 gross | 1410 / 2576 | 1506 / 1723 | **1744 / 2373** | +16% / **+38%** (vs baseline +24% / −8%) |
+| TTFA p50 / p95 net-of-VAD | 910 / 2076 | 1006 / 1223 | 1244 / 1873 | |
+| TTFA normal turns (n=35) p50 / p95 / max | 1371 / 1674 / 1902 | 1515 / 1720 / 2061 | 1744 / 2830 / **3794** | fatter tail |
+| TTFA tool turns (n=8) p50 / p95 | 2097 / 3149 | 1387 / 1633 | 1605 / 2083 | |
+| TTFA barge-in turns (n=7) p50 / p95 | 1377 / 1790 | 1676 / 1752 | 1665 / 1929 | |
+| Barge-in stop p95 (bar ≤300) | 36 ms ✅ | 39 ms ✅ | **5 ms ✅** | |
+| Mid-turn tool max dead-air (bar ≤1500) | 1 ms ✅ | 0 ms ✅ | 0 ms ✅ | |
+
+**Reading against the pre-committed decision rule (SAU-519):**
+
+- **Turn count: 🟢.** Mini needed **75 responses vs 70** for the same-day premium control (**+7.1%**, inside the +15% green line) and *fewer* than the stale June baseline (93). Mini does not "talk in circles" to complete the intake — it completes every scripted turn, all 8 tool turns fire `lookupPrice`, barge-in is cleaner than premium. Output *audio* (the expensive, uncacheable bucket) is 5% *lower* than premium; the extra tokens are text output at $2.40/1M.
+- **COGS: the assumed reduction is conservative.** Measured **−74.3%** vs same-day premium (price sheet assumed −69.7%). Model cost is **$0.035/conv-min** at 6-min projection — deep inside 🟢 and ~3× under the $0.1075 all-in mini figure the packaging band used. Separately, note the *premium* engine is also cheaper than the June figure ($0.138 vs $0.262 — `2.1` is terser: 70 vs 93 responses, 5.2k vs 8.2k audio-out tokens); the SAU-455 premium column ($0.3217 all-in) is stale but stays 🟡/🔴 — it does not change the "premium is unsellable at 70% GM" conclusion.
+- **TTFA: 🟡 — flag, not a fail.** The literal SAU-176 bar (p95 ≤ 800 ms) has never been met by *any* engine, including the one the board adopted (premium measured 1905 / 2576 / 1723 across three runs); read literally, the rule would fail the incumbent too. Against the incumbent-as-measured, mini's p95 (2373 ms) is **inside the envelope the board already accepted** (SAU-197: 2576 ms) but **+650 ms slower than premium measured the same day** (1723 ms), with a fatter tail on normal turns (max 3.8 s). For an inbound phone caller that tail is audible. It is a UX-mitigation item for the telephony bridge (early acknowledgement / filler utterance on `speech_stopped`, WebRTC + region pinning), not a pricing blocker — the same mitigation is needed on premium.
+- **Tool-arg fidelity caveat:** mini passed `sku: "pro plan"` / `"PRO"` where premium passed `"pro-plan"` / `"pro-seat"`. Harmless against this mock, but a real booking tool should constrain args with enums / strict schemas rather than trusting free-text from mini.
+- **Sample-size caveat:** one 50-turn session per engine. June→September premium drift (93→70 responses) shows model-version variance dwarfs session noise, which is why the same-day paired control is the comparator. If the CRO wants a confidence interval on the +7.1%, three sessions per engine ≈ $2.50 total.
+
+**Net:** mini holds the turn count (+7.1%), beats the assumed COGS reduction (−74% vs −70%), passes barge-in and tool-calling, and lands TTFA inside the accepted premium envelope with a tail to mitigate in the bridge. The SAU-455 price sheet stands on the turn-count/COGS axis; TTFA is a 🟡 engineering flag routed to the bridge work ([SAU-525](/SAU/issues/SAU-525)), not a re-pricing input.
+
 ## Recommendation — DECIDED: OpenAI Realtime (board, 2026-06-07)
 
 - **✅ Board decision `333a08e1` (2026-06-07): adopt OpenAI Realtime for the Slice-0 voice MVP; close the vendor hunt.** Recorded in [ADR-003 → "Board decision"](../../adr/ADR-003-realtime-voice-build-vs-buy.md) (Status: **Accepted**).

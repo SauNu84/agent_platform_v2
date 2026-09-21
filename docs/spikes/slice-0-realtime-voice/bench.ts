@@ -6,7 +6,8 @@
  * tool-calling dead-air, and cost/conversation-minute. Vendor-neutral: it only
  * touches the `realtime-interface.ts` contract, so a vendor = one adapter file.
  *
- *   tsx bench.ts --vendor <mock|openai|gemini|livekit> [--turns 50]
+ *   tsx bench.ts --vendor <mock|openai|gemini|livekit> [--turns 50] [--tag <label>]
+ *   (OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini selects the engine; --tag names the out/ archive)
  *                [--fixture fixtures/manifest.json] [--realtime]
  *
  * `--realtime` paces mic audio at 1x (REQUIRED for live vendor runs). Omit it for
@@ -135,16 +136,20 @@ export interface RealtimeRate {
   audioIn: number; audioCachedIn: number; audioOut: number;
 }
 export const REALTIME_RATES_SOURCE =
-  'OpenAI published pricing (developers.openai.com/api/docs/pricing), fetched 2026-06-07';
+  'OpenAI published pricing (developers.openai.com/api/docs/pricing), fetched 2026-06-07; mini rates re-fetched 2026-09-21 (SAU-519)';
 export const REALTIME_RATES: Record<string, RealtimeRate> = {
   // gpt-realtime (GA S2S) — the model the bench targets by default.
   'gpt-realtime':   { textIn: 4.0, textCachedIn: 0.4, textOut: 16.0, audioIn: 32.0, audioCachedIn: 0.4, audioOut: 64.0 },
-  // gpt-realtime-2 — same audio rates, higher text output.
+  // gpt-realtime-2 / 2.1 — same audio rates, higher text output.
   'gpt-realtime-2': { textIn: 4.0, textCachedIn: 0.4, textOut: 24.0, audioIn: 32.0, audioCachedIn: 0.4, audioOut: 64.0 },
+  // gpt-realtime-mini / 2.1-mini (SAU-519) — 3.2× cheaper audio, 6.7× cheaper text.
+  'gpt-realtime-mini': { textIn: 0.6, textCachedIn: 0.06, textOut: 2.4, audioIn: 10.0, audioCachedIn: 0.3, audioOut: 20.0 },
 };
-/** Pick the rate table for a (possibly versioned) model id; default to gpt-realtime. */
+/** Pick the rate table for a (possibly versioned) model id; default to gpt-realtime.
+ *  Any `*-mini*` id (gpt-realtime-mini, gpt-realtime-2.1-mini, dated snapshots) → mini card. */
 export function ratesForModel(model: string | undefined): { id: string; rates: RealtimeRate } {
   if (model && REALTIME_RATES[model]) return { id: model, rates: REALTIME_RATES[model] };
+  if (model && model.includes('-mini')) return { id: 'gpt-realtime-mini', rates: REALTIME_RATES['gpt-realtime-mini'] };
   if (model && model.startsWith('gpt-realtime-2')) return { id: 'gpt-realtime-2', rates: REALTIME_RATES['gpt-realtime-2'] };
   return { id: 'gpt-realtime', rates: REALTIME_RATES['gpt-realtime'] };
 }
@@ -502,10 +507,11 @@ export function summarize(vendor: string, metrics: TurnMetric[], transcript: Tra
 }
 
 // ── Output: archive raw JSON to ./out/, upsert RESULTS.md vendor row ──────────
-function archive(report: BenchReport, metrics: TurnMetric[], transcript: Transcript): string {
+function archive(report: BenchReport, metrics: TurnMetric[], transcript: Transcript, tag?: string): string {
   const outDir = join(HERE, 'out');
   mkdirSync(outDir, { recursive: true });
-  const path = join(outDir, `${report.vendor}-report.json`);
+  // `--tag` keeps engine-variant runs (SAU-519 mini) from overwriting the baseline archive.
+  const path = join(outDir, `${report.vendor}${tag ? `-${tag}` : ''}-report.json`);
   writeFileSync(path, JSON.stringify({ report, metrics, transcript }, null, 2) + '\n');
   return path;
 }
@@ -579,6 +585,7 @@ export async function main(): Promise<BenchReport> {
   const turnsArg = getArg('turns');
   const fixturePath = getArg('fixture');
   const realtime = process.argv.includes('--realtime');
+  const tag = getArg('tag');
 
   const manifestPath = fixturePath ? join(process.cwd(), fixturePath) : join(HERE, 'fixtures', 'manifest.json');
   const manifest = loadManifest(manifestPath);
@@ -594,7 +601,7 @@ export async function main(): Promise<BenchReport> {
   const { metrics, transcript, usedRealAudio } = await runVendor(provider, manifest, realtime, wavPath);
   const report = summarize(vendor, metrics, transcript);
 
-  const outPath = archive(report, metrics, transcript);
+  const outPath = archive(report, metrics, transcript, tag);
   const wroteRow = upsertResultsRow(report);
 
   console.log('[bench] report:', JSON.stringify(report, null, 2));
