@@ -80,10 +80,13 @@ export function bridgeServerPort(): number {
 
 /**
  * Build the public wss:// URL the vendor should stream to for a given scenario.
+ * `dialedNumber` (the webhook's `To`, SAU-525) rides along as `?to=` so the bridge
+ * can resolve the tenant — Twilio's Media Streams `start` frame does not carry it.
  * Returns null when no public bridge URL is configured (⇒ webhook fails soft).
  */
-export function bridgeWsUrlFor(cfg: TwilioConfig, scenarioSlug: string): string | null {
+export function bridgeWsUrlFor(cfg: TwilioConfig, scenarioSlug: string, dialedNumber?: string | null): string | null {
   if (!cfg.bridgePublicUrl) return null;
   const base = cfg.bridgePublicUrl.replace(/\/+$/, '');
-  return `${base}${BRIDGE_WS_PATH}?slug=${encodeURIComponent(scenarioSlug)}`;
+  const to = dialedNumber ? `&to=${encodeURIComponent(dialedNumber)}` : '';
+  return `${base}${BRIDGE_WS_PATH}?slug=${encodeURIComponent(scenarioSlug)}${to}`;
 }

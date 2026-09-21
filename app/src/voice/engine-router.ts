@@ -118,6 +118,55 @@ export function resolveSessionEngine(opts: { modelId?: string | null; tier: Voic
   };
 }
 
+// ── Per-tenant engine binding (SAU-525) ──────────────────────────────────────
+/**
+ * Engine GRADE a tenant's phone calls run on, decoupled from the payer's billing
+ * tier. The web path ties engine to plan (free → standard, paid → premium); a
+ * clinic on a $399/mo plan is a *paid* payer whose calls must still run on the
+ * cost engine — the SAU-455 price sheet is only ≥70% GM on mini. So the tenant
+ * carries its own grade and the router resolves the concrete model from it.
+ */
+export type EngineGrade = 'standard' | 'premium';
+
+/** The Clinic Secretary archetype default: every clinic call runs standard unless bound otherwise. */
+export const CLINIC_DEFAULT_ENGINE_GRADE: EngineGrade = 'standard';
+
+export interface TenantEngine extends VoiceEngine {
+  /** the grade the tenant was resolved at (after the paid-only gate on premium). */
+  grade: EngineGrade;
+}
+
+/**
+ * Resolve the engine for a TENANT-attributed session (the telephony path):
+ *   - `grade` is the tenant's binding (clinic.voice_engine); null ⇒ `defaultGrade`.
+ *   - `premium` is a PAID-ONLY grade: a free-tier payer is never billed at premium,
+ *     the same invariant the web path enforces via `downgraded`.
+ *   - the concrete model has its OWN levers so the clinic path can be pointed at a
+ *     different model without moving web users: VOICE_ENGINE_TENANT_STANDARD /
+ *     VOICE_ENGINE_TENANT_PREMIUM, falling back to the tier levers (FREE / PAID).
+ * `tier` on the result is the ROUTING tier the model was picked at (standard ⇒
+ * 'free' path engine); callers meter against the payer's billing tier separately.
+ */
+export function resolveTenantEngine(opts: {
+  modelId?: string | null;
+  /** the payer's billing tier (from their entitlement) */
+  tier: VoiceTier;
+  /** the tenant's bound grade; null/undefined ⇒ defaultGrade */
+  grade?: EngineGrade | null;
+  defaultGrade?: EngineGrade;
+}): TenantEngine {
+  const wanted = opts.grade ?? opts.defaultGrade ?? CLINIC_DEFAULT_ENGINE_GRADE;
+  const grade: EngineGrade = wanted === 'premium' && opts.tier === 'paid' ? 'premium' : 'standard';
+  const engine = resolveSessionEngine({ modelId: opts.modelId, tier: grade === 'premium' ? 'paid' : 'free' });
+  if (engine.vendor === 'openai') {
+    const override = grade === 'premium'
+      ? process.env.VOICE_ENGINE_TENANT_PREMIUM
+      : process.env.VOICE_ENGINE_TENANT_STANDARD;
+    if (override) engine.model = override;
+  }
+  return { ...engine, grade };
+}
+
 /**
  * The config-driven engine for a voice tier when no scenario model is specified.
  * Backward-compatible with SAU-256: resolves the default scenario engine

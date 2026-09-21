@@ -9,10 +9,14 @@
  *
  * Run: `npm run verify:telephony` (loads `.env.local` via --env-file-if-exists).
  *
- * Exit code is 0 when telephony + handoff activate live; the SMS seam additionally
- * needs `TWILIO_SMS_FROM` (the claimed number) so it is reported but not gating.
+ * Exit code is 0 when telephony + handoff activate live AND (SAU-525) the
+ * provisioned number would be admitted by the bridge — i.e. it resolves to a clinic
+ * with an owner to bill. The SMS seam additionally needs `TWILIO_SMS_FROM` (the
+ * claimed number) so it is reported but not gating.
  */
 import { getTelephonyAdapter, getTwilioConfig, bridgeWsUrlFor } from '@/services/telephony';
+import { admitInboundCall, CallAdmissionError } from '@/services/telephony/call-admission';
+import { getStore } from '@/db';
 import { resolveHandoffAdapter } from '@/services/handoff';
 import { resolveSmsAdapter } from '@/services/notifications';
 
@@ -26,7 +30,43 @@ function line(label: string, value: unknown) {
   console.log(`  ${label.padEnd(24)} ${value}`);
 }
 
-function main() {
+/**
+ * SAU-525 — would a call to the provisioned number be ADMITTED? The bridge refuses
+ * any number that does not resolve to a billable tenant, so an unbound number is a
+ * go-live blocker that should surface here, not as a refused first call.
+ */
+async function admissionCheck(phoneNumber: string | undefined): Promise<boolean> {
+  console.log('Call admission (SAU-525 — number → tenant → payer → engine):');
+  if (!process.env.DATABASE_URL) {
+    line('verdict', '⚠️ skipped (no DATABASE_URL — cannot resolve tenants)');
+    console.log('');
+    return true;
+  }
+  try {
+    const a = await admitInboundCall(getStore(), {
+      to: phoneNumber,
+      fallbackClinicSlug: process.env.TELEPHONY_FALLBACK_CLINIC,
+    });
+    line('tenant', `${a.clinic.slug} (via ${a.resolvedBy})`);
+    line('payer', mask(a.ownerUserId));
+    line('billing tier', a.tier);
+    line('engine', `${a.engine.model} (${a.engine.grade})`);
+    line('minutes remaining', a.meter.remainingMinutes);
+    line('verdict', '✅ admitted');
+    console.log('');
+    return true;
+  } catch (e) {
+    if (e instanceof CallAdmissionError) {
+      line('verdict', `❌ refused: ${e.reason} — ${e.message}`);
+      if (e.reason === 'no_tenant') line('fix', 'bind the number: PATCH /api/use-cases/clinic-agent/clinics/telephony { clinicId, phoneNumber } (admin)');
+      console.log('');
+      return false;
+    }
+    throw e;
+  }
+}
+
+async function main() {
   console.log('=== SAU-292 live telephony activation check ===\n');
 
   console.log('Env presence (booleans only, never values):');
@@ -47,9 +87,11 @@ function main() {
   line('bridge public URL', cfg?.bridgePublicUrl || '(none)');
   line('verify signatures', cfg?.verifySignatures);
   if (cfg) {
-    line('sample bridge wss', bridgeWsUrlFor(cfg, 'clinic-intake-booking') || '(no public URL → fail-soft)');
+    line('sample bridge wss', bridgeWsUrlFor(cfg, 'clinic-intake-booking', cfg.phoneNumber) || '(no public URL → fail-soft)');
   }
   console.log('');
+
+  const admitted = await admissionCheck(cfg?.phoneNumber ?? process.env.TWILIO_PHONE_NUMBER);
 
   const tel = getTelephonyAdapter();
   const handoff = resolveHandoffAdapter();
@@ -71,12 +113,18 @@ function main() {
   line('sms LIVE', smsLive ? '✅' : `⚠️ mock (set TWILIO_SMS_FROM to the claimed number)`);
   console.log('');
 
-  if (telLive && handoffLive) {
-    console.log('PASS — wired creds activate the live Twilio telephony + handoff adapters.');
+  line('call admitted', admitted ? '✅' : '❌ (bridge would refuse — bind the number to a clinic)');
+  console.log('');
+
+  if (telLive && handoffLive && admitted) {
+    console.log('PASS — wired creds activate the live Twilio telephony + handoff adapters, and the number resolves to a billable tenant.');
     process.exit(0);
   }
-  console.log('FAIL — expected live telephony + handoff with creds present.');
+  console.log('FAIL — expected live telephony + handoff with creds present, and an admitted number.');
   process.exit(1);
 }
 
-main();
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

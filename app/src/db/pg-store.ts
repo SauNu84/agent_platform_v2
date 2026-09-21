@@ -19,7 +19,7 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicTelephonyPatch, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -113,6 +113,8 @@ function rowToClinic(r: Row): ClinicRecord {
     name: r.name,
     config: r.config ?? null,
     createdByUserId: r.created_by_user_id ?? null,
+    phoneNumber: r.phone_number ?? null,
+    voiceEngine: r.voice_engine === 'standard' || r.voice_engine === 'premium' ? r.voice_engine : null,
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date(0).toISOString(),
   };
 }
@@ -897,10 +899,57 @@ export class PgStore implements Store {
   // ── Multi-clinic tenancy (SAU-301, WS-B) — migration 0021 ────────────────────
   async createClinic(input: NewClinic): Promise<ClinicRecord> {
     const { rows } = await this.q(
-      `INSERT INTO clinic (slug, name, created_by_user_id, config)
-       VALUES ($1,$2,$3,$4::jsonb) RETURNING *`,
-      [input.slug, input.name, input.createdByUserId, input.config ? JSON.stringify(input.config) : null],
+      `INSERT INTO clinic (slug, name, created_by_user_id, config, phone_number, voice_engine)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6) RETURNING *`,
+      [input.slug, input.name, input.createdByUserId, input.config ? JSON.stringify(input.config) : null,
+        input.phoneNumber ?? null, input.voiceEngine ?? null],
     );
+    return rowToClinic(rows[0]);
+  }
+
+  // ── Telephony binding (SAU-525) — migration 0027 ─────────────────────────────
+  async getClinicByPhoneNumber(phoneNumber: string): Promise<ClinicRecord | null> {
+    const { rows } = await this.q('SELECT * FROM clinic WHERE phone_number = $1', [phoneNumber]);
+    return rows[0] ? rowToClinic(rows[0]) : null;
+  }
+
+  async getClinicOwnerUserId(clinicId: string): Promise<string | null> {
+    // Creator first (provenance), else the earliest owner-role member. One query so
+    // the bridge's admission path stays a single round-trip per lookup.
+    const { rows } = await this.q(
+      `SELECT COALESCE(
+                c.created_by_user_id,
+                (SELECT m.user_id FROM clinic_member m
+                  WHERE m.clinic_id = c.id AND m.role = 'owner'
+                  ORDER BY m.created_at ASC LIMIT 1)
+              ) AS owner_user_id
+         FROM clinic c WHERE c.id = $1`,
+      [clinicId],
+    );
+    return rows[0]?.owner_user_id ?? null;
+  }
+
+  async updateClinicTelephony(clinicId: string, patch: ClinicTelephonyPatch): Promise<ClinicRecord> {
+    // Boolean "set?" flags keep "leave untouched" (undefined) distinct from
+    // "clear" (null) without building SQL dynamically.
+    const setPhone = patch.phoneNumber !== undefined;
+    const setEngine = patch.voiceEngine !== undefined;
+    let rows: Row[];
+    try {
+      ({ rows } = await this.q(
+        `UPDATE clinic
+            SET phone_number = CASE WHEN $2::boolean THEN $3 ELSE phone_number END,
+                voice_engine = CASE WHEN $4::boolean THEN $5 ELSE voice_engine END
+          WHERE id = $1 RETURNING *`,
+        [clinicId, setPhone, patch.phoneNumber ?? null, setEngine, patch.voiceEngine ?? null],
+      ));
+    } catch (e) {
+      // 23505 = unique_violation on clinic_phone_number_uidx: the number is already
+      // another tenant's. Surface it as a domain error, not a 500.
+      if ((e as { code?: string }).code === '23505') throw new Error('phone number already bound to another clinic');
+      throw e;
+    }
+    if (!rows[0]) throw new Error('clinic not found or not permitted');
     return rowToClinic(rows[0]);
   }
 

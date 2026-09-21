@@ -19,6 +19,8 @@
  */
 import type { Store, SessionTranscript } from '@/db/store';
 import type { ScenarioRecord } from '@/domain/scenario';
+import type { TurnUsage } from '@/voice/realtime-interface';
+import { runWithActor, type ActorContext } from '@/auth/actor';
 import { runClinicTool } from '@/services/clinic-booking';
 import { finalizeClinicSession, isClinicScenario } from '@/services/clinic-session';
 
@@ -50,6 +52,17 @@ export interface RealtimeTransport {
   onError(cb: (message: string) => void): void;
   onClose(cb: () => void): void;
   close(): void;
+  /** Measured token usage so far, when the vendor reports it (SAU-525 metering). */
+  usage?(): TurnUsage | null;
+}
+
+/** What the bridge knows about a call once it has ended — the metering input. */
+export interface CallSummary {
+  transcript: SessionTranscript;
+  startedAt: number;
+  endedAt: number;
+  /** vendor-reported token totals, or null when the transport doesn't measure */
+  usage: TurnUsage | null;
 }
 
 export interface CallBridgeDeps {
@@ -64,6 +77,15 @@ export interface CallBridgeDeps {
   now?: () => number;
   /** Structured log sink (the bridge server passes a console logger). */
   log?: (event: string, meta?: Record<string, unknown>) => void;
+  /**
+   * RLS context to bind for every store write the call makes (SAU-525). Twilio /
+   * vendor socket events fire outside any `AsyncLocalStorage.run` scope, so the
+   * finalize + tool paths re-enter the actor explicitly — otherwise the outcome /
+   * usage writes would run unbound and be refused under `app_rw`.
+   */
+  actor?: ActorContext | null;
+  /** Called exactly once after finalize with the call summary (the bridge server meters here). */
+  onFinalize?: (summary: CallSummary) => Promise<void>;
 }
 
 export interface CallBridge {
@@ -88,9 +110,12 @@ export async function startCallBridge(
   const now = deps.now ?? Date.now;
   const log = deps.log ?? (() => {});
   const runTool = deps.runTool ?? ((name, argsJson) => runClinicTool(name, safeParse(argsJson)));
+  // Re-enter the tenant's actor context on every event-driven store path.
+  const bound = <T>(fn: () => Promise<T>): Promise<T> => (deps.actor ? runWithActor(deps.actor, fn) : fn());
 
   const transcript: SessionTranscript = { turns: [], toolCalls: [] };
   let finalized = false;
+  const startedAt = now();
 
   // ── phone → model ──────────────────────────────────────────────────────────
   media.onAudio((muLaw) => realtime.appendAudio(muLaw));
@@ -113,7 +138,7 @@ export async function startCallBridge(
     const args = safeParse(call.argsJson);
     let result: unknown;
     try {
-      result = await runTool(call.name, call.argsJson);
+      result = await bound(() => runTool(call.name, call.argsJson));
     } catch (e) {
       result = { error: (e as Error).message };
       log('tool_error', { name: call.name, message: (e as Error).message });
@@ -129,6 +154,8 @@ export async function startCallBridge(
   const finalize = async () => {
     if (finalized) return;
     finalized = true;
+    // Read usage BEFORE closing the vendor socket — the transport may drop it on close.
+    const usage = realtime.usage?.() ?? null;
     try {
       media.close();
     } catch {
@@ -139,22 +166,32 @@ export async function startCallBridge(
     } catch {
       /* already closed */
     }
-    if (deps.store && deps.sessionId && isClinicScenario(deps.scenario)) {
-      try {
-        const rec = await finalizeClinicSession({
-          store: deps.store,
-          scenario: deps.scenario,
-          sessionId: deps.sessionId,
-          userId: deps.userId ?? null,
-          transcript,
-        });
-        log('finalized', { outcome: rec.outcome, eventId: rec.eventId ?? undefined });
-      } catch (e) {
-        log('finalize_error', { message: (e as Error).message });
+    await bound(async () => {
+      if (deps.store && deps.sessionId && isClinicScenario(deps.scenario)) {
+        try {
+          const rec = await finalizeClinicSession({
+            store: deps.store,
+            scenario: deps.scenario,
+            sessionId: deps.sessionId,
+            userId: deps.userId ?? null,
+            clinicId: deps.actor?.clinicId ?? null,
+            transcript,
+          });
+          log('finalized', { outcome: rec.outcome, eventId: rec.eventId ?? undefined });
+        } catch (e) {
+          log('finalize_error', { message: (e as Error).message });
+        }
+      } else {
+        log('finalized', { persisted: false });
       }
-    } else {
-      log('finalized', { persisted: false });
-    }
+      if (deps.onFinalize) {
+        try {
+          await deps.onFinalize({ transcript, startedAt, endedAt: now(), usage });
+        } catch (e) {
+          log('meter_error', { message: (e as Error).message });
+        }
+      }
+    });
   };
 
   media.onClose(finalize);

@@ -10,7 +10,8 @@
  * never widen access because (a) we re-check membership here before honoring it and
  * (b) the DB RLS policies (migration 0021) only ever match a member's own rows.
  */
-import type { Store, ClinicRecord } from '@/db/store';
+import type { Store, ClinicRecord, ClinicVoiceEngine } from '@/db/store';
+import { normalizeDialedNumber } from '@/services/telephony/call-admission';
 
 /** user_setting key holding the operator's currently-selected clinic id. */
 export const ACTIVE_CLINIC_KEY = 'active_clinic';
@@ -97,6 +98,67 @@ export interface ClinicSummary {
   name: string;
   configured: boolean;
   active: boolean;
+  /** telephony binding (SAU-525): the dialed number + engine grade, when set */
+  phoneNumber: string | null;
+  voiceEngine: ClinicVoiceEngine | null;
+}
+
+// ── Telephony binding (SAU-525) ──────────────────────────────────────────────
+export interface ClinicTelephonyInput {
+  /** E.164 (or null to unbind). `undefined` leaves it untouched. */
+  phoneNumber?: string | null;
+  /** 'standard' | 'premium' (or null for the archetype default). `undefined` leaves it untouched. */
+  voiceEngine?: string | null;
+}
+
+/**
+ * Bind a dialed number / engine grade to a clinic. Membership-gated (and RLS
+ * re-checks it on the UPDATE). The NUMBER binding is additionally admin-only:
+ * numbers are platform-provisioned (Twilio), so which tenant answers a number is
+ * a platform decision — a member could otherwise pre-claim the shared trial
+ * number and route every call (and its bill) to themselves. The engine GRADE is
+ * the tenant's own plan choice and stays member-editable.
+ */
+export async function setClinicTelephony(
+  store: Store,
+  actor: { userId: string; isAdmin: boolean },
+  clinicId: string,
+  input: ClinicTelephonyInput,
+): Promise<ClinicRecord> {
+  const clinic = await store.getClinicById(clinicId);
+  if (!clinic || !(await store.isClinicMember(clinicId, actor.userId))) {
+    throw new TenancyError('Not a member of that clinic.', 403);
+  }
+  const patch: { phoneNumber?: string | null; voiceEngine?: ClinicVoiceEngine | null } = {};
+
+  if (input.phoneNumber !== undefined) {
+    if (!actor.isAdmin) throw new TenancyError('Binding a phone number requires a platform admin.', 403);
+    if (input.phoneNumber === null || input.phoneNumber === '') {
+      patch.phoneNumber = null;
+    } else {
+      const e164 = normalizeDialedNumber(input.phoneNumber);
+      if (!e164) throw new TenancyError('Phone number must be E.164 (e.g. +14155550123).');
+      patch.phoneNumber = e164;
+    }
+  }
+
+  if (input.voiceEngine !== undefined) {
+    if (input.voiceEngine === null || input.voiceEngine === '') {
+      patch.voiceEngine = null;
+    } else if (input.voiceEngine === 'standard' || input.voiceEngine === 'premium') {
+      patch.voiceEngine = input.voiceEngine;
+    } else {
+      throw new TenancyError("voiceEngine must be 'standard', 'premium' or null.");
+    }
+  }
+
+  if (Object.keys(patch).length === 0) return clinic;
+  try {
+    return await store.updateClinicTelephony(clinicId, patch);
+  } catch (e) {
+    if (/already bound/.test((e as Error).message)) throw new TenancyError('That phone number is already bound to another clinic.', 409);
+    throw e;
+  }
 }
 
 /** Build the switcher view: every clinic the operator belongs to + which is active. */
@@ -114,6 +176,8 @@ export async function getClinicSwitcherView(
       name: c.name,
       configured: Boolean(c.config),
       active: c.id === activeClinicId,
+      phoneNumber: c.phoneNumber,
+      voiceEngine: c.voiceEngine,
     })),
   };
 }

@@ -9,7 +9,7 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicMemberRecord, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicMemberRecord, ClinicTelephonyPatch, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -587,10 +587,47 @@ export class MemoryStore implements Store {
       name: input.name,
       config: input.config ?? null,
       createdByUserId: input.createdByUserId,
+      phoneNumber: input.phoneNumber ?? null,
+      voiceEngine: input.voiceEngine ?? null,
       createdAt: nowIso(),
     };
+    if (rec.phoneNumber && [...this.clinics.values()].some((c) => c.phoneNumber === rec.phoneNumber)) {
+      throw new Error('phone number already bound to another clinic');
+    }
     this.clinics.set(rec.id, rec);
     return rec;
+  }
+
+  // ── Telephony binding (SAU-525) ──────────────────────────────────────────────
+  async getClinicByPhoneNumber(phoneNumber: string): Promise<ClinicRecord | null> {
+    for (const c of this.clinics.values()) if (c.phoneNumber === phoneNumber) return c;
+    return null;
+  }
+
+  async getClinicOwnerUserId(clinicId: string): Promise<string | null> {
+    const clinic = this.clinics.get(clinicId);
+    if (!clinic) return null;
+    if (clinic.createdByUserId) return clinic.createdByUserId;
+    const owner = this.clinicMembers
+      .filter((m) => m.clinicId === clinicId && m.role === 'owner')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    return owner?.userId ?? null;
+  }
+
+  async updateClinicTelephony(clinicId: string, patch: ClinicTelephonyPatch): Promise<ClinicRecord> {
+    const existing = this.clinics.get(clinicId);
+    if (!existing) throw new Error('clinic not found');
+    const phoneNumber = patch.phoneNumber === undefined ? existing.phoneNumber : patch.phoneNumber;
+    if (phoneNumber && [...this.clinics.values()].some((c) => c.id !== clinicId && c.phoneNumber === phoneNumber)) {
+      throw new Error('phone number already bound to another clinic');
+    }
+    const updated: ClinicRecord = {
+      ...existing,
+      phoneNumber,
+      voiceEngine: patch.voiceEngine === undefined ? existing.voiceEngine : patch.voiceEngine,
+    };
+    this.clinics.set(clinicId, updated);
+    return updated;
   }
 
   async getClinicById(id: string): Promise<ClinicRecord | null> {

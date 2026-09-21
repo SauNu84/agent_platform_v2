@@ -4,10 +4,15 @@
  * A STANDALONE WebSocket server — deliberately NOT inside Next.js, which can't host
  * a long-lived raw WS upgrade cleanly under `next dev`. Twilio's `<Connect><Stream>`
  * (emitted by the inbound-call webhook) opens a socket here; for each call we:
- *   1. resolve the scenario from the `?slug=` query (the dialed number → agent),
- *   2. compile its prompt + clinic tools + fold in any Knowledge Base,
- *   3. open a server-side OpenAI Realtime session (platform key, μ-law both ways),
- *   4. hand both transports to the vendor-neutral `startCallBridge` orchestrator.
+ *   1. resolve the scenario from the `?slug=` query,
+ *   2. ADMIT the call (SAU-525): the dialed `?to=` number → clinic tenant → owner
+ *      (the billing principal), pre-flight cap check, per-tenant engine — or
+ *      refuse it with a typed reason. No tenant ⇒ no call. Never an unmetered call.
+ *   3. compile its prompt + the TENANT's clinic rules + fold in any Knowledge Base,
+ *   4. open a server-side OpenAI Realtime session on the tenant's engine,
+ *   5. hand both transports to the vendor-neutral `startCallBridge` orchestrator,
+ *      bound to the owner's RLS context, and meter the call into `voice_usage`
+ *      on finalize exactly like a web session.
  *
  * Key-gated + fail-soft (AC #2): no `OPENAI_API_KEY` ⇒ we accept the socket and
  * close it cleanly with a log line instead of crashing. Run it with `npm run bridge`
@@ -18,11 +23,15 @@
  */
 import { WebSocketServer } from 'ws';
 import { getStore } from '@/db';
+import { runWithActor } from '@/auth/actor';
 import { getScenario } from '@/services/scenarios';
 import { resolveKnowledgeContext } from '@/services/knowledge-base';
 import { toCompiledScenario } from '@/domain/scenario';
 import { resolveOpenAiVoice } from '@/lib/voices';
 import { voiceKbCharBudget } from '@/voice/engine-router';
+import { getClinicConfig } from '@/services/clinic-config';
+import { runClinicTool } from '@/services/clinic-booking';
+import { admitInboundCall, CallAdmissionError } from '@/services/telephony/call-admission';
 import { startCallBridge } from '@/services/telephony/bridge';
 import { OpenAiRealtimeTransport } from '@/services/telephony/openai-realtime-transport';
 import { TwilioMediaTransport } from '@/services/telephony/twilio-media-transport';
@@ -33,12 +42,22 @@ function log(event: string, meta?: Record<string, unknown>) {
   console.log(JSON.stringify({ t: new Date().toISOString(), src: 'telephony-bridge', event, ...meta }));
 }
 
-function slugFromUrl(url: string | undefined): string | null {
+function queryParam(url: string | undefined, key: string): string | null {
   try {
     const u = new URL(url ?? '', 'http://localhost');
-    return u.searchParams.get('slug');
+    return u.searchParams.get(key);
   } catch {
     return null;
+  }
+}
+const slugFromUrl = (url: string | undefined) => queryParam(url, 'slug');
+const toFromUrl = (url: string | undefined) => queryParam(url, 'to');
+
+function safeParse(json: string): unknown {
+  try {
+    return json ? JSON.parse(json) : {};
+  } catch {
+    return {};
   }
 }
 
@@ -47,7 +66,8 @@ export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
 
   wss.on('connection', async (ws, req) => {
     const slug = slugFromUrl(req.url) ?? slugFromUrl(req.headers['sec-websocket-protocol'] as string);
-    log('connection', { slug, remote: req.socket.remoteAddress });
+    const to = toFromUrl(req.url);
+    log('connection', { slug, to, remote: req.socket.remoteAddress });
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -70,28 +90,86 @@ export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
         return;
       }
 
-      const kb = await resolveKnowledgeContext(store, scenario.id, voiceKbCharBudget());
-      const compiled = toCompiledScenario(scenario, { knowledgeBaseText: kb.text });
-      const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
-      const voice = resolveOpenAiVoice(scenario.voiceName, process.env.OPENAI_VOICE);
-
-      const session = await store.createSession({ scenarioId: scenario.id, userId: null, vendor: 'openai' });
-
-      const media = new TwilioMediaTransport(ws);
-      const realtime = new OpenAiRealtimeTransport({
-        apiKey,
-        model,
-        instructions: compiled.aiInstructions,
-        voice,
-        tools: compiled.tools,
+      // ── Admission (SAU-525): tenant → payer → cap → engine, or a typed refusal.
+      const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
+      let admission;
+      try {
+        admission = await admitInboundCall(store, {
+          to,
+          modelId,
+          fallbackClinicSlug: process.env.TELEPHONY_FALLBACK_CLINIC,
+        });
+      } catch (e) {
+        if (e instanceof CallAdmissionError) {
+          log('call_refused', { reason: e.reason, to, message: e.message });
+          ws.close(1008, `call refused: ${e.reason}`);
+          return;
+        }
+        throw e;
+      }
+      const { clinic, ownerUserId, tier, engine, meter, actor } = admission;
+      log('call_admitted', {
+        clinic: clinic.slug, resolvedBy: admission.resolvedBy, tier, grade: engine.grade,
+        engine: engine.model, remainingMinutes: meter.remainingMinutes,
       });
 
-      await startCallBridge(media, realtime, {
-        scenario,
-        store,
-        userId: null,
-        sessionId: session.id,
-        log,
+      // Everything from here runs AS the clinic owner: the session row, the
+      // tenant's authored rules, the outcome + usage writes are all RLS-scoped.
+      await runWithActor(actor, async () => {
+        const kb = await resolveKnowledgeContext(store, scenario.id, voiceKbCharBudget());
+        const compiled = toCompiledScenario(scenario, { knowledgeBaseText: kb.text });
+        const voice = resolveOpenAiVoice(scenario.voiceName, process.env.OPENAI_VOICE);
+        // The TENANT's clinic definition governs the booking tools, not DEFAULT_CLINIC.
+        const clinicConfig = await getClinicConfig(store, ownerUserId, clinic.id);
+
+        const session = await store.createSession({
+          scenarioId: scenario.id, userId: ownerUserId, clinicId: clinic.id, vendor: engine.vendor,
+        });
+
+        const media = new TwilioMediaTransport(ws);
+        const realtime = new OpenAiRealtimeTransport({
+          apiKey,
+          model: engine.model,
+          instructions: compiled.aiInstructions,
+          voice,
+          tools: compiled.tools,
+        });
+
+        await startCallBridge(media, realtime, {
+          scenario,
+          store,
+          userId: ownerUserId,
+          sessionId: session.id,
+          actor,
+          runTool: (name, argsJson) => runClinicTool(name, safeParse(argsJson), { clinic: clinicConfig }),
+          log,
+          // Meter (CFO AC on SAU-525): one voice_usage row per call, attributed to the
+          // payer at their billing tier, on the engine that actually ran.
+          onFinalize: async ({ transcript, startedAt, endedAt, usage }) => {
+            const durationMs = Math.max(0, endedAt - startedAt);
+            // Close the session row like the web path does (transcript is PHI-enveloped at rest, 0017).
+            await store.completeSession(session.id, { status: 'completed', startedAt, endedAt, transcript });
+            await store.recordVoiceUsage({
+              sessionId: session.id,
+              userId: ownerUserId,
+              scenarioId: scenario.id,
+              vendor: engine.vendor,
+              model: engine.model,
+              tier,
+              engine: engine.model,
+              durationMs,
+              voiceMinutes: Number((durationMs / 60000).toFixed(4)),
+              inputTextTokens: usage?.inputTextTokens ?? 0,
+              inputAudioTokens: usage?.inputAudioTokens ?? 0,
+              cachedTextTokens: usage?.cachedTextTokens ?? 0,
+              cachedAudioTokens: usage?.cachedAudioTokens ?? 0,
+              outputTextTokens: usage?.outputTextTokens ?? 0,
+              outputAudioTokens: usage?.outputAudioTokens ?? 0,
+              totalTokens: usage?.totalTokens ?? 0,
+            });
+            log('metered', { sessionId: session.id, durationMs, tokens: usage?.totalTokens ?? 0, tier, engine: engine.model });
+          },
+        });
       });
     } catch (e) {
       log('bridge_error', { message: (e as Error).message });

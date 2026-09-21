@@ -54,7 +54,8 @@ export async function POST(req: NextRequest) {
   }
 
   const cfg = getTwilioConfig();
-  const bridgeWsUrl = cfg ? bridgeWsUrlFor(cfg, slug) ?? '' : '';
+  // The dialed number is how the bridge finds the tenant + payer (SAU-525).
+  const bridgeWsUrl = cfg ? bridgeWsUrlFor(cfg, slug, params.To) ?? '' : '';
 
   const answer = adapter.answerInbound({
     callId: params.CallSid,

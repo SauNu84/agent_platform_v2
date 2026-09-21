@@ -496,6 +496,14 @@ export interface ClinicNotificationRecord {
 
 // ── Multi-clinic tenancy (SAU-301, Phase 2 · WS-B) ──────────────────────────
 /** A clinic/tenant row with its authored definition (config) + provenance. */
+/**
+ * Per-tenant voice engine GRADE (SAU-525): which engine class a tenant's phone
+ * calls run on, independent of the owner's billing tier. `standard` = the cost
+ * engine (gpt-realtime-mini by default), `premium` = the "Super" engine. The
+ * concrete model ids remain a config seam in `voice/engine-router`.
+ */
+export type ClinicVoiceEngine = 'standard' | 'premium';
+
 export interface ClinicRecord {
   id: string;
   slug: string;
@@ -503,6 +511,10 @@ export interface ClinicRecord {
   /** authored ClinicConfig (non-PHI); null until the operator saves a definition. */
   config: Record<string, unknown> | null;
   createdByUserId: string | null;
+  /** E.164 number inbound calls to this tenant arrive on (SAU-525); null = not phone-reachable. */
+  phoneNumber: string | null;
+  /** engine grade for this tenant's calls (SAU-525); null = archetype default. */
+  voiceEngine: ClinicVoiceEngine | null;
   createdAt: string;
 }
 
@@ -511,6 +523,14 @@ export interface NewClinic {
   name: string;
   createdByUserId: string;
   config?: Record<string, unknown> | null;
+  phoneNumber?: string | null;
+  voiceEngine?: ClinicVoiceEngine | null;
+}
+
+/** Patch for the telephony binding (SAU-525); `undefined` leaves a field untouched. */
+export interface ClinicTelephonyPatch {
+  phoneNumber?: string | null;
+  voiceEngine?: ClinicVoiceEngine | null;
 }
 
 /** A user ↔ clinic membership (the switcher's list + active-clinic gate). */
@@ -629,6 +649,19 @@ export interface Store {
   listClinicsForUser(userId: string): Promise<ClinicRecord[]>;
   /** Replace a clinic's authored definition (RLS: must be a member). */
   updateClinicConfig(clinicId: string, config: Record<string, unknown>): Promise<ClinicRecord>;
+  /**
+   * Tenant lookup for an inbound call (SAU-525): the clinic bound to a dialed E.164
+   * number, or null. Callers run this under a system actor — RLS would otherwise
+   * hide every clinic from a request that has no user principal.
+   */
+  getClinicByPhoneNumber(phoneNumber: string): Promise<ClinicRecord | null>;
+  /**
+   * The user a tenant's calls are billed to (SAU-525): the creator, else the
+   * earliest `owner` member. null when the clinic has no owner ⇒ not billable.
+   */
+  getClinicOwnerUserId(clinicId: string): Promise<string | null>;
+  /** Update the telephony binding (RLS: must be a member). Rejects a number already bound elsewhere. */
+  updateClinicTelephony(clinicId: string, patch: ClinicTelephonyPatch): Promise<ClinicRecord>;
   /** Add a user↔clinic membership (idempotent on the PK). */
   addClinicMember(clinicId: string, userId: string, role?: string): Promise<void>;
   /** True when the user belongs to the clinic (gates active-clinic selection). */

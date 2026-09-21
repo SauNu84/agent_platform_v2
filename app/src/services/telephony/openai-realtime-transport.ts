@@ -9,7 +9,8 @@
  * leaves the server and the caller's audio never touches our client.
  */
 import { WebSocket } from 'ws';
-import type { ToolDefinition } from '@/voice/realtime-interface';
+import type { ToolDefinition, TurnUsage } from '@/voice/realtime-interface';
+import { parseUsage, sumUsage } from '@/voice/openai-usage';
 import type { RealtimeTransport } from './bridge';
 import { openAiRealtimeWsUrl, openAiRealtimeHeaders, openAiSessionUpdate } from './openai-realtime-session';
 
@@ -31,6 +32,8 @@ export class OpenAiRealtimeTransport implements RealtimeTransport {
   private cbTranscript: (t: { role: 'user' | 'agent'; text: string }) => void = () => {};
   private cbError: (m: string) => void = () => {};
   private cbClose: () => void = () => {};
+  /** one entry per response.done that carried usage — same accounting as the web adapter */
+  private perTurnUsage: TurnUsage[] = [];
 
   constructor(opts: OpenAiRealtimeOptions) {
     this.opts = opts;
@@ -93,12 +96,24 @@ export class OpenAiRealtimeTransport implements RealtimeTransport {
       case 'response.output_audio_transcript.done':
         if (typeof evt.transcript === 'string') this.cbTranscript({ role: 'agent', text: evt.transcript });
         break;
+      case 'response.done': {
+        // Measured tokens (SAU-525): the bridge meters phone minutes + tokens into
+        // `voice_usage` exactly like a web session, so the CFO's cap sees both.
+        const u = parseUsage((evt.response as { usage?: unknown } | undefined)?.usage);
+        if (u) this.perTurnUsage.push(u);
+        break;
+      }
       case 'error':
         this.cbError(JSON.stringify(evt.error ?? evt));
         break;
       default:
         break;
     }
+  }
+
+  /** Session token totals so far (null until the first response.done with usage). */
+  usage(): TurnUsage | null {
+    return this.perTurnUsage.length ? sumUsage(this.perTurnUsage).totals : null;
   }
 
   appendAudio(muLawBase64: string): void {
