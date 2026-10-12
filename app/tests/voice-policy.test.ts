@@ -13,7 +13,7 @@ test('free tier seeds the CPO default policy: 30 / 10 / mini / text_chat_fallbac
   assert.equal(p.voiceMinutesPerMonth, 30);
   assert.equal(p.voiceSessionMaxMinutes, DEFAULT_FREE_SESSION_MAX);
   assert.equal(p.voiceSessionMaxMinutes, 10);
-  assert.equal(p.voiceEngine, 'gpt-realtime-mini');
+  assert.equal(p.voiceEngine, 'gpt-realtime-2.1-mini');
   assert.equal(p.onExhausted, 'text_chat_fallback');
 });
 
@@ -22,7 +22,7 @@ test('paid tier is uncapped monthly (metered) with the Super engine + 25-min ses
   assert.equal(p.tier, 'paid');
   assert.equal(p.voiceMinutesPerMonth, null, 'paid is metered with overage, no hard monthly cap');
   assert.equal(p.voiceSessionMaxMinutes, DEFAULT_PAID_SESSION_MAX);
-  assert.equal(p.voiceEngine, 'gpt-realtime');
+  assert.equal(p.voiceEngine, 'gpt-realtime-2.1-mini'); // SAU-534: both tiers on mini
 });
 
 test('billing plan tier maps to the right voice policy', () => {

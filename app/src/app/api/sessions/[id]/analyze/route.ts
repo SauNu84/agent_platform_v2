@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { analyzeSession, AnalystError } from '@/services/analyst';
 import { getActor } from '@/services/current-user';
+import { emitAnalysisViewed } from '@/services/paywall';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,6 +22,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   const analysis = await store.getAnalysis(params.id);
   if (!analysis) return NextResponse.json({ error: 'not analyzed yet' }, { status: 404 });
+  await emitAnalysisViewed(store, actor.userId, analysis.scorer);
   return NextResponse.json({ analysis });
 }
 
@@ -33,6 +35,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
   try {
     const analysis = await analyzeSession(store, params.id);
+    await emitAnalysisViewed(store, actor.userId, analysis.scorer); // shown inline (HistoryTable)
     return NextResponse.json({ analysis }, { status: 201 });
   } catch (e) {
     if (e instanceof AnalystError) {

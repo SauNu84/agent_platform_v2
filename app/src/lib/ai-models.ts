@@ -29,8 +29,9 @@ export type VoiceVendor = 'openai' | 'gemini' | 'anthropic';
  * VENDOR; the viewer's plan sets the quality tier automatically — CPO decision on
  * SAU-258):
  *   - `cost`   — one cheap engine on every plan (e.g. Gemini Flash Live).
- *   - `tiered` — free → standard engine, paid → premium engine, SAME vendor
- *                (OpenAI Realtime: free → gpt-realtime-mini, paid → gpt-realtime).
+ *   - `tiered` — free / paid each have their own engine lever, SAME vendor
+ *                (OpenAI Realtime: VOICE_ENGINE_FREE / VOICE_ENGINE_PAID; both default
+ *                to gpt-realtime-2.1-mini since SAU-534).
  * There is no separately-selectable premium row to "lock"; free-tier protection is
  * the router's automatic downgrade (a free viewer of a tiered engine runs the
  * standard engine and is never billed at the premium rate).
@@ -59,7 +60,7 @@ export interface AiModelOption {
  * a free viewer is auto-routed to the cheaper engine, paid gets the premium one.
  */
 export const OPENAI_REALTIME_TIER_NOTE =
-  'Engine is selected by the viewer’s plan: free → gpt-realtime-mini, paid → gpt-realtime.';
+  'Engine is selected by the viewer’s plan (SAU-534: every plan currently runs gpt-realtime-2.1-mini).';
 
 export const AI_MODELS: AiModelOption[] = [
   {
@@ -77,7 +78,7 @@ export const AI_MODELS: AiModelOption[] = [
     vendor: 'openai',
     engineClass: 'tiered',
     available: true,
-    hint: 'Tiered by plan: free runs standard quality, paid unlocks premium (gpt-realtime).',
+    hint: 'OpenAI’s realtime voice model. Paid plans add longer sessions and more minutes.',
     note: OPENAI_REALTIME_TIER_NOTE,
   },
   {

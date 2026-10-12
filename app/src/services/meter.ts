@@ -25,6 +25,8 @@ import type { EntitlementRecord, Store } from '@/db/store';
 import { voicePolicyForPlan, type VoicePolicy } from '@/voice/voice-policy';
 import type { OnExhausted } from '@/voice/voice-policy';
 import { getPlan } from '@/services/billing/plans';
+import { effectivePlanTier } from '@/voice/plan-features';
+import { tieredEngineDiffers } from '@/voice/engine-router';
 
 /** Default free plan applied when a user has no explicit entitlement row. */
 export const DEFAULT_FREE_MINUTES = Number(process.env.CREDIT_FREE_MINUTES ?? 30);
@@ -54,6 +56,12 @@ export interface MeterState {
   topUpCentsPerMinute: number | null;
   /** the resolved per-tier policy (config-driven entitlement). */
   policy: VoicePolicy;
+  /**
+   * True only when this user is on the free voice tier AND a paid plan would run a
+   * different engine model (SAU-557). Drives the "upgrade for better quality" note;
+   * false whenever both tiers run the same model (SAU-534).
+   */
+  engineUpgradeAvailable: boolean;
 }
 
 export class CapExceededError extends Error {
@@ -69,16 +77,6 @@ export class CapExceededError extends Error {
 
 function defaultEntitlement(userId: string): EntitlementRecord {
   return { userId, plan: 'free', freeMinutes: DEFAULT_FREE_MINUTES, paidMinutes: 0, planTier: 'free' };
-}
-
-/**
- * Effective billing tier for policy resolution. Prefer the named `planTier`
- * (SAU-250); fall back to the coarse `plan` flag so a legacy paid row without a
- * named tier still resolves to a paid policy rather than free.
- */
-function effectivePlanTier(ent: EntitlementRecord): 'free' | 'standard' | 'premium' {
-  if (ent.planTier && ent.planTier !== 'free') return ent.planTier;
-  return ent.plan === 'paid' ? 'standard' : 'free';
 }
 
 /** Start of the current UTC month + the reset boundary (first of next month). */
@@ -130,6 +128,7 @@ export async function getMeterState(store: Store, userId: string): Promise<Meter
     onExhausted: policy.onExhausted,
     topUpCentsPerMinute: getPlan(planTier)?.topUpCentsPerMinute ?? null,
     policy,
+    engineUpgradeAvailable: policy.tier === 'free' && tieredEngineDiffers(),
   };
 }
 

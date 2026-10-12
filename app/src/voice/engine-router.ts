@@ -9,8 +9,9 @@
  * later never re-architects anything.
  *
  * THE ENGINE IDS ARE A CONFIG SEAM — never hard-coded at a call site:
- *   - free tier → VOICE_ENGINE_FREE (default `gpt-realtime-mini`, ~½ cost, same vendor, drop-in)
- *   - paid tier → VOICE_ENGINE_PAID (default `gpt-realtime`, the "Super" engine)
+ *   - free tier → VOICE_ENGINE_FREE (default `gpt-realtime-2.1-mini`)
+ *   - paid tier → VOICE_ENGINE_PAID (default `gpt-realtime-2.1-mini` — SAU-534: both
+ *     tiers run mini; paid value is minutes + session length + features, SAU-552)
  * Override either via env to point at a different model without a deploy of new
  * code paths. A future Gemini/cascaded engine is added by giving its model id a
  * `vendor` here (and an adapter behind the seam) — the router contract is stable.
@@ -49,10 +50,16 @@ export interface VoiceEngine {
   downgraded: boolean;
 }
 
-/** Drop-in cheaper OpenAI engine (free tier, same vendor, ~½ the cost). */
-const DEFAULT_FREE_ENGINE = 'gpt-realtime-mini';
-/** The "Super" OpenAI engine for paid tiers. */
-const DEFAULT_PAID_ENGINE = 'gpt-realtime';
+/**
+ * SAU-534 (CPO engine ruling): BOTH web tiers run `gpt-realtime-2.1-mini`. The two
+ * levers stay separate so a deployment can split them again by env alone — and
+ * `downgraded` (below) follows whatever is actually configured, so the free-tier
+ * "upgrade for better quality" notice can never claim a difference that isn't there.
+ */
+const DEFAULT_FREE_ENGINE = 'gpt-realtime-2.1-mini';
+const DEFAULT_PAID_ENGINE = 'gpt-realtime-2.1-mini';
+/** The premium OpenAI engine — only reachable via a clinic's `premium` grade now. */
+const DEFAULT_PREMIUM_ENGINE = 'gpt-realtime';
 /** Google Gemini 2.5 Flash native-audio Live engine (SAU-258, ~⅓ the cost). */
 const DEFAULT_GEMINI_ENGINE = 'gemini-2.5-flash-preview-native-audio-dialog';
 
@@ -60,8 +67,8 @@ const DEFAULT_GEMINI_ENGINE = 'gemini-2.5-flash-preview-native-audio-dialog';
  * Resolve the concrete realtime model id an option maps to for a tier, from config
  * (env), never hard-coded at a call site. Each lever has its own override so a
  * deployment can point an engine at a different model without new code:
- *   - OpenAI free (standard) → VOICE_ENGINE_FREE   (default gpt-realtime-mini)
- *   - OpenAI paid (premium)  → VOICE_ENGINE_PAID    (or legacy OPENAI_REALTIME_MODEL)
+ *   - OpenAI free → VOICE_ENGINE_FREE   (default gpt-realtime-2.1-mini)
+ *   - OpenAI paid → VOICE_ENGINE_PAID   (or legacy OPENAI_REALTIME_MODEL; default 2.1-mini)
  *   - Gemini Flash Live      → VOICE_ENGINE_GEMINI
  * Gemini is the same cheap engine on every plan; OpenAI Realtime is tiered.
  */
@@ -113,9 +120,20 @@ export function resolveSessionEngine(opts: { modelId?: string | null; tier: Voic
     vendor: opt.vendor,
     engineClass: opt.engineClass,
     label: opt.label,
-    // A free viewer of a tiered engine runs the standard (not premium) engine.
-    downgraded: opt.engineClass === 'tiered' && tier === 'free',
+    // A free viewer of a tiered engine is "downgraded" only if the configured free
+    // model actually differs from the paid one (SAU-557: since SAU-534 they don't).
+    downgraded: tier === 'free' && tieredEngineDiffers(opt),
   };
+}
+
+/**
+ * True iff a paid viewer would get a DIFFERENT model than a free viewer on this
+ * engine — the only condition under which an "upgrade for better quality" claim is
+ * true. Derived from the live config, so flipping VOICE_ENGINE_PAID/FREE can never
+ * leave the UI describing the old split (SAU-557 / CTO constraint 1).
+ */
+export function tieredEngineDiffers(opt: AiModelOption = aiModelById(DEFAULT_AI_MODEL)): boolean {
+  return opt.engineClass === 'tiered' && concreteModelFor(opt, 'free') !== concreteModelFor(opt, 'paid');
 }
 
 // ── Per-tenant engine binding (SAU-525) ──────────────────────────────────────
@@ -163,6 +181,12 @@ export function resolveTenantEngine(opts: {
       ? process.env.VOICE_ENGINE_TENANT_PREMIUM
       : process.env.VOICE_ENGINE_TENANT_STANDARD;
     if (override) engine.model = override;
+    // With both web tiers on mini (SAU-534), the PAID lever's default is no longer a
+    // premium model; a premium-bound clinic keeps the premium default unless a lever
+    // is explicitly set.
+    else if (grade === 'premium' && !process.env.VOICE_ENGINE_PAID && !process.env.OPENAI_REALTIME_MODEL) {
+      engine.model = DEFAULT_PREMIUM_ENGINE;
+    }
   }
   return { ...engine, grade };
 }
@@ -170,8 +194,8 @@ export function resolveTenantEngine(opts: {
 /**
  * The config-driven engine for a voice tier when no scenario model is specified.
  * Backward-compatible with SAU-256: resolves the default scenario engine
- * (`openai-realtime`, tiered) for the tier — free runs gpt-realtime-mini, paid
- * gets gpt-realtime — so existing single-engine callers are unchanged.
+ * (`openai-realtime`, tiered) for the tier from the FREE/PAID levers, so existing
+ * single-engine callers are unchanged.
  */
 export function resolveVoiceEngine(tier: VoiceTier): VoiceEngine {
   return resolveSessionEngine({ modelId: DEFAULT_AI_MODEL, tier });

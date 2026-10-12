@@ -13,6 +13,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateScenarioDraft, generateCourseDraft } from '@/authoring/pipeline';
 import type { AuthoringBrief } from '@/authoring/author';
 import { actorWithCapability } from '@/auth/api-guard';
+import { getStore } from '@/db';
+import { emitScenarioGenerated } from '@/services/paywall';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +48,7 @@ export async function POST(req: NextRequest) {
     const draft = kind === 'course'
       ? await generateCourseDraft(brief, { maxAttempts, effort })
       : await generateScenarioDraft(brief, { maxAttempts, effort });
+    await emitScenarioGenerated(getStore(), gate.actor.userId, kind, draft.ok);
     // Validation failure is a 422 (the generation didn't meet the schema), but
     // the draft body is still returned so the caller sees the actionable errors.
     return NextResponse.json({ draft }, { status: draft.ok ? 200 : 422 });

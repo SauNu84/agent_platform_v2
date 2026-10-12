@@ -18,7 +18,16 @@
  * Annual pricing is ANNUAL_DISCOUNT off the monthly run-rate (the "save N%" toggle
  * reads the same constant), expressed as a per-month-equivalent so both cycles
  * render in the same column.
+ *
+ * COPY SHIPS ONLY WHEN THE CODE IS TRUE (SAU-552 guardrail 2, SAU-557): session
+ * lengths come from the voice policy and every gated feature line from
+ * `planFeatures`, so a claim can't outlive the gate behind it. No "Priority support"
+ * (there is no support function) and no "Every scenario category" (nothing is
+ * locked). Standard says "longer sessions + session history" until the LLM judge
+ * ships (SAU-557 item 6) — not "analytics & scoring".
  */
+import { DEFAULT_FREE_SESSION_MAX, DEFAULT_PAID_SESSION_MAX } from '@/voice/voice-policy';
+import { planFeatures } from '@/voice/plan-features';
 export type PlanId = 'free' | 'standard' | 'premium';
 export type BillingCycle = 'monthly' | 'annual';
 
@@ -85,6 +94,18 @@ export const ANNUAL_DISCOUNT = 0.1;
 /** Per-month-equivalent annual price, rounded to the nearest cent. */
 const annual = (monthlyCents: number): number => Math.round(monthlyCents * (1 - ANNUAL_DISCOUNT));
 
+const sessionLine = (min: number, longer: boolean) =>
+  longer ? `Longer sessions — up to ${min} min each` : `Sessions up to ${min} min`;
+
+/** Feature lines a plan's `planFeatures` entitlements make true. */
+function gatedFeatureLines(tier: 'free' | 'standard' | 'premium'): string[] {
+  const f = planFeatures(tier);
+  return [
+    ...(f.coachMemory ? ['Coaches with persistent memory'] : []),
+    ...(f.csvExport ? ['Session history & analytics CSV export'] : []),
+  ];
+}
+
 /** Plan specs; `features` here omits the allowance line, which is derived. */
 const PLAN_SPECS: Plan[] = [
   {
@@ -94,7 +115,7 @@ const PLAN_SPECS: Plan[] = [
     priceMonthlyCents: 0,
     priceAnnualMonthlyCents: 0,
     includedMinutes: 30,
-    features: ['Public & featured scenarios', 'Community support'],
+    features: [sessionLine(DEFAULT_FREE_SESSION_MAX, false), 'Public & featured scenarios', 'Community support'],
     paid: false,
     topUpCentsPerMinute: null,
   },
@@ -105,11 +126,7 @@ const PLAN_SPECS: Plan[] = [
     priceMonthlyCents: 1900,
     priceAnnualMonthlyCents: annual(1900),
     includedMinutes: 73,
-    features: [
-      'Every scenario category',
-      'Session analytics & scoring',
-      'Priority support',
-    ],
+    features: [sessionLine(DEFAULT_PAID_SESSION_MAX, true), 'Session history', ...gatedFeatureLines('standard')],
     paid: true,
     topUpCentsPerMinute: null,
   },
@@ -122,9 +139,9 @@ const PLAN_SPECS: Plan[] = [
     includedMinutes: 182,
     features: [
       `Top up extra minutes anytime (${TOP_UP_BLOCK_MINUTES}-min blocks)`,
-      'Advanced analytics & history export',
-      'Coaches with persistent memory',
-      'Priority support',
+      sessionLine(DEFAULT_PAID_SESSION_MAX, true),
+      'Session history',
+      ...gatedFeatureLines('premium'),
     ],
     paid: true,
     topUpCentsPerMinute: TOP_UP_CENTS_PER_MINUTE,

@@ -50,7 +50,7 @@ test('admits a bound number: owner is the payer, call is scoped to the tenant, e
   assert.deepEqual(a.actor, { userId: owner, isAdmin: false, clinicId: clinic.id });
   assert.equal(a.tier, 'free'); // no entitlement row ⇒ free payer
   assert.equal(a.engine.grade, 'standard');
-  assert.equal(a.engine.model, process.env.VOICE_ENGINE_FREE || 'gpt-realtime-mini');
+  assert.equal(a.engine.model, process.env.VOICE_ENGINE_FREE || 'gpt-realtime-2.1-mini');
   assert.equal(a.engine.vendor, 'openai');
   assert.equal(a.meter.overCap, false);
   // the privileged lookup context never leaks out of admission
@@ -65,7 +65,7 @@ test('a PAID clinic still runs standard (mini) unless bound to premium — the S
   const a = await admitInboundCall(store, { to: NUMBER });
   assert.equal(a.tier, 'paid', 'metered at the payer\'s billing tier');
   assert.equal(a.engine.grade, 'standard', 'engine grade is the tenant\'s, not the plan\'s');
-  assert.equal(a.engine.model, process.env.VOICE_ENGINE_FREE || 'gpt-realtime-mini');
+  assert.equal(a.engine.model, process.env.VOICE_ENGINE_FREE || 'gpt-realtime-2.1-mini');
 
   await store.updateClinicTelephony(clinic.id, { voiceEngine: 'premium' });
   const b = await admitInboundCall(store, { to: NUMBER });
@@ -79,7 +79,7 @@ test('premium is paid-only: a free-tier payer bound to premium is downgraded to 
   const a = await admitInboundCall(store, { to: NUMBER });
   assert.equal(a.tier, 'free');
   assert.equal(a.engine.grade, 'standard');
-  assert.equal(a.engine.downgraded, true);
+  assert.equal(a.engine.model, process.env.VOICE_ENGINE_FREE || 'gpt-realtime-2.1-mini', 'runs the standard model, never premium');
 });
 
 test('refuses an unbound number (no_tenant) — never falls back to an unmetered call', async () => {

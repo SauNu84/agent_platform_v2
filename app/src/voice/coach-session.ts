@@ -6,19 +6,26 @@
  *      the agent's instructions ("what you remember about this learner").
  *   2. RUN the session through the same realtime seam as a Scenario, tagged with
  *      coach_id (server-driven with the mock/OpenAI, or client-driven transcript).
- *   3. WRITE derived memories from the transcript — gated on persistent-memory
- *      consent (ADR-004). Audit every retrieve/write (counts only, no PII).
+ *   3. WRITE derived memories from the transcript.
+ *
+ * Steps 1 and 3 run only when `coachMemoryAccess` is `active` — the plan includes
+ * memory (SAU-557) AND persistent-memory consent is granted (ADR-004). It is
+ * evaluated ONCE, before `listCoachMemory`, so a paused or revoked user gets no
+ * retrieval, no expiry bump and no write (CISO SAU-558 C2). Audit every
+ * retrieve/write (counts only, no PII).
  *
  * So session N+1 demonstrably picks up what session N learned.
  */
 import { runVoiceSession, persistClientSession, type Vendor, type VoiceSessionResult } from './session-service';
-import type { VoiceTier } from './engine-router';
+import type { PlanTier, VoiceTier } from './engine-router';
+import { coachMemoryAccess, type CoachMemoryAccess } from './coach-memory-access';
 import type { Transcript } from './realtime-interface';
 import type { CoachMemoryRecord, Store } from '@/db/store';
 import type { CoachRecord } from '@/domain/coach';
 import type { ScenarioRecord } from '@/domain/scenario';
 import { buildMemoryBlock, deriveMemories, embed, expiresAtFor, rankMemories } from '@/coach/memory';
-import { getCoachConsent } from '@/coach/consent';
+import { trackSafe } from '@/services/product-analytics';
+import { PRODUCT_EVENTS } from '@/domain/analytics-events';
 
 export interface CoachSessionResult extends VoiceSessionResult {
   /** memories retrieved + injected into this session's agent instructions */
@@ -27,9 +34,17 @@ export interface CoachSessionResult extends VoiceSessionResult {
   injectedInstructions: string;
   /** how many derived memories were written from this session's transcript */
   wroteMemories: number;
-  /** why memory wasn't written (consent/anonymous), or null if it was */
+  /** why memory wasn't used (plan/consent/anonymous), or null if it was */
   memorySkippedReason: string | null;
+  /** the single memory gate's verdict for this (user, coach) */
+  memoryAccess: CoachMemoryAccess;
 }
+
+const SKIPPED_REASON: Record<Exclude<CoachMemoryAccess, 'active'>, string> = {
+  anonymous: 'anonymous session (no user id) — nothing persisted',
+  paused: 'coach memory paused — not included in the current plan',
+  no_consent: 'persistent-memory consent not granted',
+};
 
 export interface RunCoachSessionOptions {
   store: Store;
@@ -38,6 +53,8 @@ export interface RunCoachSessionOptions {
   vendor: Vendor;
   /** voice tier (SAU-256): selects the engine + metered tier. Default 'free'. */
   tier?: VoiceTier;
+  /** billing plan tier (SAU-557): gates coach memory via planFeatures. Default 'free'. */
+  planTier?: PlanTier;
   /** scenario's chosen engine id (SAU-258, metadata._model); router gates by tier. */
   modelId?: string | null;
   userId: string | null;
@@ -50,11 +67,14 @@ export interface RunCoachSessionOptions {
 }
 
 export async function runCoachSession(opts: RunCoachSessionOptions): Promise<CoachSessionResult> {
-  const { store, coach, scenario, vendor, tier = 'free', modelId = null, userId, transcript, nowMs, k } = opts;
+  const { store, coach, scenario, vendor, tier = 'free', planTier = 'free', modelId = null, userId, transcript, nowMs, k } = opts;
 
-  // 1) Retrieve + inject memory (only for an identified user).
+  // 0) The memory gate — plan AND consent, evaluated once, before any memory read.
+  const memoryAccess = await coachMemoryAccess(store, { userId, coachId: coach.id, planTier });
+
+  // 1) Retrieve + inject memory.
   let injectedMemories: CoachMemoryRecord[] = [];
-  if (userId) {
+  if (memoryAccess === 'active' && userId) {
     const candidates = await store.listCoachMemory(coach.id, userId);
     injectedMemories = rankMemories(candidates, { k, nowMs });
     if (injectedMemories.length) {
@@ -70,6 +90,12 @@ export async function runCoachSession(opts: RunCoachSessionOptions): Promise<Coa
       if (durable.length) {
         await store.bumpCoachMemoryExpiry(durable, userId, expiresAtFor('fact', nowMs ?? Date.now()));
       }
+      await trackSafe(store, {
+        event: PRODUCT_EVENTS.COACH_MEMORY_RECALLED,
+        surface: 'voice',
+        actorId: userId,
+        props: { count: injectedMemories.length },
+      });
     }
   }
   const block = buildMemoryBlock(injectedMemories);
@@ -80,42 +106,35 @@ export async function runCoachSession(opts: RunCoachSessionOptions): Promise<Coa
     ? await persistClientSession({ store, scenario, vendor, tier, modelId, userId, coachId: coach.id, transcript })
     : await runVoiceSession({ store, scenario, vendor, tier, modelId, userId, coachId: coach.id, instructions: injectedInstructions });
 
-  // 3) Write derived memories (consent-gated; ADR-004).
+  // 3) Write derived memories (same gate as step 1).
   let wroteMemories = 0;
-  let memorySkippedReason: string | null = null;
-  if (!userId) {
-    memorySkippedReason = 'anonymous session (no user id) — nothing persisted';
-  } else {
-    const consent = await getCoachConsent(store, userId, coach.id);
-    if (!consent.persistentMemory) {
-      memorySkippedReason = 'persistent-memory consent not granted';
-    } else {
-      const derived = deriveMemories(result.transcript, coach.name);
-      const writeNow = nowMs ?? Date.now();
-      for (const d of derived) {
-        await store.writeCoachMemory({
-          coachId: coach.id,
-          userId,
-          kind: d.kind,
-          content: d.content,
-          embedding: embed(d.content),
-          sourceSessionId: result.sessionId,
-          salience: d.salience,
-          expiresAt: expiresAtFor(d.kind, writeNow),
-        });
-      }
-      wroteMemories = derived.length;
-      if (wroteMemories) {
-        await store.recordAuditEvent({
-          actor: 'system',
-          event: 'memory.write',
-          subjectUserId: userId,
-          coachId: coach.id,
-          refs: { count: wroteMemories, kinds: derived.map((d) => d.kind), sessionId: result.sessionId },
-        });
-      }
+  const memorySkippedReason = memoryAccess === 'active' ? null : SKIPPED_REASON[memoryAccess];
+  if (memoryAccess === 'active' && userId) {
+    const derived = deriveMemories(result.transcript, coach.name);
+    const writeNow = nowMs ?? Date.now();
+    for (const d of derived) {
+      await store.writeCoachMemory({
+        coachId: coach.id,
+        userId,
+        kind: d.kind,
+        content: d.content,
+        embedding: embed(d.content),
+        sourceSessionId: result.sessionId,
+        salience: d.salience,
+        expiresAt: expiresAtFor(d.kind, writeNow),
+      });
+    }
+    wroteMemories = derived.length;
+    if (wroteMemories) {
+      await store.recordAuditEvent({
+        actor: 'system',
+        event: 'memory.write',
+        subjectUserId: userId,
+        coachId: coach.id,
+        refs: { count: wroteMemories, kinds: derived.map((d) => d.kind), sessionId: result.sessionId },
+      });
     }
   }
 
-  return { ...result, injectedMemories, injectedInstructions, wroteMemories, memorySkippedReason };
+  return { ...result, injectedMemories, injectedInstructions, wroteMemories, memorySkippedReason, memoryAccess };
 }

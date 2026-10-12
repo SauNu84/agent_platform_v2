@@ -83,7 +83,7 @@ test('free tier exposes the config-driven policy (engine, session cap, fallback,
   const store = new MemoryStore();
   const state = await getMeterState(store, 'anon-free');
   assert.equal(state.tier, 'free');
-  assert.equal(state.policy.voiceEngine, 'gpt-realtime-mini');
+  assert.equal(state.policy.voiceEngine, 'gpt-realtime-2.1-mini');
   assert.equal(state.policy.voiceMinutesPerMonth, 30);
   assert.equal(state.sessionMaxMinutes, 10);
   assert.equal(state.onExhausted, 'text_chat_fallback');
@@ -103,6 +103,6 @@ test('paid tier resolves the Super engine and a 25-min session cap', async () =>
   await store.upsertEntitlement({ userId: 'u-pro', plan: 'paid', freeMinutes: 30, paidMinutes: 1000, planTier: 'premium' });
   const state = await getMeterState(store, 'u-pro');
   assert.equal(state.tier, 'paid');
-  assert.equal(state.policy.voiceEngine, 'gpt-realtime');
+  assert.equal(state.policy.voiceEngine, 'gpt-realtime-2.1-mini'); // SAU-534: both tiers on mini
   assert.equal(state.sessionMaxMinutes, 25);
 });

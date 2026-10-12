@@ -2,7 +2,8 @@
  * /api/coaches/[slug]/sessions — list (GET) and Join (POST).
  *
  * POST runs a coach session: retrieve memory → inject → run (mock/OpenAI or a
- * client-posted transcript) → write derived memory (consent-gated, ADR-004).
+ * client-posted transcript) → write derived memory. Memory runs only on a plan that
+ * includes it AND with consent (SAU-557 planFeatures + ADR-004).
  * Defaults to the DEMO user so memory is demonstrable before auth lands.
  */
 import { NextRequest, NextResponse } from 'next/server';
@@ -10,7 +11,8 @@ import { getStore } from '@/db';
 import { getCoach, resolveCoachScenario } from '@/services/coaches';
 import { runCoachSession } from '@/voice/coach-session';
 import { clientVendorForEngine, type Vendor } from '@/voice/session-service';
-import { resolveTierForUser, resolveSessionEngine } from '@/voice/engine-router';
+import { resolveVoiceTier, resolveSessionEngine } from '@/voice/engine-router';
+import { resolvePlanTierForUser } from '@/voice/plan-features';
 import type { Transcript } from '@/voice/realtime-interface';
 import { getActor } from '@/services/current-user';
 
@@ -43,7 +45,8 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   }
 
   const userId = actor.userId;
-  const tier = await resolveTierForUser(store, userId); // SAU-256 tiered router
+  const planTier = await resolvePlanTierForUser(store, userId); // SAU-557 feature gate
+  const tier = resolveVoiceTier(planTier); // SAU-256 tiered router
   // SAU-258: honour the scenario's author-chosen engine, gated by viewer tier.
   const modelId = typeof scenario.metadata?._model === 'string' ? scenario.metadata._model : undefined;
   const engine = resolveSessionEngine({ modelId, tier });
@@ -53,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     : 'mock';
 
   try {
-    const result = await runCoachSession({ store, coach, scenario, vendor, tier, modelId, userId, transcript: body.transcript });
+    const result = await runCoachSession({ store, coach, scenario, vendor, tier, planTier, modelId, userId, transcript: body.transcript });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

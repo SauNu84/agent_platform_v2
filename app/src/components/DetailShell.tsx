@@ -385,7 +385,7 @@ export default function DetailShell(props: DetailShellProps) {
           Keep practicing in unlimited text Chat — or upgrade for more voice time.
           <div className="voice-cap-actions">
             <button className="btn join" onClick={() => { setError(null); setChatOpen(true); }}>💬 Continue in Chat</button>
-            <a className="btn btn-secondary" href="/billing">Upgrade for more voice</a>
+            <a className="btn btn-secondary" href="/billing?trigger=cap_reached">Upgrade for more voice</a>
           </div>
         </div>
       )}

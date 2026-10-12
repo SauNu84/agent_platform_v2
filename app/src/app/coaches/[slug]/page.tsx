@@ -17,6 +17,8 @@ import { notFound } from 'next/navigation';
 import { getStore } from '@/db';
 import DetailShell, { type SessionSummary } from '@/components/DetailShell';
 import CoachMemoryPanel from '@/components/CoachMemoryPanel';
+import { viewCoachMemory } from '@/services/coach-memory-controls';
+import { emitPaywallViewed } from '@/services/paywall';
 import { getCoach, resolveCoachScenario } from '@/services/coaches';
 import { getCoachConsent, CONSENT_POLICY_TEXT, CONSENT_POLICY_VERSION } from '@/coach/consent';
 import { describeSchedule, nextOccurrence } from '@/coach/schedule';
@@ -45,7 +47,12 @@ export default async function CoachDetailPage({ params }: { params: { slug: stri
   }));
 
   const consent = await getCoachConsent(store, userId, coach.id);
-  const memories = await store.listCoachMemory(coach.id, userId);
+  // Page render is a view, not an export ⇒ not audited as one (the API GET is).
+  const memoryView = await viewCoachMemory(store, userId, coach, { audit: false });
+  // SAU-557: the paused-memory notice is a paywall surface.
+  if (memoryView.access === 'paused' && memoryView.memories.length > 0) {
+    await emitPaywallViewed(store, userId, 'coach_memory');
+  }
   const next = nextOccurrence(coach.schedule, Date.now());
 
   // Progress signals — the accountability hook a coach adds over a one-off scenario.
@@ -96,7 +103,7 @@ export default async function CoachDetailPage({ params }: { params: { slug: stri
             <div className="kpi-label">Last session</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-value">{memories.length}</div>
+            <div className="kpi-value">{memoryView.memories.length}</div>
             <div className="kpi-label">Things your coach remembers</div>
           </div>
         </div>
@@ -121,7 +128,10 @@ export default async function CoachDetailPage({ params }: { params: { slug: stri
           <CoachMemoryPanel
             slug={coach.slug}
             initialConsent={consent}
-            initialMemories={memories.map(({ embedding, ...rest }) => rest)}
+            initialMemories={memoryView.memories}
+            initialAccess={memoryView.access}
+            initialPausedUntil={memoryView.pausedUntil}
+            coachName={coach.name}
             policy={{ version: CONSENT_POLICY_VERSION, text: CONSENT_POLICY_TEXT }}
           />
         </div>

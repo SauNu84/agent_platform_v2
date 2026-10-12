@@ -84,24 +84,24 @@ test('a coach remembers prior sessions: retrieval affects the next session', asy
 
   // Session 1: learner states a durable fact (client transcript path).
   const r1 = await runCoachSession({
-    store, coach, scenario, vendor: 'mock', userId: USER,
+    store, coach, scenario, vendor: 'mock', userId: USER, planTier: 'premium',
     transcript: transcriptWith('I am preparing for a Series A pitch. I prefer concise feedback.'),
   });
   assert.ok(r1.wroteMemories >= 1, 'session 1 persisted memory');
   assert.equal(r1.injectedMemories.length, 0, 'session 1 had no prior memory to inject');
 
   // Session 2: a fresh (server-driven mock) session retrieves + injects session 1's memory.
-  const r2 = await runCoachSession({ store, coach, scenario, vendor: 'mock', userId: USER });
+  const r2 = await runCoachSession({ store, coach, scenario, vendor: 'mock', userId: USER, planTier: 'premium' });
   assert.ok(r2.injectedMemories.length >= 1, 'session 2 retrieved prior memory');
   assert.match(r2.injectedInstructions, /What you remember about this learner/);
   assert.match(r2.injectedInstructions, /Series A/, 'the remembered fact is injected into the next session');
 });
 
-// ── consent gate (ADR-004): no consent ⇒ no memory written ──
+// ── consent gate (ADR-004): no consent ⇒ no memory written, even on a memory plan ──
 test('without persistent-memory consent, nothing is remembered', async () => {
   const { store, coach, scenario } = await setup();
   const r = await runCoachSession({
-    store, coach, scenario, vendor: 'mock', userId: USER,
+    store, coach, scenario, vendor: 'mock', userId: USER, planTier: 'premium',
     transcript: transcriptWith('I am preparing for a Series A pitch.'),
   });
   assert.equal(r.wroteMemories, 0);
@@ -113,7 +113,7 @@ test('without persistent-memory consent, nothing is remembered', async () => {
 test('wipe memory erases everything for the user (right to erasure)', async () => {
   const { store, coach, scenario } = await setup();
   await recordConsentChange({ store, userId: USER, coachId: coach.id, consentType: 'persistent_memory', action: 'granted' });
-  await runCoachSession({ store, coach, scenario, vendor: 'mock', userId: USER, transcript: transcriptWith('I am a product manager. My goal is to raise a seed round.') });
+  await runCoachSession({ store, coach, scenario, vendor: 'mock', userId: USER, planTier: 'premium', transcript: transcriptWith('I am a product manager. My goal is to raise a seed round.') });
   assert.ok((await store.listCoachMemory(coach.id, USER)).length > 0);
   const wiped = await store.wipeCoachMemory(coach.id, USER);
   assert.ok(wiped > 0);

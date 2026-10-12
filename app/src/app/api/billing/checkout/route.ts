@@ -10,6 +10,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/db';
 import { getActor } from '@/services/current-user';
 import { startCheckout, InvalidPlanError } from '@/services/billing/subscription';
+import { trackSafe } from '@/services/product-analytics';
+import { PRODUCT_EVENTS } from '@/domain/analytics-events';
+import { normalizeUpgradeTrigger } from '@/domain/upgrade-trigger';
 import type { BillingCycle } from '@/services/billing/plans';
 
 export const dynamic = 'force-dynamic';
@@ -18,7 +21,7 @@ export async function POST(req: NextRequest) {
   const actor = await getActor();
   if (!actor) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
 
-  let body: { planId?: string; cycle?: string };
+  let body: { planId?: string; cycle?: string; trigger?: string };
   try {
     body = await req.json();
   } catch {
@@ -34,6 +37,13 @@ export async function POST(req: NextRequest) {
       cycle,
       req.nextUrl.origin,
     );
+    // SAU-557: what sent this user to checkout (PII-free; `trigger`, never `reason`).
+    await trackSafe(getStore(), {
+      event: PRODUCT_EVENTS.UPGRADE_STARTED,
+      surface: 'web',
+      actorId: actor.userId,
+      props: { trigger: normalizeUpgradeTrigger(body.trigger), plan_id: result.plan.id, cycle },
+    });
     return NextResponse.json(
       { checkoutId: result.checkoutId, url: result.url, provider: result.provider },
       { status: 201 },

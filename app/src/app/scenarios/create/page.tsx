@@ -144,7 +144,8 @@ function CreateScenarioForm() {
   // premium engines are selectable only by paid authors (free → cost engines).
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODEL);
   // The author's own voice tier, used to gate premium engines in the picker.
-  const [viewerTier, setViewerTier] = useState<'free' | 'paid'>('free');
+  // SAU-557: only true when a paid plan would ACTUALLY run a different model (server-derived).
+  const [engineUpgradeAvailable, setEngineUpgradeAvailable] = useState(false);
   // SAU-238 (ask #10): Appearance — voice (real, wired to live) + static avatar image.
   const [voiceChoice, setVoiceChoice] = useState<string>(DEFAULT_VOICE);
   const [avatarUrl, setAvatarUrl] = useState('');
@@ -265,8 +266,8 @@ function CreateScenarioForm() {
     return () => { cancelled = true; };
   }, [remixFrom]);
 
-  // SAU-258: read the author's voice tier so the picker can gate premium engines.
-  // Falls back to 'free' (the safe default) if the meter isn't available.
+  // SAU-258/557: ask the meter whether upgrading would actually change the engine.
+  // Falls back to "no" (no quality claim) if the meter isn't available.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -275,8 +276,8 @@ function CreateScenarioForm() {
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled || !data?.meter?.tier) return;
-        setViewerTier(data.meter.tier === 'paid' ? 'paid' : 'free');
-      } catch { /* non-fatal — default free */ }
+        setEngineUpgradeAvailable(data.meter.engineUpgradeAvailable === true);
+      } catch { /* non-fatal — no upgrade claim */ }
     })();
     return () => { cancelled = true; };
   }, [remixFrom]);
@@ -1096,7 +1097,7 @@ function CreateScenarioForm() {
             {aiModelById(aiModel).hint && (
               <p className="form-hint-block" style={{ marginTop: 6, opacity: 0.85 }}>{aiModelById(aiModel).hint}</p>
             )}
-            {viewerTier === 'free' && aiModelById(aiModel).engineClass === 'tiered' && (
+            {engineUpgradeAvailable && aiModelById(aiModel).engineClass === 'tiered' && (
               <p className="form-hint-block" style={{ marginTop: 4, color: 'var(--accent, #0aa)' }}>
                 On the free plan this runs at standard quality — <a href="/billing">upgrade for premium quality</a>.
               </p>

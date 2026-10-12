@@ -4,7 +4,10 @@
  * Coach memory controls (ADR-004 §User controls) — the privacy-by-design surface:
  *   - the consent gate (two granular, independently-toggled switches),
  *   - the memory inspector (view what the coach remembers),
- *   - DSAR controls (delete one / wipe all / export JSON).
+ *   - DSAR controls (delete one / wipe all / export JSON) — on EVERY plan,
+ *   - the paused-memory notice (SAU-557 · CISO SAU-558 C5): when the plan no longer
+ *     includes memory, nothing is used or added, nothing is deleted now, everything
+ *     expires by the real latest `expires_at`, and delete-now is one click.
  * Talks to /api/coaches/[slug]/consent and /api/coaches/[slug]/memory.
  */
 import { useState } from 'react';
@@ -14,23 +17,36 @@ interface MemoryItem {
   id: string; kind: string; content: string; salience: number;
   sourceSessionId: string | null; expiresAt: string; createdAt: string;
 }
+type MemoryAccess = 'active' | 'paused' | 'no_consent' | 'anonymous';
 interface Props {
   slug: string;
+  coachName: string;
   initialConsent: ConsentState;
   initialMemories: MemoryItem[];
+  initialAccess: MemoryAccess;
+  /** real max(expires_at) of held memories while paused; null otherwise */
+  initialPausedUntil: string | null;
   policy: { version: string; text: string };
 }
 
-export default function CoachMemoryPanel({ slug, initialConsent, initialMemories, policy }: Props) {
+export default function CoachMemoryPanel({
+  slug, coachName, initialConsent, initialMemories, initialAccess, initialPausedUntil, policy,
+}: Props) {
   const [consent, setConsent] = useState<ConsentState>(initialConsent);
   const [memories, setMemories] = useState<MemoryItem[]>(initialMemories);
+  const [access, setAccess] = useState<MemoryAccess>(initialAccess);
+  const [pausedUntil, setPausedUntil] = useState<string | null>(initialPausedUntil);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
     const res = await fetch(`/api/coaches/${slug}/memory`);
     const data = await res.json();
-    if (res.ok) setMemories(data.memories ?? []);
+    if (res.ok) {
+      setMemories(data.memories ?? []);
+      if (data.access) setAccess(data.access);
+      setPausedUntil(data.pausedUntil ?? null);
+    }
   }
 
   async function toggle(consentType: 'persistent_memory' | 'audio_retention', current: boolean) {
@@ -66,6 +82,7 @@ export default function CoachMemoryPanel({ slug, initialConsent, initialMemories
     try {
       await fetch(`/api/coaches/${slug}/memory`, { method: 'DELETE' });
       setMemories([]);
+      setPausedUntil(null);
     } finally {
       setBusy(false);
     }
@@ -96,6 +113,24 @@ export default function CoachMemoryPanel({ slug, initialConsent, initialMemories
           Also keep my audio recordings (up to 90 days)
         </label>
       </div>
+      {access === 'paused' && memories.length > 0 && (
+        <div className="notice memory-paused" role="status">
+          <p>
+            <strong>Your coach memories are paused.</strong> {coachName} won&apos;t use or add to them while
+            your plan doesn&apos;t include coach memory. Nothing is deleted now — memories expire on their normal
+            schedule (summaries after 12 months; other memories after 24 months unused)
+            {pausedUntil ? <>, all gone by <strong>{new Date(pausedUntil).toLocaleDateString()}</strong></> : null}.
+            {' '}<a href="/billing?trigger=coach_memory">Upgrade any time</a> to pick up where you left off.
+          </p>
+          <p>
+            <button className="btn danger" onClick={wipeAll} disabled={busy}>Delete my memories now</button>
+            {' · '}
+            <button className="btn" onClick={() => window.open(`/api/coaches/${slug}/memory`, '_blank')} disabled={busy}>
+              View / export
+            </button>
+          </p>
+        </div>
+      )}
       {!consent.persistentMemory && (
         <p className="notice">Memory is off — sessions run, but nothing is remembered for next time.</p>
       )}

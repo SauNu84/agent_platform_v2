@@ -18,7 +18,14 @@ function fmtDuration(ms: number): string {
   return `${Math.floor(total / 60)}m ${(total % 60).toString().padStart(2, '0')}s`;
 }
 
-export default function HistoryTable({ initialRows }: { initialRows: SessionHistoryRow[] }) {
+export default function HistoryTable({
+  initialRows,
+  csvUpgradeHref = null,
+}: {
+  initialRows: SessionHistoryRow[];
+  /** SAU-557: set when the plan doesn't include CSV export — render the upgrade link instead. */
+  csvUpgradeHref?: string | null;
+}) {
   const [rows, setRows] = useState(initialRows);
   const [scenario, setScenario] = useState('');
   const [status, setStatus] = useState('');
@@ -77,7 +84,11 @@ export default function HistoryTable({ initialRows }: { initialRows: SessionHist
           <option value="active">Active</option>
           <option value="failed">Failed</option>
         </select>
-        <a className="btn-sm" href={csvHref}>Export CSV</a>
+        {csvUpgradeHref ? (
+          <a className="btn-sm" href={csvUpgradeHref} title="CSV export is included in Premium">Export CSV · Premium</a>
+        ) : (
+          <a className="btn-sm" href={csvHref}>Export CSV</a>
+        )}
       </div>
 
       {error && <div className="notice" role="alert">{error}</div>}

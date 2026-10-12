@@ -13,7 +13,7 @@ import { MemoryStore } from '@/db/memory-store';
 import { createScenarioFromMarkdown } from '@/services/scenarios';
 import { runVoiceSession } from '@/voice/session-service';
 import {
-  resolveVoiceTier, resolveVoiceEngine, resolveTierForUser, resolveSessionEngine,
+  resolveVoiceTier, resolveVoiceEngine, resolveTierForUser, resolveSessionEngine, tieredEngineDiffers,
   voiceKbCharBudget, tierMinuteBudget, DEFAULT_VOICE_KB_CHAR_BUDGET,
 } from '@/voice/engine-router';
 import { KB_CONTEXT_CHAR_BUDGET } from '@/domain/scenario';
@@ -42,10 +42,10 @@ test('resolveVoiceTier maps billing plan_tier → voice tier', () => {
   assert.equal(resolveVoiceTier('premium'), 'paid');
 });
 
-test('engine ids are config-driven, defaulting to mini (free) / gpt-realtime (paid)', () => {
+test('engine ids are config-driven, both tiers defaulting to gpt-realtime-2.1-mini (SAU-534)', () => {
   withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
-    assert.equal(resolveVoiceEngine('free').model, 'gpt-realtime-mini');
-    assert.equal(resolveVoiceEngine('paid').model, 'gpt-realtime');
+    assert.equal(resolveVoiceEngine('free').model, 'gpt-realtime-2.1-mini');
+    assert.equal(resolveVoiceEngine('paid').model, 'gpt-realtime-2.1-mini');
   });
   // Overridable via env — proves the seam (e.g. point free at Gemini Flash later).
   withEnv({ VOICE_ENGINE_FREE: 'gemini-2.5-flash-live', VOICE_ENGINE_PAID: 'gpt-realtime-pro' }, () => {
@@ -83,7 +83,7 @@ test('free-tier voice session is metered with the cheaper engine', async () => {
     const result = await runVoiceSession({ store, scenario, vendor: 'mock', tier: 'free', userId: 'u1' });
     const usage = await store.getVoiceUsage(result.sessionId);
     assert.equal(usage!.tier, 'free');
-    assert.equal(usage!.engine, 'gpt-realtime-mini');
+    assert.equal(usage!.engine, 'gpt-realtime-2.1-mini');
   });
 });
 
@@ -94,7 +94,7 @@ test('paid-tier voice session is metered with the Super engine', async () => {
     const result = await runVoiceSession({ store, scenario, vendor: 'mock', tier: 'paid', userId: 'u2' });
     const usage = await store.getVoiceUsage(result.sessionId);
     assert.equal(usage!.tier, 'paid');
-    assert.equal(usage!.engine, 'gpt-realtime');
+    assert.equal(usage!.engine, 'gpt-realtime-2.1-mini');
   });
 });
 
@@ -122,21 +122,31 @@ test('resolveSessionEngine honors the scenario author vendor choice for a paid v
     assert.equal(gem.engineClass, 'cost');
     assert.equal(gem.downgraded, false);
 
-    // OpenAI Realtime is a single tiered vendor entry — paid → premium engine.
+    // OpenAI Realtime is a single tiered vendor entry — paid → the PAID lever (mini by default, SAU-534).
     const oai = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'paid' });
     assert.equal(oai.vendor, 'openai');
-    assert.equal(oai.model, 'gpt-realtime');
+    assert.equal(oai.model, 'gpt-realtime-2.1-mini');
     assert.equal(oai.engineClass, 'tiered');
     assert.equal(oai.downgraded, false);
   });
 });
 
-test('tiered OpenAI: a free viewer runs the standard engine (downgraded), never premium', () => {
+test('tiered OpenAI: `downgraded` is true only when the configured free model differs from paid (SAU-557)', () => {
   withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
+    // Defaults: both tiers run the same model ⇒ a free viewer is NOT downgraded, and no
+    // "upgrade for better quality" claim may be made.
+    const same = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'free' });
+    assert.equal(same.downgraded, false);
+    assert.equal(same.model, 'gpt-realtime-2.1-mini');
+    assert.equal(tieredEngineDiffers(), false);
+  });
+  withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: 'gpt-realtime', OPENAI_REALTIME_MODEL: undefined }, () => {
     const free = resolveSessionEngine({ modelId: 'openai-realtime', tier: 'free' });
-    assert.equal(free.downgraded, true);          // free runs standard, not premium
+    assert.equal(free.downgraded, true);          // split by env ⇒ free really runs the lesser model
     assert.equal(free.modelId, 'openai-realtime'); // single vendor entry, no separate mini row
-    assert.equal(free.model, 'gpt-realtime-mini');
+    assert.equal(free.model, 'gpt-realtime-2.1-mini');
+    assert.equal(resolveSessionEngine({ modelId: 'openai-realtime', tier: 'paid' }).downgraded, false);
+    assert.equal(tieredEngineDiffers(), true);
     assert.equal(free.vendor, 'openai');
     // Gemini is one cost engine on every plan — no tiering.
     const gem = resolveSessionEngine({ modelId: 'google-gemini', tier: 'free' });
@@ -149,10 +159,10 @@ test('unknown / not-yet-runnable engine falls back to the default (then tiered b
   withEnv({ VOICE_ENGINE_FREE: undefined, VOICE_ENGINE_PAID: undefined, OPENAI_REALTIME_MODEL: undefined }, () => {
     // 'anthropic-claude' is available:false → default openai-realtime → free standard engine.
     const soon = resolveSessionEngine({ modelId: 'anthropic-claude', tier: 'free' });
-    assert.equal(soon.model, 'gpt-realtime-mini');
-    // bogus id → default → paid gets the premium engine.
+    assert.equal(soon.model, 'gpt-realtime-2.1-mini');
+    // bogus id → default → paid gets the paid lever.
     const bogus = resolveSessionEngine({ modelId: 'nope', tier: 'paid' });
-    assert.equal(bogus.model, 'gpt-realtime');
+    assert.equal(bogus.model, 'gpt-realtime-2.1-mini');
   });
 });
 
@@ -183,7 +193,7 @@ test('free viewer of the tiered OpenAI engine is metered on the standard cost en
   await withEnvAsync({ VOICE_ENGINE_FREE: undefined }, async () => {
     const result = await runVoiceSession({ store, scenario, vendor: 'mock', tier: 'free', modelId: 'openai-realtime', userId: 'f1' });
     const usage = await store.getVoiceUsage(result.sessionId);
-    assert.equal(usage!.engine, 'gpt-realtime-mini'); // standard, never billed at premium
+    assert.equal(usage!.engine, 'gpt-realtime-2.1-mini'); // standard, never billed at premium
   });
 });
 

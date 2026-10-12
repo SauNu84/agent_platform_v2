@@ -22,7 +22,7 @@ const minutesOf = (ms: number) => (ms > 0 ? (ms / 60_000).toFixed(1) : '0.0');
 export default async function BillingPage({
   searchParams,
 }: {
-  searchParams: { upgraded?: string; canceled?: string };
+  searchParams: { upgraded?: string; canceled?: string; trigger?: string };
 }) {
   const store = getStore();
   const actor = await requirePageActor();
@@ -77,7 +77,7 @@ export default async function BillingPage({
               {currentPlan.paid ? `${formatPrice(currentPlan.priceMonthlyCents)}/mo` : 'Free'}
             </span>
           </div>
-          <BillingClient plans={PLANS} currentTier={tier} />
+          <BillingClient plans={PLANS} currentTier={tier} trigger={searchParams.trigger ?? null} />
         </section>
       </div>
 

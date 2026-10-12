@@ -4,6 +4,8 @@
  */
 import { getStore } from '@/db';
 import { getCreatorAnalytics } from '@/services/analytics';
+import { getActor } from '@/services/current-user';
+import { csvExportLockFor } from '@/services/paywall';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +18,8 @@ function fmtDuration(ms: number): string {
 export default async function AnalyticsPage() {
   const store = getStore();
   const { rows, kpis } = await getCreatorAnalytics(store);
+  // SAU-557: CSV export is a Premium feature; the API enforces it, this mirrors it.
+  const csvUpgradeHref = await csvExportLockFor(store, (await getActor())?.userId ?? null);
 
   const cards = [
     { label: 'Scenarios', value: kpis.totalScenarios },
@@ -40,7 +44,11 @@ export default async function AnalyticsPage() {
       </div>
 
       <div className="filters" style={{ justifyContent: 'flex-end' }}>
-        <a className="btn-sm" href="/api/analytics/creator?format=csv">Export CSV</a>
+        {csvUpgradeHref ? (
+          <a className="btn-sm" href={csvUpgradeHref} title="CSV export is included in Premium">Export CSV · Premium</a>
+        ) : (
+          <a className="btn-sm" href="/api/analytics/creator?format=csv">Export CSV</a>
+        )}
       </div>
 
       {rows.length === 0 ? (

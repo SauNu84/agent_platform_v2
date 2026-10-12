@@ -12,9 +12,12 @@ import { type Plan, type PlanId, type BillingCycle, ANNUAL_DISCOUNT, formatPrice
 export default function BillingClient({
   plans,
   currentTier,
+  trigger = null,
 }: {
   plans: Plan[];
   currentTier: PlanId;
+  /** raw `?trigger=` from the paywall link that sent the user here (SAU-557) */
+  trigger?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [cycle, setCycle] = useState<BillingCycle>('monthly');
@@ -38,7 +41,7 @@ export default function BillingClient({
       const res = await fetch('/api/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: selected, cycle }),
+        body: JSON.stringify({ planId: selected, cycle, trigger }), // SAU-557 upgrade.started{trigger}
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Checkout could not be started.');

@@ -40,6 +40,17 @@ export const PRODUCT_EVENTS = {
   TEMPLATE_INSTANTIATED: 'platform.template.instantiated',
   /** archetype-agnostic engagement event from the generic session run path. */
   SESSION_COMPLETED: 'platform.agent.session.completed',
+  // ── paid-tier packaging (SAU-557) — must be live before the first real cohort ─
+  /** a locked paid feature was shown to the user. props: { feature } */
+  PAYWALL_VIEWED: 'platform.paywall.viewed',
+  /** a checkout was started. props: { trigger, plan_id, cycle } (`trigger`, never `reason`) */
+  UPGRADE_STARTED: 'platform.upgrade.started',
+  /** coach memories were injected into a session. props: { count } */
+  COACH_MEMORY_RECALLED: 'platform.coach_memory.recalled',
+  /** a session analysis report was shown. props: { scorer } */
+  ANALYSIS_VIEWED: 'platform.analysis.viewed',
+  /** AI authoring produced a draft. props: { kind, valid } */
+  SCENARIO_GENERATED: 'platform.scenario.generated',
 
   // ── Clinic Secretary (single-agent · web/voice/sms) ───────────────────────
   CLINIC_DEMO_VIEWED: 'clinic.demo.viewed',

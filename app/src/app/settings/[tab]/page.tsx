@@ -100,7 +100,7 @@ async function AccountPanel(store: ReturnType<typeof getStore>, userId: string) 
       <h3 className="settings-subhead">Voice minutes</h3>
       <p className="billing-muted">
         {meter.overCap
-          ? <>You&apos;ve used your <strong>{fmtMin(meter.capMinutes)}</strong> voice minutes this month. Keep practicing in <strong>text Chat</strong> (unlimited) or <a href="/billing">upgrade</a> for more voice time.</>
+          ? <>You&apos;ve used your <strong>{fmtMin(meter.capMinutes)}</strong> voice minutes this month. Keep practicing in <strong>text Chat</strong> (unlimited) or <a href="/billing?trigger=cap_reached">upgrade</a> for more voice time.</>
           : <><strong>{fmtMin(meter.remainingMinutes)}</strong> of {fmtMin(meter.capMinutes)} voice minutes left this month.</>}
       </p>
       <div className="settings-meter-bar" aria-hidden="true">
