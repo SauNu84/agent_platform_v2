@@ -111,7 +111,12 @@ export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
       log('call_admitted', {
         clinic: clinic.slug, resolvedBy: admission.resolvedBy, tier, grade: engine.grade,
         engine: engine.model, remainingMinutes: meter.remainingMinutes,
+        payerResolvedBy: admission.payerResolvedBy,
       });
+      // A payer that moved off the creator surfaces as a signal, not as a wrong bill.
+      if (admission.payerResolvedBy === 'earliest_owner' && clinic.createdByUserId) {
+        log('payer_fallback', { clinic: clinic.slug, skippedCreator: clinic.createdByUserId, payer: ownerUserId });
+      }
 
       // Everything from here runs AS the clinic owner: the session row, the
       // tenant's authored rules, the outcome + usage writes are all RLS-scoped.

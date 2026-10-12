@@ -19,7 +19,7 @@ import type { ToolDefinition } from '@/voice/realtime-interface';
 import type { CoachRecord, CompiledCoachRecord, CoachSchedule } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicTelephonyPatch, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicPayer, ClinicTelephonyPatch, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -913,20 +913,24 @@ export class PgStore implements Store {
     return rows[0] ? rowToClinic(rows[0]) : null;
   }
 
-  async getClinicOwnerUserId(clinicId: string): Promise<string | null> {
-    // Creator first (provenance), else the earliest owner-role member. One query so
-    // the bridge's admission path stays a single round-trip per lookup.
+  async getClinicPayer(clinicId: string): Promise<ClinicPayer | null> {
+    // Creator only while still an `owner` member (CTO condition on SAU-525) — an
+    // ex-member is never charged; else the earliest owner. One round-trip.
     const { rows } = await this.q(
-      `SELECT COALESCE(
-                c.created_by_user_id,
-                (SELECT m.user_id FROM clinic_member m
-                  WHERE m.clinic_id = c.id AND m.role = 'owner'
-                  ORDER BY m.created_at ASC LIMIT 1)
-              ) AS owner_user_id
+      `SELECT CASE WHEN EXISTS (SELECT 1 FROM clinic_member m
+                                 WHERE m.clinic_id = c.id AND m.user_id = c.created_by_user_id
+                                   AND m.role = 'owner')
+                   THEN c.created_by_user_id END AS creator_owner,
+              (SELECT m.user_id FROM clinic_member m
+                WHERE m.clinic_id = c.id AND m.role = 'owner'
+                ORDER BY m.created_at ASC, m.user_id ASC LIMIT 1) AS earliest_owner
          FROM clinic c WHERE c.id = $1`,
       [clinicId],
     );
-    return rows[0]?.owner_user_id ?? null;
+    const r = rows[0];
+    if (r?.creator_owner) return { userId: r.creator_owner, source: 'creator' };
+    if (r?.earliest_owner) return { userId: r.earliest_owner, source: 'earliest_owner' };
+    return null;
   }
 
   async updateClinicTelephony(clinicId: string, patch: ClinicTelephonyPatch): Promise<ClinicRecord> {

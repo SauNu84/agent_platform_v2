@@ -130,6 +130,47 @@ test('owner falls back to the earliest owner-role member when the creator is unk
   assert.equal(a.ownerUserId, 'owner-9');
 });
 
+test('CTO condition: a creator who is no longer an owner member is never charged — falls through to the earliest owner', async () => {
+  const store = new MemoryStore();
+  // creator 'founder' left the clinic (never/no longer a member); 'owner-2' is the current owner
+  const clinic = await store.createClinic({ slug: 'moved', name: 'Moved', createdByUserId: 'founder', phoneNumber: NUMBER });
+  await store.addClinicMember(clinic.id, 'owner-2', 'owner');
+  // the ex-member's own cap is spent — it must not refuse the clinic's call
+  await store.upsertEntitlement({ userId: 'founder', plan: 'free', freeMinutes: 0, paidMinutes: 0, planTier: 'free' });
+  const a = await admitInboundCall(store, { to: NUMBER });
+  assert.equal(a.ownerUserId, 'owner-2');
+  assert.equal(a.meter.userId, 'owner-2', 'the pre-flight cap is the current owner\'s, not the ex-member\'s');
+  assert.equal(a.payerResolvedBy, 'earliest_owner');
+  assert.equal(a.actor.userId, 'owner-2', 'usage rows are attributed to the current owner');
+});
+
+test('CTO condition: a creator downgraded out of the owner role is skipped', async () => {
+  const store = new MemoryStore();
+  const clinic = await store.createClinic({ slug: 'demoted', name: 'Demoted', createdByUserId: 'founder', phoneNumber: NUMBER });
+  await store.addClinicMember(clinic.id, 'founder', 'staff');
+  await store.addClinicMember(clinic.id, 'owner-3', 'owner');
+  const a = await admitInboundCall(store, { to: NUMBER });
+  assert.equal(a.ownerUserId, 'owner-3');
+  assert.equal(a.payerResolvedBy, 'earliest_owner');
+});
+
+test('CTO condition: a creator who left with no other owner ⇒ refused (no_owner), not billed to the ex-member', async () => {
+  const store = new MemoryStore();
+  const clinic = await store.createClinic({ slug: 'abandoned', name: 'Abandoned', createdByUserId: 'founder', phoneNumber: NUMBER });
+  await store.addClinicMember(clinic.id, 'staff-1', 'staff');
+  await assert.rejects(admitInboundCall(store, { to: NUMBER }), (e: unknown) => e instanceof CallAdmissionError && e.reason === 'no_owner');
+});
+
+test('a creator who is still an owner member is the payer', async () => {
+  const store = new MemoryStore();
+  const { owner } = await clinicWithOwner(store);
+  // a later co-owner does not displace the creator
+  await store.addClinicMember((await store.getClinicByPhoneNumber(NUMBER))!.id, 'co-owner', 'owner');
+  const a = await admitInboundCall(store, { to: NUMBER });
+  assert.equal(a.ownerUserId, owner);
+  assert.equal(a.payerResolvedBy, 'creator');
+});
+
 test('refuses when the owner has spent this month\'s minutes (cap_exceeded) — same pre-flight as the web Join', async () => {
   const store = new MemoryStore();
   const { owner } = await clinicWithOwner(store);

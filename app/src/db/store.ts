@@ -534,6 +534,13 @@ export interface ClinicTelephonyPatch {
 }
 
 /** A user ↔ clinic membership (the switcher's list + active-clinic gate). */
+/** Who a clinic's calls are billed to, and which rule picked them (SAU-525). */
+export interface ClinicPayer {
+  userId: string;
+  /** 'earliest_owner' ⇒ the creator was skipped or absent — logged, never silent. */
+  source: 'creator' | 'earliest_owner';
+}
+
 export interface ClinicMemberRecord {
   clinicId: string;
   userId: string;
@@ -656,10 +663,11 @@ export interface Store {
    */
   getClinicByPhoneNumber(phoneNumber: string): Promise<ClinicRecord | null>;
   /**
-   * The user a tenant's calls are billed to (SAU-525): the creator, else the
-   * earliest `owner` member. null when the clinic has no owner ⇒ not billable.
+   * The user a tenant's calls are billed to (SAU-525): the creator WHILE they are
+   * still an `owner` member, else the earliest `owner` member. A creator who left
+   * or was downgraded is never charged. null when no current owner ⇒ not billable.
    */
-  getClinicOwnerUserId(clinicId: string): Promise<string | null>;
+  getClinicPayer(clinicId: string): Promise<ClinicPayer | null>;
   /** Update the telephony binding (RLS: must be a member). Rejects a number already bound elsewhere. */
   updateClinicTelephony(clinicId: string, patch: ClinicTelephonyPatch): Promise<ClinicRecord>;
   /** Add a user↔clinic membership (idempotent on the PK). */

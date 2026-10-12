@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { Pool, type PoolClient } from 'pg';
 import { PgStore } from '@/db/pg-store';
 import { runWithActor } from '@/auth/actor';
-import { admitInboundCall, CallAdmissionError } from '@/services/telephony/call-admission';
+import { admitInboundCall, CallAdmissionError, BRIDGE_SYSTEM_ACTOR } from '@/services/telephony/call-admission';
 
 const DB = process.env.DATABASE_URL;
 const skip = DB ? false : 'no DATABASE_URL — RLS test needs a migrated Postgres';
@@ -83,7 +83,7 @@ test('call admission clears the clinic RLS wall and the call is written tenant-s
     // 1. An UNBOUND request — no actor, exactly what an inbound webhook is — sees
     //    nothing. This is the wall admission's scoped system actor exists to clear.
     assert.equal(await store.getClinicByPhoneNumber(number), null, 'RLS hides the clinic from an unbound request');
-    assert.equal(await store.getClinicOwnerUserId(clinicId), null, 'RLS hides the owner from an unbound request');
+    assert.equal(await store.getClinicPayer(clinicId), null, 'RLS hides the owner from an unbound request');
 
     // 2. Admission clears the wall under its scoped system actor…
     const a = await admitInboundCall(store, { to: number });
@@ -125,6 +125,18 @@ test('call admission clears the clinic RLS wall and the call is written tenant-s
       await store.addClinicMember(otherClinicId, strangerId, 'owner');
       await assert.rejects(store.updateClinicTelephony(otherClinicId, { phoneNumber: number }), /already bound/);
     });
+
+    // 5. CTO condition (SAU-525): the creator is the payer only while still an
+    //    `owner` member. Downgrade the other clinic's creator; the PgStore query
+    //    must fall through to the earliest current owner, never the ex-owner.
+    assert.deepEqual(await runWithActor(BRIDGE_SYSTEM_ACTOR, () => store.getClinicPayer(otherClinicId)),
+      { userId: strangerId, source: 'creator' });
+    await asAdminSql(pool, `UPDATE clinic_member SET role = 'staff' WHERE clinic_id = $1 AND user_id = $2`, [otherClinicId, strangerId]);
+    assert.equal(await runWithActor(BRIDGE_SYSTEM_ACTOR, () => store.getClinicPayer(otherClinicId)), null,
+      'a downgraded creator with no other owner is not billable');
+    await asAdminSql(pool, `INSERT INTO clinic_member (clinic_id, user_id, role) VALUES ($1, $2, 'owner')`, [otherClinicId, ownerId]);
+    assert.deepEqual(await runWithActor(BRIDGE_SYSTEM_ACTOR, () => store.getClinicPayer(otherClinicId)),
+      { userId: ownerId, source: 'earliest_owner' });
   } finally {
     if (scenarioId) await asAdminSql(pool, 'DELETE FROM scenario WHERE id = $1', [scenarioId]).catch(() => {});
     for (const id of [clinicId, otherClinicId]) if (id) await asAdminSql(pool, 'DELETE FROM clinic WHERE id = $1', [id]).catch(() => {});

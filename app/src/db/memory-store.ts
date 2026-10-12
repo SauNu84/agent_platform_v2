@@ -9,7 +9,7 @@ import type { AnalysisRecord } from '@/domain/analysis';
 import type { CoachRecord, CompiledCoachRecord } from '@/domain/coach';
 import type { CourseRecord, CompiledCourseRecord } from '@/domain/course';
 import type {
-  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicMemberRecord, ClinicTelephonyPatch, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
+  ApiKeyRecord, AuditEvent, AuthSessionRecord, CheckoutRecord, ClinicNotificationRecord, ClinicOutcomeRecord, ClinicOutcomeSummary, ClinicRecord, ClinicMemberRecord, ClinicPayer, ClinicTelephonyPatch, NewClinic, CoachMemoryRecord, ConsentRecord, ConsentState, ContentEntityType,
   ContentSourceInput, ContentSourceRecord, CreatorAnalyticsRow, EntitlementRecord,
   KnowledgeBaseRecord, KnowledgeBaseDocRecord, NewKnowledgeBase, NewKnowledgeBaseDoc,
   NewAnalysis, NewCoachMemory, NewConsent, NewSession, NewUser, OwnerOpts, ScenarioFilter,
@@ -604,14 +604,16 @@ export class MemoryStore implements Store {
     return null;
   }
 
-  async getClinicOwnerUserId(clinicId: string): Promise<string | null> {
+  async getClinicPayer(clinicId: string): Promise<ClinicPayer | null> {
     const clinic = this.clinics.get(clinicId);
     if (!clinic) return null;
-    if (clinic.createdByUserId) return clinic.createdByUserId;
-    const owner = this.clinicMembers
+    const owners = this.clinicMembers
       .filter((m) => m.clinicId === clinicId && m.role === 'owner')
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-    return owner?.userId ?? null;
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.userId.localeCompare(b.userId));
+    if (clinic.createdByUserId && owners.some((m) => m.userId === clinic.createdByUserId)) {
+      return { userId: clinic.createdByUserId, source: 'creator' };
+    }
+    return owners[0] ? { userId: owners[0].userId, source: 'earliest_owner' } : null;
   }
 
   async updateClinicTelephony(clinicId: string, patch: ClinicTelephonyPatch): Promise<ClinicRecord> {

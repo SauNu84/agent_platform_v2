@@ -26,7 +26,7 @@
  *
  * Pure over the Store interface — unit-tests with MemoryStore, no network.
  */
-import type { Store, ClinicRecord } from '@/db/store';
+import type { Store, ClinicRecord, ClinicPayer } from '@/db/store';
 import { runWithActor, type ActorContext } from '@/auth/actor';
 import { resolveTierForUser, resolveTenantEngine, type TenantEngine, type VoiceTier } from '@/voice/engine-router';
 import { assertWithinCap, CapExceededError, type MeterState } from '@/services/meter';
@@ -44,7 +44,7 @@ export const BRIDGE_SYSTEM_ACTOR: ActorContext = {
 export type AdmissionReason =
   | 'no_number'      // the webhook did not tell us which number was dialed
   | 'no_tenant'      // no clinic is bound to that number (and no fallback)
-  | 'no_owner'       // the clinic has nobody to bill
+  | 'no_owner'       // the clinic has no current owner-role member to bill
   | 'cap_exceeded';  // the owner has spent this month's voice minutes
 
 export class CallAdmissionError extends Error {
@@ -68,6 +68,8 @@ export interface CallAdmission {
   actor: ActorContext;
   /** how the tenant was found — surfaced in logs so a fallback is never silent */
   resolvedBy: 'phone_number' | 'fallback_slug';
+  /** how the payer was found; 'earliest_owner' with a creator set ⇒ creator was skipped */
+  payerResolvedBy: ClinicPayer['source'];
 }
 
 /** E.164 as Twilio sends it: a leading + and 7–15 digits. */
@@ -110,10 +112,13 @@ export async function admitInboundCall(store: Store, opts: AdmitInboundCallOptio
       throw new CallAdmissionError('no_tenant', `no clinic is bound to ${to ?? '(no number)'}`);
     }
 
-    const ownerUserId = await store.getClinicOwnerUserId(clinic.id);
-    if (!ownerUserId) {
-      throw new CallAdmissionError('no_owner', `clinic ${clinic.slug} has no owner to bill`);
+    // Only a CURRENT owner-role member is ever charged (CTO condition): a creator
+    // who left or was downgraded falls through to the earliest owner, else refuse.
+    const payer = await store.getClinicPayer(clinic.id);
+    if (!payer) {
+      throw new CallAdmissionError('no_owner', `clinic ${clinic.slug} has no current owner to bill`);
     }
+    const ownerUserId = payer.userId;
 
     // Same pre-flight the web Join runs (Slice 2): refuse when the month is spent.
     let meter: MeterState;
@@ -135,6 +140,7 @@ export async function admitInboundCall(store: Store, opts: AdmitInboundCallOptio
       meter,
       actor: { userId: ownerUserId, isAdmin: false, clinicId: clinic.id },
       resolvedBy,
+      payerResolvedBy: payer.source,
     };
   });
 }
