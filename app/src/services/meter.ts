@@ -24,6 +24,7 @@
 import type { EntitlementRecord, Store } from '@/db/store';
 import { voicePolicyForPlan, type VoicePolicy } from '@/voice/voice-policy';
 import type { OnExhausted } from '@/voice/voice-policy';
+import { getPlan } from '@/services/billing/plans';
 
 /** Default free plan applied when a user has no explicit entitlement row. */
 export const DEFAULT_FREE_MINUTES = Number(process.env.CREDIT_FREE_MINUTES ?? 30);
@@ -49,6 +50,8 @@ export interface MeterState {
   resetsAt: string;
   /** what happens on exhaustion (graceful text-chat fallback). */
   onExhausted: OnExhausted;
+  /** cents per extra minute the plan can top up at (SAU-554); null = no top-up. */
+  topUpCentsPerMinute: number | null;
   /** the resolved per-tier policy (config-driven entitlement). */
   policy: VoicePolicy;
 }
@@ -95,14 +98,15 @@ export async function getMeterState(store: Store, userId: string): Promise<Meter
     store.getEntitlement(userId),
   ]);
   const entitlement = ent ?? defaultEntitlement(userId);
-  const policy = voicePolicyForPlan(effectivePlanTier(entitlement));
+  const planTier = effectivePlanTier(entitlement);
+  const policy = voicePolicyForPlan(planTier);
 
   const usedMinutes = round4(usedMinutesRaw);
   // Monthly budget = the user's entitlement allotment (free + any paid minutes).
   // The free allotment defaults to the config-driven tier budget
   // (policy.voiceMinutesPerMonth = CREDIT_FREE_MINUTES), but the per-user
   // entitlement row remains the source of truth so a user can be granted more.
-  // Paid-tier economics (overage, etc.) are unchanged here (SAU-220/SAU-222).
+  // Top-up pricing is surfaced on the state (topUpCentsPerMinute, from plans.ts).
   const capMinutes = round4(entitlement.freeMinutes + entitlement.paidMinutes);
 
   const remainingMinutes = round4(Math.max(0, capMinutes - usedMinutes));
@@ -124,6 +128,7 @@ export async function getMeterState(store: Store, userId: string): Promise<Meter
     overCap: capMinutes !== Infinity && usedMinutes >= capMinutes,
     resetsAt,
     onExhausted: policy.onExhausted,
+    topUpCentsPerMinute: getPlan(planTier)?.topUpCentsPerMinute ?? null,
     policy,
   };
 }
