@@ -12,20 +12,25 @@
  *      We only READ it here; the Settings UI/schema is unchanged.
  *
  * Phase-0/1 spike note: the auth token is read but only used for inbound webhook
- * SIGNATURE verification — we never place outbound calls (TCPA scope = later phase).
+ * SIGNATURE verification (+ the bridge-stream HMAC, SAU-541) — we never place outbound calls (TCPA scope = later phase).
  */
+
+import { signBridgeStream, type BridgeStreamParams } from './bridge-auth';
 
 export interface TwilioConfig {
   /** Twilio Account SID (ACxxxx). Presence of SID+token selects the live adapter. */
   accountSid: string;
-  /** Twilio Auth Token — used ONLY to verify inbound `X-Twilio-Signature`. */
+  /**
+   * Twilio Auth Token — used ONLY to verify inbound `X-Twilio-Signature` and to
+   * sign/verify the bridge stream parameters that carry that trust forward (SAU-541).
+   */
   authToken: string;
   /** The provisioned test number (E.164), for logs/routing. Optional. */
   phoneNumber?: string;
   /**
    * Public wss:// base of our media-stream bridge server, e.g.
    * `wss://abc123.ngrok.io` (a tunnel in dev) or the deployed host. The webhook
-   * appends the bridge path + `?slug=`. Without it we cannot bridge ⇒ fail soft.
+   * appends the bridge path; per-call values ride as signed `<Parameter>`s. Without it we cannot bridge ⇒ fail soft.
    */
   bridgePublicUrl?: string;
   /**
@@ -79,14 +84,45 @@ export function bridgeServerPort(): number {
 }
 
 /**
- * Build the public wss:// URL the vendor should stream to for a given scenario.
- * `dialedNumber` (the webhook's `To`, SAU-525) rides along as `?to=` so the bridge
- * can resolve the tenant — Twilio's Media Streams `start` frame does not carry it.
- * Returns null when no public bridge URL is configured (⇒ webhook fails soft).
+ * Public wss:// URL of the bridge socket — bare, no query string: Twilio's
+ * `<Stream url>` does not support query strings (custom values ride in
+ * `<Parameter>`s, see {@link bridgeStreamFor}). Null when no public URL is
+ * configured (⇒ webhook fails soft).
  */
-export function bridgeWsUrlFor(cfg: TwilioConfig, scenarioSlug: string, dialedNumber?: string | null): string | null {
+export function bridgeWsUrlFor(cfg: TwilioConfig): string | null {
   if (!cfg.bridgePublicUrl) return null;
-  const base = cfg.bridgePublicUrl.replace(/\/+$/, '');
-  const to = dialedNumber ? `&to=${encodeURIComponent(dialedNumber)}` : '';
-  return `${base}${BRIDGE_WS_PATH}?slug=${encodeURIComponent(scenarioSlug)}${to}`;
+  return `${cfg.bridgePublicUrl.replace(/\/+$/, '')}${BRIDGE_WS_PATH}`;
+}
+
+/** What a webhook hands Twilio's `<Connect><Stream>`: where to stream + what to echo back. */
+export interface BridgeStream {
+  url: string;
+  /** Emitted as `<Parameter>`s; Twilio returns them in the `start` frame. */
+  parameters: BridgeStreamParams;
+}
+
+/**
+ * The stream for one inbound call (SAU-541): scenario `slug` + dialed number
+ * (`to`, the tenant key from SAU-525 — the `start` frame does not otherwise carry
+ * it), signed with the auth token the webhook was just verified with, valid for
+ * {@link BRIDGE_STREAM_TTL_SEC}. Null when no public bridge URL is configured.
+ */
+export function bridgeStreamFor(
+  cfg: TwilioConfig,
+  scenarioSlug: string,
+  dialedNumber?: string | null,
+  nowMs = Date.now(),
+): BridgeStream | null {
+  const url = bridgeWsUrlFor(cfg);
+  if (!url) return null;
+  return { url, parameters: signBridgeStream(cfg.authToken, scenarioSlug, dialedNumber, nowMs) };
+}
+
+/**
+ * Must the bridge verify a signed stream? Yes unless `TWILIO_VERIFY_SIGNATURES=false`
+ * (the same documented dev escape hatch as the webhook). Fails CLOSED: with no auth
+ * token configured there is nothing to verify against, so the bridge refuses.
+ */
+export function bridgeAuthRequired(): boolean {
+  return bool(process.env.TWILIO_VERIFY_SIGNATURES, true);
 }

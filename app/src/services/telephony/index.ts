@@ -8,6 +8,7 @@ import type { TelephonyAdapter } from './telephony-adapter';
 import { MockTelephonyAdapter } from './mock-telephony';
 import { TwilioTelephonyAdapter } from './twilio-telephony';
 import { resolveTwilioConfig, type PhoneIntegrationSetting, type TwilioConfig } from './twilio-config';
+export { signBridgeStream, verifyBridgeStream, authorizeBridgeStream, type BridgeAdmitAuth, BRIDGE_STREAM_TTL_SEC, type BridgeStreamParams, type BridgeAuthResult } from './bridge-auth';
 
 export type {
   TelephonyAdapter,
@@ -19,6 +20,9 @@ export { TwilioTelephonyAdapter } from './twilio-telephony';
 export {
   resolveTwilioConfig,
   bridgeWsUrlFor,
+  bridgeStreamFor,
+  bridgeAuthRequired,
+  type BridgeStream,
   bridgeServerPort,
   BRIDGE_WS_PATH,
   type TwilioConfig,

@@ -4,8 +4,11 @@
  * A STANDALONE WebSocket server — deliberately NOT inside Next.js, which can't host
  * a long-lived raw WS upgrade cleanly under `next dev`. Twilio's `<Connect><Stream>`
  * (emitted by the inbound-call webhook) opens a socket here; for each call we:
- *   1. resolve the scenario from the `?slug=` query,
- *   2. ADMIT the call (SAU-525): the dialed `?to=` number → clinic tenant → owner
+ *   0. AUTHENTICATE the stream (SAU-541): wait for Twilio's `start` frame and verify
+ *      the `slug|to|exp` HMAC the webhook signed into `<Parameter>`s. Unsigned,
+ *      tampered or expired ⇒ `1008` before any tenant lookup or OpenAI session.
+ *   1. resolve the scenario from the signed `slug`,
+ *   2. ADMIT the call (SAU-525): the signed dialed `to` number → clinic tenant → owner
  *      (the billing principal), pre-flight cap check, per-tenant engine — or
  *      refuse it with a typed reason. No tenant ⇒ no call. Never an unmetered call.
  *   3. compile its prompt + the TENANT's clinic rules + fold in any Knowledge Base,
@@ -35,23 +38,26 @@ import { admitInboundCall, CallAdmissionError } from '@/services/telephony/call-
 import { startCallBridge } from '@/services/telephony/bridge';
 import { OpenAiRealtimeTransport } from '@/services/telephony/openai-realtime-transport';
 import { TwilioMediaTransport } from '@/services/telephony/twilio-media-transport';
-import { BRIDGE_WS_PATH, bridgeServerPort } from '@/services/telephony/twilio-config';
+import { BRIDGE_WS_PATH, bridgeServerPort, bridgeAuthRequired, resolveTwilioConfig } from '@/services/telephony/twilio-config';
+import { authorizeBridgeStream } from '@/services/telephony/bridge-auth';
+
+/** Twilio sends `start` right after connecting; a socket that stays silent is not Twilio. */
+const START_FRAME_TIMEOUT_MS = 10_000;
 
 function log(event: string, meta?: Record<string, unknown>) {
   // One-line structured logs; stdout is the bridge's observability surface.
   console.log(JSON.stringify({ t: new Date().toISOString(), src: 'telephony-bridge', event, ...meta }));
 }
 
-function queryParam(url: string | undefined, key: string): string | null {
-  try {
-    const u = new URL(url ?? '', 'http://localhost');
-    return u.searchParams.get(key);
-  } catch {
-    return null;
-  }
+/** The `start` frame's custom parameters, or null on timeout / early hang-up. */
+function awaitStart(media: TwilioMediaTransport, ws: import('ws').WebSocket): Promise<Record<string, string> | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), START_FRAME_TIMEOUT_MS);
+    const done = (v: Record<string, string> | null) => { clearTimeout(timer); resolve(v); };
+    ws.once('close', () => done(null));
+    media.started.then(done);
+  });
 }
-const slugFromUrl = (url: string | undefined) => queryParam(url, 'slug');
-const toFromUrl = (url: string | undefined) => queryParam(url, 'to');
 
 function safeParse(json: string): unknown {
   try {
@@ -65,9 +71,30 @@ export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
   const wss = new WebSocketServer({ port, path: BRIDGE_WS_PATH });
 
   wss.on('connection', async (ws, req) => {
-    const slug = slugFromUrl(req.url) ?? slugFromUrl(req.headers['sec-websocket-protocol'] as string);
-    const to = toFromUrl(req.url);
-    log('connection', { slug, to, remote: req.socket.remoteAddress });
+    log('connection', { remote: req.socket.remoteAddress });
+    // Attach the transport FIRST so the `start` frame (streamSid + params) isn't lost.
+    const media = new TwilioMediaTransport(ws);
+
+    // ── Stream auth (SAU-541): nothing below runs for a socket the webhook didn't sign.
+    const customParameters = await awaitStart(media, ws);
+    if (!customParameters) {
+      log('no_start_frame', { action: 'closing' });
+      ws.close(1008, 'no start frame');
+      return;
+    }
+    const auth = authorizeBridgeStream({
+      customParameters,
+      requestUrl: req.url,
+      authToken: resolveTwilioConfig()?.authToken,
+      required: bridgeAuthRequired(),
+    });
+    if (!auth.ok) {
+      log('stream_refused', { reason: auth.reason, callSid: media.callSid });
+      ws.close(1008, `stream refused: ${auth.reason}`);
+      return;
+    }
+    const { slug, to } = auth;
+    log('stream_authorized', { slug, to, verified: auth.verified, callSid: media.callSid });
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -131,7 +158,6 @@ export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
           scenarioId: scenario.id, userId: ownerUserId, clinicId: clinic.id, vendor: engine.vendor,
         });
 
-        const media = new TwilioMediaTransport(ws);
         const realtime = new OpenAiRealtimeTransport({
           apiKey,
           model: engine.model,

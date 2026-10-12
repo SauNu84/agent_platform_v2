@@ -27,7 +27,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[1/3] starting bridge on :$BRIDGE_PORT (real npm run bridge)…"
-TELEPHONY_BRIDGE_PORT="$BRIDGE_PORT" npm run --silent bridge >"$BRIDGE_LOG" 2>&1 &
+# SAU-541: with a TWILIO_AUTH_TOKEN the caller signs its stream and the bridge
+# verifies it (the real path); without one, open the local-only dev hatch.
+verify="${TWILIO_VERIFY_SIGNATURES:-true}"
+grep -qs '^TWILIO_AUTH_TOKEN=' .env.local || [ -n "${TWILIO_AUTH_TOKEN:-}" ] || verify=false
+TWILIO_VERIFY_SIGNATURES="$verify" TELEPHONY_BRIDGE_PORT="$BRIDGE_PORT" npm run --silent bridge >"$BRIDGE_LOG" 2>&1 &
 bridge_pid=$!
 
 # Wait for the bridge to report listening.
@@ -54,6 +58,6 @@ grep '"event":"tool_call"' "$BRIDGE_LOG" || echo "(none)"
 echo "--- bridge finalize (outcome + event id) ---"
 grep '"event":"finalized"' "$BRIDGE_LOG" || echo "(none — call may not have finalized)"
 echo "--- bridge errors (if any) ---"
-grep -E '"event":"(bridge_error|realtime_error|tool_error|no_openai_key|scenario_not_found)"' "$BRIDGE_LOG" || echo "(none)"
+grep -E '"event":"(bridge_error|realtime_error|tool_error|no_openai_key|scenario_not_found|stream_refused|no_start_frame|call_refused)"' "$BRIDGE_LOG" || echo "(none)"
 echo "==============================="
 echo "Full logs: $BRIDGE_LOG  ·  $CALLER_LOG"

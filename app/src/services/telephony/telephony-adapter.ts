@@ -32,6 +32,11 @@ export interface InboundCallContext {
    * instructions.
    */
   bridgeWsUrl: string;
+  /**
+   * Per-call values the vendor must hand back to the bridge (SAU-541: the signed
+   * `slug|to|exp|sig`). Twilio emits them as `<Stream><Parameter>`s.
+   */
+  bridgeParameters?: Record<string, string>;
 }
 
 /**

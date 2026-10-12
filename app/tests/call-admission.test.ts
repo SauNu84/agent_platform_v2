@@ -12,7 +12,7 @@ import {
 } from '@/services/telephony/call-admission';
 import { resolveTenantEngine } from '@/voice/engine-router';
 import { setClinicTelephony, TenancyError, getClinicSwitcherView } from '@/services/clinic-tenancy';
-import { bridgeWsUrlFor, type TwilioConfig } from '@/services/telephony/twilio-config';
+import { bridgeStreamFor, type TwilioConfig } from '@/services/telephony/twilio-config';
 import { startCallBridge, type MediaTransport, type RealtimeTransport, type CallSummary } from '@/services/telephony/bridge';
 import { createScenarioFromMarkdown } from '@/services/scenarios';
 
@@ -249,11 +249,15 @@ test('setClinicTelephony: members set the engine grade; only a platform admin bi
   assert.deepEqual(view.clinics.map((c) => [c.phoneNumber, c.voiceEngine]), [[NUMBER, 'standard']]);
 });
 
-test('bridgeWsUrlFor carries the dialed number to the bridge as ?to=', () => {
+test('bridgeStreamFor carries the dialed number to the bridge as a signed <Parameter>, not ?to=', () => {
   const cfg: TwilioConfig = { accountSid: 'AC', authToken: 't', bridgePublicUrl: 'wss://t.test/', verifySignatures: true };
-  assert.equal(bridgeWsUrlFor(cfg, 'clinic-intake-booking', '+14155550123'), 'wss://t.test/telephony/bridge?slug=clinic-intake-booking&to=%2B14155550123');
-  assert.equal(bridgeWsUrlFor(cfg, 'clinic-intake-booking'), 'wss://t.test/telephony/bridge?slug=clinic-intake-booking', 'back-compat without a number');
-  assert.equal(bridgeWsUrlFor({ ...cfg, bridgePublicUrl: undefined }, 'x', '+1'), null);
+  const s = bridgeStreamFor(cfg, 'clinic-intake-booking', '+14155550123');
+  // Twilio's <Stream url> does not support query strings (SAU-541) — the URL is bare.
+  assert.equal(s?.url, 'wss://t.test/telephony/bridge');
+  assert.equal(s?.parameters.slug, 'clinic-intake-booking');
+  assert.equal(s?.parameters.to, '+14155550123');
+  assert.equal(bridgeStreamFor(cfg, 'clinic-intake-booking')?.parameters.to, '', 'back-compat without a number');
+  assert.equal(bridgeStreamFor({ ...cfg, bridgePublicUrl: undefined }, 'x', '+1'), null);
 });
 
 // ── bridge: actor binding + metering hook ────────────────────────────────────

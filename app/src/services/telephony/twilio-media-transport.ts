@@ -21,9 +21,16 @@ export class TwilioMediaTransport implements MediaTransport {
   /** Surfaced so the bridge server can resolve the scenario from custom params. */
   callSid: string | null = null;
   customParameters: Record<string, string> = {};
+  /**
+   * Resolves with the `start` frame's custom parameters — where Twilio delivers the
+   * signed stream values (SAU-541). The bridge must not admit a call before this.
+   */
+  readonly started: Promise<Record<string, string>>;
+  private resolveStarted: (p: Record<string, string>) => void = () => {};
 
   constructor(ws: WebSocket) {
     this.ws = ws;
+    this.started = new Promise((resolve) => { this.resolveStarted = resolve; });
     ws.on('message', (data) => this.onFrame(data));
     ws.on('close', () => this.cbClose());
     ws.on('error', () => this.cbClose());
@@ -41,6 +48,7 @@ export class TwilioMediaTransport implements MediaTransport {
         for (const payload of this.pending) this.ws.send(outboundMediaFrame(this.streamSid, payload));
         this.pending = [];
       }
+      this.resolveStarted(this.customParameters);
     } else if (frame.event === 'media') {
       if (frame.media?.payload) this.cbAudio(frame.media.payload);
     } else if (frame.event === 'stop') {

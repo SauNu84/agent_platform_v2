@@ -14,7 +14,7 @@
  * with an owner to bill. The SMS seam additionally needs `TWILIO_SMS_FROM` (the
  * claimed number) so it is reported but not gating.
  */
-import { getTelephonyAdapter, getTwilioConfig, bridgeWsUrlFor } from '@/services/telephony';
+import { getTelephonyAdapter, getTwilioConfig, bridgeWsUrlFor, bridgeAuthRequired } from '@/services/telephony';
 import { admitInboundCall, CallAdmissionError } from '@/services/telephony/call-admission';
 import { getStore } from '@/db';
 import { resolveHandoffAdapter } from '@/services/handoff';
@@ -87,8 +87,10 @@ async function main() {
   line('bridge public URL', cfg?.bridgePublicUrl || '(none)');
   line('verify signatures', cfg?.verifySignatures);
   if (cfg) {
-    line('sample bridge wss', bridgeWsUrlFor(cfg, 'clinic-intake-booking', cfg.phoneNumber) || '(no public URL → fail-soft)');
+    line('bridge wss', bridgeWsUrlFor(cfg) || '(no public URL → fail-soft)');
   }
+  // SAU-541: the bridge only admits streams the webhook signed (slug|to|exp, auth token).
+  line('bridge stream auth', bridgeAuthRequired() ? (cfg ? 'required (signed <Parameter>s)' : 'required — NO auth token ⇒ every call refused') : 'DISABLED (TWILIO_VERIFY_SIGNATURES=false)');
   console.log('');
 
   const admitted = await admissionCheck(cfg?.phoneNumber ?? process.env.TWILIO_PHONE_NUMBER);

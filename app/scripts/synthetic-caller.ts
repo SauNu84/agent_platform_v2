@@ -25,11 +25,20 @@
  *   npx tsx --env-file-if-exists=.env.local scripts/synthetic-caller.ts
  */
 import { WebSocket } from 'ws';
+import { signBridgeStream } from '../src/services/telephony/bridge-auth';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
 const BRIDGE_URL = process.env.SYNTH_BRIDGE_URL || 'ws://localhost:5050/telephony/bridge';
 const SLUG = process.env.SYNTH_SLUG || 'clinic-intake-booking';
+// Dialed number → tenant (SAU-525). Unset ⇒ the bridge's TELEPHONY_FALLBACK_CLINIC.
+const SYNTH_TO = process.env.SYNTH_TO || null;
+// SAU-541: the bridge only admits streams signed like the webhook signs them. With
+// the auth token at hand we sign exactly as Twilio would echo it; without one, the
+// bridge must run with TWILIO_VERIFY_SIGNATURES=false and reads ?slug= instead.
+const STREAM_PARAMS: Record<string, string> = process.env.TWILIO_AUTH_TOKEN
+  ? { ...signBridgeStream(process.env.TWILIO_AUTH_TOKEN, SLUG, SYNTH_TO) }
+  : { slug: SLUG, ...(SYNTH_TO ? { to: SYNTH_TO } : {}) };
 const REALTIME_WS = process.env.OPENAI_REALTIME_WS_URL || 'wss://api.openai.com/v1/realtime';
 
 // Conversation pacing knobs (ms).
@@ -198,7 +207,7 @@ bridge.on('open', () => {
         streamSid: STREAM_SID,
         callSid: CALL_SID,
         mediaFormat: { encoding: 'audio/x-mulaw', sampleRate: 8000, channels: 1 },
-        customParameters: { synthetic: 'sau293' },
+        customParameters: { synthetic: 'sau293', ...STREAM_PARAMS },
       },
     }),
   );

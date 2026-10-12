@@ -138,10 +138,9 @@ test('factory selects the live Twilio adapter when creds present; mock forces mo
       const cfg = getTwilioConfig();
       assert.ok(cfg);
       assert.equal(cfg!.accountSid, 'ACxxxx');
-      assert.equal(bridgeWsUrlFor({ ...cfg!, bridgePublicUrl: 'wss://t.test/' }, 'clinic-intake-booking'),
-        'wss://t.test/telephony/bridge?slug=clinic-intake-booking');
+      assert.equal(bridgeWsUrlFor({ ...cfg!, bridgePublicUrl: 'wss://t.test/' }), 'wss://t.test/telephony/bridge');
       // No public bridge URL ⇒ the live adapter still fails soft (can't stream).
-      assert.equal(bridgeWsUrlFor(cfg!, 'clinic-intake-booking'), null);
+      assert.equal(bridgeWsUrlFor(cfg!), null);
     },
   );
   await withEnv({ TWILIO_ACCOUNT_SID: 'ACxxxx', TWILIO_AUTH_TOKEN: 'tok', TELEPHONY_PROVIDER: 'mock' }, () => {
@@ -153,7 +152,7 @@ test('factory selects the live Twilio adapter when creds present; mock forces mo
 test('Twilio adapter: Connect/Stream with a bridge url, fail-soft without', () => {
   const cfg = { accountSid: 'AC', authToken: 'tok', verifySignatures: false };
   const adapter = new TwilioTelephonyAdapter(cfg);
-  const connected = adapter.answerInbound({ scenarioSlug: 's', bridgeWsUrl: 'wss://t.test/telephony/bridge?slug=s' });
+  const connected = adapter.answerInbound({ scenarioSlug: 's', bridgeWsUrl: 'wss://t.test/telephony/bridge' });
   assert.equal(connected.failSoft, false);
   assert.match(connected.body, /<Connect><Stream/);
   const noBridge = adapter.answerInbound({ scenarioSlug: 's', bridgeWsUrl: '' });

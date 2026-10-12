@@ -33,7 +33,7 @@ export class TwilioTelephonyAdapter implements TelephonyAdapter {
     if (!ctx.bridgeWsUrl) {
       return { contentType: 'text/xml', body: failSoftTwiml(NO_BRIDGE_MESSAGE), failSoft: true };
     }
-    return { contentType: 'text/xml', body: connectStreamTwiml(ctx.bridgeWsUrl), failSoft: false };
+    return { contentType: 'text/xml', body: connectStreamTwiml(ctx.bridgeWsUrl, ctx.bridgeParameters), failSoft: false };
   }
 
   verifyWebhook(req: { url: string; signature: string | null; params: Record<string, string> }): boolean {

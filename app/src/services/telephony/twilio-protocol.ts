@@ -25,13 +25,20 @@ function escapeXml(s: string): string {
  * TwiML that connects the inbound call to our bidirectional Media Stream. Twilio
  * opens a WebSocket to `streamUrl` and streams the caller's μ-law audio; we stream
  * the agent's audio back over the same socket.
+ *
+ * `parameters` become `<Parameter>`s, which Twilio echoes in the `start` frame's
+ * `customParameters` — the ONLY way to pass per-call values: `<Stream url>` does
+ * not support query strings.
  */
-export function connectStreamTwiml(streamUrl: string): string {
+export function connectStreamTwiml(streamUrl: string, parameters?: Record<string, string>): string {
+  const params = Object.entries(parameters ?? {})
+    .map(([name, value]) => `<Parameter name="${escapeXml(name)}" value="${escapeXml(value)}" />`)
+    .join('');
   return (
     '<?xml version="1.0" encoding="UTF-8"?>' +
     '<Response>' +
     '<Connect>' +
-    `<Stream url="${escapeXml(streamUrl)}" />` +
+    (params ? `<Stream url="${escapeXml(streamUrl)}">${params}</Stream>` : `<Stream url="${escapeXml(streamUrl)}" />`) +
     '</Connect>' +
     '</Response>'
   );

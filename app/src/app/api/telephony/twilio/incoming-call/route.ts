@@ -15,7 +15,7 @@
  * `TELEPHONY_DEFAULT_SCENARIO` (defaults to the clinic agent).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getTelephonyAdapter, getTwilioConfig, bridgeWsUrlFor } from '@/services/telephony';
+import { getTelephonyAdapter, getTwilioConfig, bridgeStreamFor } from '@/services/telephony';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,15 +54,18 @@ export async function POST(req: NextRequest) {
   }
 
   const cfg = getTwilioConfig();
-  // The dialed number is how the bridge finds the tenant + payer (SAU-525).
-  const bridgeWsUrl = cfg ? bridgeWsUrlFor(cfg, slug, params.To) ?? '' : '';
+  // The dialed number is how the bridge finds the tenant + payer (SAU-525). It is
+  // signed here — this request just passed Twilio's signature check — so the bridge
+  // can refuse sockets that didn't come from a call we answered (SAU-541).
+  const stream = cfg ? bridgeStreamFor(cfg, slug, params.To) : null;
 
   const answer = adapter.answerInbound({
     callId: params.CallSid,
     from: params.From,
     to: params.To,
     scenarioSlug: slug,
-    bridgeWsUrl,
+    bridgeWsUrl: stream?.url ?? '',
+    bridgeParameters: stream ? { ...stream.parameters } : undefined,
   });
   return xml(answer.body);
 }
