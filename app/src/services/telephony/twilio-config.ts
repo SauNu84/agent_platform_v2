@@ -114,6 +114,12 @@ export interface BridgeStream {
  * must not mint a signature — otherwise an unauthenticated POST to the webhook
  * becomes a signing oracle for the bridge. Such streams go out UNSIGNED and the
  * bridge refuses them unless it, too, runs in dev mode.
+ *
+ * INVARIANT (CISO, SAU-541): signing keys off `cfg.verifySignatures`, not off the
+ * verification RESULT. That is sound only while `verifyWebhook` and this function
+ * read the same `resolveTwilioConfig()`. If either gains its own config source
+ * (e.g. a per-tenant `integration:phone` setting passed to one but not the other),
+ * make `verifyWebhook` return the verified bit and drive signing from that.
  */
 export function bridgeStreamFor(
   cfg: TwilioConfig,
