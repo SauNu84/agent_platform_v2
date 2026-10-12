@@ -42,7 +42,7 @@ export interface Plan {
 
 /**
  * Measured all-in voice COGS on the paid engine (gpt-realtime-2.1-mini), cents per
- * conversation-minute: $0.035 vendor (SAU-519) × 1.15 platform overhead (SAU-198
+ * conversation-minute: $0.035 vendor (measured 2026-09-21, SAU-519) × 1.15 platform overhead (SAU-198
  * convention). Used by the margin guard test; update it when the engine or the
  * measured cost changes, and the floor is re-checked against every plan.
  *
