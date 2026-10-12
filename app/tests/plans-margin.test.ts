@@ -16,7 +16,9 @@ import {
   getPlan,
   amountForCycle,
   topUpCents,
+  topUpBlocks,
   GROSS_MARGIN_FLOOR,
+  TOP_UP_BLOCK_MINUTES,
   TOP_UP_CENTS_PER_MINUTE,
   VOICE_COGS_CENTS_PER_MINUTE,
 } from '@/services/billing/plans';
@@ -48,6 +50,29 @@ test('GM floor: top-up rate holds the floor per extra minute', () => {
   assert.ok(grossMargin(TOP_UP_CENTS_PER_MINUTE, 1) >= GROSS_MARGIN_FLOOR);
 });
 
+/**
+ * Processor scenarios from the CFO's SAU-554 table (SAU-556: processor undecided).
+ * VOICE_COGS_CENTS_PER_MINUTE excludes processing, and a fixed per-transaction fee
+ * is regressive in bundle size — so the smallest purchasable top-up block must hold
+ * the floor with processing included. (Plan subscriptions are NOT checked against
+ * these: 87/211 land 64–67% with processing; the re-solve is pending on SAU-534.)
+ */
+const PROCESSORS = [
+  { name: 'Stripe US', pct: 0.029, fixedCents: 30 },
+  { name: 'Stripe intl', pct: 0.049, fixedCents: 30 },
+  { name: 'Dodo MoR', pct: 0.055, fixedCents: 40 },
+  { name: 'Paddle MoR', pct: 0.05, fixedCents: 50 },
+] as const;
+
+for (const proc of PROCESSORS) {
+  test(`GM floor: minimum top-up block holds the floor incl. processing (${proc.name})`, () => {
+    const price = topUpCents(getPlan('premium')!, 1)!;
+    const fee = price * proc.pct + proc.fixedCents;
+    const gm = (price - fee - TOP_UP_BLOCK_MINUTES * VOICE_COGS_CENTS_PER_MINUTE) / price;
+    assert.ok(gm >= GROSS_MARGIN_FLOOR, `${proc.name}: ${(gm * 100).toFixed(2)}% on a ${price}¢ block`);
+  });
+}
+
 test('SAU-554 ratified allowances: 87 / 211 included, caps 117 / 241', () => {
   assert.equal(getPlan('standard')!.includedMinutes, 87);
   assert.equal(getPlan('premium')!.includedMinutes, 211);
@@ -57,7 +82,7 @@ test('SAU-554 ratified allowances: 87 / 211 included, caps 117 / 241', () => {
   assert.equal(FREE_MINUTES + getPlan('premium')!.includedMinutes, 241);
 });
 
-test('top-up: only plans that advertise it carry the rate; charge rounds up to whole minutes', () => {
+test('top-up: only plans that advertise it carry the rate; charge rounds up to whole blocks', () => {
   const premium = getPlan('premium')!;
   assert.equal(TOP_UP_CENTS_PER_MINUTE, 25);
   assert.equal(premium.topUpCentsPerMinute, TOP_UP_CENTS_PER_MINUTE);
@@ -66,8 +91,11 @@ test('top-up: only plans that advertise it carry the rate; charge rounds up to w
     assert.ok(!p.features.some((f) => /top up/i.test(f)), `${p.id} advertises top-up without a rate`);
     assert.equal(topUpCents(p, 10), null);
   }
-  assert.equal(topUpCents(premium, 10), 250);
-  assert.equal(topUpCents(premium, 9.2), 250);
+  assert.equal(TOP_UP_BLOCK_MINUTES, 30);
+  assert.equal(topUpCents(premium, 1), 750);
+  assert.equal(topUpCents(premium, 30), 750);
+  assert.equal(topUpCents(premium, 30.2), 1500);
+  assert.equal(topUpBlocks(61), 3);
   assert.equal(topUpCents(premium, -3), 0);
 });
 

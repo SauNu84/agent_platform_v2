@@ -43,6 +43,11 @@ export interface Plan {
  * conversation-minute: $0.035 vendor (SAU-519) × 1.15 platform overhead (SAU-198
  * convention). Used by the margin guard test; update it when the engine or the
  * measured cost changes, and the floor is re-checked against every plan.
+ *
+ * all-in = vendor × 1.15 (SAU-198 / COST-ENVELOPE §2: transport, egress, observability).
+ * NOTE: this loading EXCLUDES payment processing (2.9–5.5% of revenue + a fixed
+ * per-transaction fee). Solving a retail price against this constant alone
+ * understates COGS — see SAU-534 / SAU-556 (processor not yet chosen).
  */
 export const VOICE_COGS_CENTS_PER_MINUTE = 3.5 * 1.15;
 
@@ -55,10 +60,28 @@ export const GROSS_MARGIN_FLOOR = 0.7;
  */
 export const TOP_UP_CENTS_PER_MINUTE = 25;
 
+/**
+ * Top-ups are sold in fixed blocks, not open per-minute purchases: the processor's
+ * fixed per-transaction fee is regressive in bundle size, so a small top-up breaches
+ * the floor on its own (10 min ≈ 59% GM on Paddle). 30 min ($7.50) holds ≥70% under
+ * every processor scenario on SAU-556 (CFO, SAU-554 comment).
+ */
+export const TOP_UP_BLOCK_MINUTES = 30;
+
+/**
+ * The allowance line is derived from `includedMinutes`, never hand-written: the
+ * displayed minutes are a published price, so a re-price must be one edit.
+ */
+const withMinutesFeature = (plan: Plan): Plan => ({
+  ...plan,
+  features: [`${plan.includedMinutes} practice minutes / month`, ...plan.features],
+});
+
 /** ~17% annual discount, rounded to the nearest cent. */
 const annual = (monthlyCents: number): number => Math.round(monthlyCents * 0.83);
 
-export const PLANS: Plan[] = [
+/** Plan specs; `features` here omits the allowance line, which is derived. */
+const PLAN_SPECS: Plan[] = [
   {
     id: 'free',
     name: 'Free',
@@ -66,7 +89,7 @@ export const PLANS: Plan[] = [
     priceMonthlyCents: 0,
     priceAnnualMonthlyCents: 0,
     includedMinutes: 30,
-    features: ['30 practice minutes / month', 'Public & featured scenarios', 'Community support'],
+    features: ['Public & featured scenarios', 'Community support'],
     paid: false,
     topUpCentsPerMinute: null,
   },
@@ -78,7 +101,6 @@ export const PLANS: Plan[] = [
     priceAnnualMonthlyCents: annual(1900),
     includedMinutes: 87,
     features: [
-      '87 practice minutes / month',
       'Every scenario category',
       'Session analytics & scoring',
       'Priority support',
@@ -94,8 +116,7 @@ export const PLANS: Plan[] = [
     priceAnnualMonthlyCents: annual(3900),
     includedMinutes: 211,
     features: [
-      '211 practice minutes / month',
-      'Top up extra minutes anytime',
+      `Top up extra minutes anytime (${TOP_UP_BLOCK_MINUTES}-min blocks)`,
       'Advanced analytics & history export',
       'Coaches with persistent memory',
       'Priority support',
@@ -104,6 +125,8 @@ export const PLANS: Plan[] = [
     topUpCentsPerMinute: TOP_UP_CENTS_PER_MINUTE,
   },
 ];
+
+export const PLANS: Plan[] = PLAN_SPECS.map(withMinutesFeature);
 
 export function getPlan(id: string): Plan | undefined {
   return PLANS.find((p) => p.id === id);
@@ -114,10 +137,18 @@ export function amountForCycle(plan: Plan, cycle: BillingCycle): number {
   return cycle === 'annual' ? plan.priceAnnualMonthlyCents * 12 : plan.priceMonthlyCents;
 }
 
-/** Charge in cents for `minutes` of top-up on a plan; null if the plan has no top-up. */
+/** Whole top-up blocks needed to cover `minutes` of extra usage. */
+export function topUpBlocks(minutes: number): number {
+  return Math.ceil(Math.max(0, minutes) / TOP_UP_BLOCK_MINUTES);
+}
+
+/**
+ * Charge in cents to cover `minutes` of top-up on a plan, rounded up to whole
+ * TOP_UP_BLOCK_MINUTES blocks; null if the plan has no top-up.
+ */
 export function topUpCents(plan: Plan, minutes: number): number | null {
   if (plan.topUpCentsPerMinute == null) return null;
-  return Math.ceil(Math.max(0, minutes)) * plan.topUpCentsPerMinute;
+  return topUpBlocks(minutes) * TOP_UP_BLOCK_MINUTES * plan.topUpCentsPerMinute;
 }
 
 /** Display helper — cents → "$19" / "$0" (whole dollars; placeholder pricing). */

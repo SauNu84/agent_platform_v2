@@ -11,7 +11,7 @@
  * feature changes, update the relevant article body here so the docs stay true
  * (per the board's "keep the docs updated" ask on SAU-251).
  */
-import { TOP_UP_CENTS_PER_MINUTE, formatPrice } from '@/services/billing/plans';
+import { TOP_UP_BLOCK_MINUTES, TOP_UP_CENTS_PER_MINUTE, formatPrice } from '@/services/billing/plans';
 
 export interface DocArticle {
   /** URL slug under /docs/[slug]; unique across the whole registry. */
@@ -484,8 +484,9 @@ month). Upgrade from the **Subscription plan** card on the Billing page.
 - Your **wallet balance** (minutes left this cycle) is always visible in the left
   rail and on the Billing page.
 - If you run out mid-cycle, starting a new voice session is blocked until you
-  upgrade or your allowance renews. **Premium** can top up extra minutes at
-  **${formatPrice(TOP_UP_CENTS_PER_MINUTE)} / minute**.
+  upgrade or your allowance renews. **Premium** can top up extra minutes in
+  **${TOP_UP_BLOCK_MINUTES}-minute blocks** at **${formatPrice(TOP_UP_CENTS_PER_MINUTE)} / minute**
+  (${formatPrice(TOP_UP_BLOCK_MINUTES * TOP_UP_CENTS_PER_MINUTE)} per block).
 
 ## Tracking usage
 
