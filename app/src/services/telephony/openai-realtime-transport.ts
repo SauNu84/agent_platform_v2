@@ -10,7 +10,7 @@
  */
 import { WebSocket } from 'ws';
 import type { ToolDefinition, TurnUsage } from '@/voice/realtime-interface';
-import { parseUsage, sumUsage } from '@/voice/openai-usage';
+import { UsageLedger, sumUsage } from '@/voice/openai-usage';
 import type { RealtimeTransport } from './bridge';
 import { openAiRealtimeWsUrl, openAiRealtimeHeaders, openAiSessionUpdate } from './openai-realtime-session';
 
@@ -33,7 +33,7 @@ export class OpenAiRealtimeTransport implements RealtimeTransport {
   private cbError: (m: string) => void = () => {};
   private cbClose: () => void = () => {};
   /** one entry per response.done that carried usage — same accounting as the web adapter */
-  private perTurnUsage: TurnUsage[] = [];
+  private ledger = new UsageLedger();
 
   constructor(opts: OpenAiRealtimeOptions) {
     this.opts = opts;
@@ -99,8 +99,7 @@ export class OpenAiRealtimeTransport implements RealtimeTransport {
       case 'response.done': {
         // Measured tokens (SAU-525): the bridge meters phone minutes + tokens into
         // `voice_usage` exactly like a web session, so the CFO's cap sees both.
-        const u = parseUsage((evt.response as { usage?: unknown } | undefined)?.usage);
-        if (u) this.perTurnUsage.push(u);
+        this.ledger.add(evt.response as { id?: unknown; usage?: unknown } | undefined);
         break;
       }
       case 'error':
@@ -113,7 +112,7 @@ export class OpenAiRealtimeTransport implements RealtimeTransport {
 
   /** Session token totals so far (null until the first response.done with usage). */
   usage(): TurnUsage | null {
-    return this.perTurnUsage.length ? sumUsage(this.perTurnUsage).totals : null;
+    return this.ledger.perTurn.length ? sumUsage(this.ledger.perTurn).totals : null;
   }
 
   appendAudio(muLawBase64: string): void {

@@ -64,3 +64,30 @@ export function sumUsage(perTurn: TurnUsage[]): SessionUsage {
   }
   return { perTurn, totals };
 }
+
+/**
+ * Per-session usage ledger keyed on `response.id` (SAU-555).
+ *
+ * The Realtime server re-delivers `response.done` for a response it already
+ * finished — measured at ~40 of ~100 deliveries per 50-turn session on
+ * 2026-10-12, and present in every archived bench since June. Summing per
+ * delivery over-counted measured tokens (and so `voice_usage` COGS) ~1.6–1.75×.
+ * A delivery without an id is still counted: under-dedupe beats dropping usage.
+ */
+export class UsageLedger {
+  readonly perTurn: TurnUsage[] = [];
+  duplicates = 0;
+  private seen = new Set<string>();
+
+  /** Record one `response.done.response`; returns false when it was a re-delivery. */
+  add(response: { id?: unknown; usage?: unknown } | undefined): boolean {
+    const id = typeof response?.id === 'string' ? response.id : undefined;
+    if (id) {
+      if (this.seen.has(id)) { this.duplicates++; return false; }
+      this.seen.add(id);
+    }
+    const u = parseUsage(response?.usage);
+    if (u) this.perTurn.push(u);
+    return true;
+  }
+}

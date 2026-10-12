@@ -11,9 +11,9 @@
 import WebSocket from 'ws';
 import {
   RealtimeVoiceProvider, RealtimeSession, CompiledScenario, SessionOptions,
-  SessionEvent, Transcript, ToolDefinition, ToolHandler, TurnUsage,
+  SessionEvent, Transcript, ToolDefinition, ToolHandler,
 } from '../realtime-interface';
-import { parseUsage, sumUsage } from '../openai-usage';
+import { UsageLedger, sumUsage } from '../openai-usage';
 
 const DEFAULT_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
 const OPENAI_VOICE = process.env.OPENAI_VOICE || 'alloy'; // scenario voice 'Aoede' is a Gemini voice
@@ -65,7 +65,7 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
     const handlers = new Map<string, ToolHandler>();
     const tTurns: Transcript['turns'] = [];
     const tCalls: Transcript['toolCalls'] = [];
-    const perTurnUsage: TurnUsage[] = []; // one per response.done that carried usage
+    const ledger = new UsageLedger(); // one entry per response.id that carried usage (SAU-555)
     let serverModel: string | undefined;  // server-reported model (rate attribution)
     const startedAt = Date.now();
     const sessionId = 'openai-' + scenario.id;
@@ -175,8 +175,7 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
           if (ev.response?.status === 'cancelled') bridge.emit({ type: 'agent.interrupted', at: Date.now() });
           // Capture MEASURED token usage (SAU-197) — sum per-turn across the session.
           // Present on every terminal response (completed AND cancelled barge-ins).
-          const usage = parseUsage(ev.response?.usage);
-          if (usage) perTurnUsage.push(usage);
+          ledger.add(ev.response);
           break;
         }
         case 'error':
@@ -207,7 +206,7 @@ export class OpenAIRealtimeProvider implements RealtimeVoiceProvider {
         bridge.end();
         return {
           sessionId, turns: tTurns, toolCalls: tCalls, startedAt, endedAt: Date.now(),
-          usage: perTurnUsage.length ? sumUsage(perTurnUsage) : undefined,
+          usage: ledger.perTurn.length ? sumUsage(ledger.perTurn) : undefined,
           model: serverModel ?? model,
         };
       },
