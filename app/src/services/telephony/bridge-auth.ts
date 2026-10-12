@@ -75,7 +75,29 @@ export function verifyBridgeStream(
 
 export type BridgeAdmitAuth =
   | { ok: true; slug: string | null; to: string | null; verified: boolean }
-  | { ok: false; reason: 'not_configured' | 'missing_signature' | 'expired' | 'bad_signature' };
+  | { ok: false; reason: 'not_configured' | 'missing_signature' | 'expired' | 'bad_signature' | 'replayed' };
+
+/**
+ * Single-use guard for signed streams (CISO N1): a param set that opened one call
+ * can't open a second within its TTL. In-memory per bridge process — enough while
+ * the bridge is one process; entries are dropped once their `exp` has passed.
+ */
+export class SeenStreamSignatures {
+  private seen = new Map<string, number>();
+
+  /** True the first time `sig` is presented; false on any replay. */
+  claim(sig: string, expSec: number, nowMs = Date.now()): boolean {
+    const nowSec = Math.floor(nowMs / 1000);
+    for (const [s, exp] of this.seen) if (exp < nowSec) this.seen.delete(s);
+    if (this.seen.has(sig)) return false;
+    this.seen.set(sig, expSec);
+    return true;
+  }
+
+  get size(): number {
+    return this.seen.size;
+  }
+}
 
 /**
  * The bridge's gate, run on the `start` frame BEFORE tenant admission.
@@ -91,11 +113,17 @@ export function authorizeBridgeStream(opts: {
   authToken: string | null | undefined;
   required: boolean;
   nowMs?: number;
+  /** Claimed only AFTER the MAC verifies, so forged sigs can't fill it. */
+  seen?: SeenStreamSignatures;
 }): BridgeAdmitAuth {
   if (opts.required) {
     if (!opts.authToken) return { ok: false, reason: 'not_configured' };
     const v = verifyBridgeStream(opts.authToken, opts.customParameters, opts.nowMs);
-    return v.ok ? { ok: true, slug: v.slug, to: v.to, verified: true } : v;
+    if (!v.ok) return v;
+    if (opts.seen && !opts.seen.claim(opts.customParameters.sig, Number(opts.customParameters.exp), opts.nowMs)) {
+      return { ok: false, reason: 'replayed' };
+    }
+    return { ok: true, slug: v.slug, to: v.to, verified: true };
   }
   let query: URLSearchParams | null = null;
   try {

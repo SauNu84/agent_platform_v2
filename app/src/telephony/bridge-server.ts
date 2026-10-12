@@ -39,7 +39,7 @@ import { startCallBridge } from '@/services/telephony/bridge';
 import { OpenAiRealtimeTransport } from '@/services/telephony/openai-realtime-transport';
 import { TwilioMediaTransport } from '@/services/telephony/twilio-media-transport';
 import { BRIDGE_WS_PATH, bridgeServerPort, bridgeAuthRequired, resolveTwilioConfig } from '@/services/telephony/twilio-config';
-import { authorizeBridgeStream } from '@/services/telephony/bridge-auth';
+import { authorizeBridgeStream, SeenStreamSignatures } from '@/services/telephony/bridge-auth';
 
 /** Twilio sends `start` right after connecting; a socket that stays silent is not Twilio. */
 const START_FRAME_TIMEOUT_MS = 10_000;
@@ -69,6 +69,8 @@ function safeParse(json: string): unknown {
 
 export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
   const wss = new WebSocketServer({ port, path: BRIDGE_WS_PATH });
+  // Each signed stream opens at most one call (CISO N1).
+  const seen = new SeenStreamSignatures();
 
   wss.on('connection', async (ws, req) => {
     log('connection', { remote: req.socket.remoteAddress });
@@ -87,6 +89,7 @@ export function startBridgeServer(port = bridgeServerPort()): WebSocketServer {
       requestUrl: req.url,
       authToken: resolveTwilioConfig()?.authToken,
       required: bridgeAuthRequired(),
+      seen,
     });
     if (!auth.ok) {
       log('stream_refused', { reason: auth.reason, callSid: media.callSid });

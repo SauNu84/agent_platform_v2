@@ -55,8 +55,9 @@ export async function POST(req: NextRequest) {
 
   const cfg = getTwilioConfig();
   // The dialed number is how the bridge finds the tenant + payer (SAU-525). It is
-  // signed here — this request just passed Twilio's signature check — so the bridge
-  // can refuse sockets that didn't come from a call we answered (SAU-541).
+  // signed here ONLY when this request passed Twilio's signature check, so the bridge
+  // can refuse sockets that didn't come from a call we answered (SAU-541). Never log
+  // the TwiML below: it carries the signature.
   const stream = cfg ? bridgeStreamFor(cfg, slug, params.To) : null;
 
   const answer = adapter.answerInbound({

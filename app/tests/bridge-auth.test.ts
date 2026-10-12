@@ -163,9 +163,111 @@ test('bridge server: unsigned / tampered streams get 1008 before any tenant or O
     const signed = await dialBridge(port, p);
     assert.equal(signed.code, 1011);
     assert.match(signed.reason, /no OPENAI_API_KEY/);
+    // …and the same signed params can't open a second call (N1).
+    assert.deepEqual(await dialBridge(port, p), { code: 1008, reason: 'stream refused: replayed' });
   } finally {
     await new Promise((r) => wss.close(r));
     console.log = origLog;
     process.env = saved;
   }
+});
+
+// ── CISO R1: no signing oracle — trust is carried forward only if it existed ──────
+import { createHmac } from 'node:crypto';
+import { NextRequest } from 'next/server';
+import { SeenStreamSignatures } from '@/services/telephony/bridge-auth';
+import { POST as incomingCall } from '@/app/api/telephony/twilio/incoming-call/route';
+
+const paramsIn = (twiml: string) => {
+  const out: Record<string, string> = {};
+  for (const m of twiml.matchAll(/<Parameter name="([^"]+)" value="([^"]*)" \/>/g)) out[m[1]] = m[2];
+  return out;
+};
+
+test('R1: verifySignatures=false ⇒ webhook mints NO sig; the verifying bridge refuses the stream', () => {
+  const cfg: TwilioConfig = { accountSid: 'AC', authToken: TOKEN, bridgePublicUrl: 'wss://t.test', verifySignatures: false };
+  const stream = bridgeStreamFor(cfg, 'clinic-intake-booking', '+14155550123', NOW)!;
+  assert.equal(stream.signed, false);
+  assert.deepEqual(stream.parameters, { slug: 'clinic-intake-booking', to: '+14155550123' });
+  const twiml = new TwilioTelephonyAdapter(cfg).answerInbound({
+    scenarioSlug: 'clinic-intake-booking', bridgeWsUrl: stream.url, bridgeParameters: { ...stream.parameters },
+  }).body;
+  const echoed = paramsIn(twiml);
+  assert.equal(echoed.sig, undefined, 'no sig <Parameter>');
+  assert.equal(echoed.exp, undefined, 'no exp <Parameter>');
+  assert.deepEqual(
+    authorizeBridgeStream({ customParameters: echoed, authToken: TOKEN, required: true, nowMs: NOW }),
+    { ok: false, reason: 'missing_signature' },
+  );
+  // Dev bridge (also unverified) still routes it — localhost synthetic work keeps working.
+  assert.deepEqual(
+    authorizeBridgeStream({ customParameters: echoed, authToken: TOKEN, required: false, nowMs: NOW }),
+    { ok: true, slug: 'clinic-intake-booking', to: '+14155550123', verified: false },
+  );
+  assert.equal(bridgeStreamFor({ ...cfg, verifySignatures: true }, 's', '+1', NOW)!.signed, true);
+});
+
+async function withTwilioEnv<T>(env: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const saved = { ...process.env };
+  Object.assign(process.env, { TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: TOKEN, TELEPHONY_PUBLIC_URL: 'wss://bridge.test' });
+  delete process.env.TELEPHONY_PROVIDER;
+  for (const [k, v] of Object.entries(env)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  try { return await fn(); } finally { process.env = saved; }
+}
+
+const WEBHOOK = 'https://web.test/api/telephony/twilio/incoming-call';
+function twilioPost(form: Record<string, string>, signature?: string) {
+  return new NextRequest(WEBHOOK, {
+    method: 'POST',
+    body: new URLSearchParams(form).toString(),
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...(signature ? { 'x-twilio-signature': signature } : {}) },
+  });
+}
+const FORM = { CallSid: 'CA1', From: '+15550000000', To: '+14155550123' };
+function twilioSign(url: string, form: Record<string, string>) {
+  let data = url;
+  for (const k of Object.keys(form).sort()) data += k + form[k];
+  return createHmac('sha1', TOKEN).update(data).digest('base64');
+}
+
+test('R1 route-level: an unauthenticated POST gets no signature (oracle closed), verified or not', async () => {
+  // Verification ON: unsigned POST is rejected outright.
+  await withTwilioEnv({ TWILIO_VERIFY_SIGNATURES: 'true', TELEPHONY_PUBLIC_WEBHOOK_URL: WEBHOOK }, async () => {
+    assert.equal((await incomingCall(twilioPost(FORM))).status, 403);
+  });
+  // Verification OFF (the pre-R2 live-call-up setup): answered, but nothing minted.
+  await withTwilioEnv({ TWILIO_VERIFY_SIGNATURES: 'false', TELEPHONY_PUBLIC_WEBHOOK_URL: WEBHOOK }, async () => {
+    const res = await incomingCall(twilioPost(FORM));
+    assert.equal(res.status, 200);
+    const echoed = paramsIn(await res.text());
+    assert.equal(echoed.to, '+14155550123');
+    assert.equal(echoed.sig, undefined);
+    assert.equal(authorizeBridgeStream({ customParameters: echoed, authToken: TOKEN, required: true }).ok, false);
+  });
+});
+
+test('R1/R2 route-level: a genuinely Twilio-signed POST at TELEPHONY_PUBLIC_WEBHOOK_URL gets a stream the bridge admits', async () => {
+  await withTwilioEnv({ TWILIO_VERIFY_SIGNATURES: 'true', TELEPHONY_PUBLIC_WEBHOOK_URL: WEBHOOK }, async () => {
+    const res = await incomingCall(twilioPost(FORM, twilioSign(WEBHOOK, FORM)));
+    assert.equal(res.status, 200);
+    const echoed = paramsIn(await res.text());
+    assert.deepEqual(
+      authorizeBridgeStream({ customParameters: echoed, authToken: TOKEN, required: true }),
+      { ok: true, slug: 'clinic-intake-booking', to: '+14155550123', verified: true },
+    );
+  });
+});
+
+test('N1: a signed stream opens one call; replay → replayed; forged sigs never enter the cache', () => {
+  const seen = new SeenStreamSignatures();
+  const p = asRecord(signBridgeStream(TOKEN, 's', '+1', NOW));
+  const gate = (cp: Record<string, string>, nowMs = NOW) => authorizeBridgeStream({ customParameters: cp, authToken: TOKEN, required: true, nowMs, seen });
+  assert.equal(gate(p).ok, true);
+  assert.deepEqual(gate(p, NOW + 1000), { ok: false, reason: 'replayed' });
+  assert.deepEqual(gate({ ...p, sig: 'x'.repeat(p.sig.length) }), { ok: false, reason: 'bad_signature' });
+  assert.equal(seen.size, 1, 'only the verified sig was recorded');
+  // Expired entries are pruned on the next claim.
+  const later = NOW + (BRIDGE_STREAM_TTL_SEC + 5) * 1000;
+  assert.equal(gate(asRecord(signBridgeStream(TOKEN, 's', '+1', later)), later).ok, true);
+  assert.equal(seen.size, 1);
 });

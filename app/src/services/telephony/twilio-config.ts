@@ -98,7 +98,9 @@ export function bridgeWsUrlFor(cfg: TwilioConfig): string | null {
 export interface BridgeStream {
   url: string;
   /** Emitted as `<Parameter>`s; Twilio returns them in the `start` frame. */
-  parameters: BridgeStreamParams;
+  parameters: BridgeStreamParams | { slug: string; to: string };
+  /** True iff `parameters` carries an `exp`+`sig` the bridge will accept. */
+  signed: boolean;
 }
 
 /**
@@ -106,6 +108,12 @@ export interface BridgeStream {
  * (`to`, the tenant key from SAU-525 — the `start` frame does not otherwise carry
  * it), signed with the auth token the webhook was just verified with, valid for
  * {@link BRIDGE_STREAM_TTL_SEC}. Null when no public bridge URL is configured.
+ *
+ * Trust is only carried forward if it existed first (CISO R1): with
+ * `verifySignatures=false` the webhook did NOT authenticate the request, so it
+ * must not mint a signature — otherwise an unauthenticated POST to the webhook
+ * becomes a signing oracle for the bridge. Such streams go out UNSIGNED and the
+ * bridge refuses them unless it, too, runs in dev mode.
  */
 export function bridgeStreamFor(
   cfg: TwilioConfig,
@@ -115,7 +123,10 @@ export function bridgeStreamFor(
 ): BridgeStream | null {
   const url = bridgeWsUrlFor(cfg);
   if (!url) return null;
-  return { url, parameters: signBridgeStream(cfg.authToken, scenarioSlug, dialedNumber, nowMs) };
+  if (!cfg.verifySignatures) {
+    return { url, parameters: { slug: scenarioSlug, to: dialedNumber ?? '' }, signed: false };
+  }
+  return { url, parameters: signBridgeStream(cfg.authToken, scenarioSlug, dialedNumber, nowMs), signed: true };
 }
 
 /**

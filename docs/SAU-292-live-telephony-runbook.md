@@ -35,8 +35,8 @@ cd app
 ```
 
 The script: starts the bridge (`:5050`) → cloudflared tunnel → exports `TELEPHONY_PUBLIC_URL`
-(`wss://…trycloudflare.com`) → `next dev` (`:3000`, `TWILIO_VERIFY_SIGNATURES=false` tunnel
-escape hatch) → second tunnel → **PATCHes the number's Voice "A CALL COMES IN" webhook** to
+(`wss://…trycloudflare.com`) → second tunnel for web → `next dev` (`:3000`, signature
+verification **on**, `TELEPHONY_PUBLIC_WEBHOOK_URL` = that tunnel's webhook URL) → **PATCHes the number's Voice "A CALL COMES IN" webhook** to
 `https://…/api/telephony/twilio/incoming-call`. Ctrl-C tears down and restores the prior webhook.
 
 A human (internal/synthetic tester) then **dials +14783754797**, presses a key past the
@@ -61,6 +61,9 @@ Two smaller caveats (not blockers):
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` — present ⇒ live adapter (done).
 - `TWILIO_PHONE_NUMBER=+14783754797`, `TWILIO_SMS_FROM=+14783754797` — set (done).
 - `TELEPHONY_PUBLIC_URL=wss://…` — the bridge tunnel; set by `live-call-up.sh` at runtime.
-- `TWILIO_VERIFY_SIGNATURES=false` — tunnel-only escape hatch (the public URL Twilio signs
-  differs behind a tunnel); the script sets this. Leave **true** on a stable host.
+- `TWILIO_VERIFY_SIGNATURES` — keep **true** on anything reachable through a tunnel or
+  host (SAU-541, CISO R2). With it off, the webhook answers unauthenticated POSTs and
+  mints NO bridge signature; the bridge admits unsigned sockets. `false` is for
+  localhost-only work such as the synthetic caller. Behind a tunnel, set
+  `TELEPHONY_PUBLIC_WEBHOOK_URL` to the exact URL Twilio calls. `live-call-up.sh` does this.
 - `TWILIO_TRANSFER_TO` — clinic staff line for warm transfer (optional → voicemail).

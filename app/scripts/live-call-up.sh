@@ -8,10 +8,17 @@
 #
 #   1. bridge server          → :$BRIDGE_PORT  (media-stream WS, μ-law both ways)
 #   2. cloudflared quick tunnel → bridge  ⇒ TELEPHONY_PUBLIC_URL (wss://…)
-#   3. next dev               → :$WEB_PORT  (serves the incoming-call webhook)
-#   4. cloudflared quick tunnel → web     ⇒ public https webhook URL
+#   3. cloudflared quick tunnel → web     ⇒ public https webhook URL (opened BEFORE
+#      next dev listens, so the webhook knows the exact URL Twilio will sign)
+#   4. next dev               → :$WEB_PORT  (serves the incoming-call webhook,
+#      signature verification ON, TELEPHONY_PUBLIC_WEBHOOK_URL = that URL)
 #   5. PATCH the trial number's Voice "A CALL COMES IN" webhook → that URL
 #   6. print "Dial +1… now"
+#
+# SAU-541 (CISO R2): NOTHING reachable through a tunnel runs with
+# TWILIO_VERIFY_SIGNATURES=false. With verification off the webhook would answer any
+# unauthenticated POST, and the bridge would admit any socket — a free call against
+# a clinic's minute cap. Both processes are pinned to `true` below, overriding .env.local.
 #
 # Creds are read from app/.env.local (gitignored). The auth token is NEVER echoed.
 # Tunnels are ephemeral (trycloudflare.com) — fine for a live test, not for prod.
@@ -58,8 +65,8 @@ wait_for_tunnel() { # $1=logfile → echoes https URL
   return 1
 }
 
-echo "[1/5] bridge :$BRIDGE_PORT"
-TELEPHONY_BRIDGE_PORT="$BRIDGE_PORT" npm run --silent bridge >/tmp/sau292-bridge.log 2>&1 & pids+=($!)
+echo "[1/5] bridge :$BRIDGE_PORT (stream signatures verified)"
+TWILIO_VERIFY_SIGNATURES=true TELEPHONY_BRIDGE_PORT="$BRIDGE_PORT" npm run --silent bridge >/tmp/sau292-bridge.log 2>&1 & pids+=($!)
 sleep 3
 
 echo "[2/5] tunnel → bridge"
@@ -68,15 +75,16 @@ BRIDGE_HTTPS=$(wait_for_tunnel /tmp/sau292-cf-bridge.log) || { echo "FATAL: brid
 export TELEPHONY_PUBLIC_URL="wss://${BRIDGE_HTTPS#https://}"
 echo "      TELEPHONY_PUBLIC_URL=$TELEPHONY_PUBLIC_URL"
 
-echo "[3/5] next dev :$WEB_PORT (verify-signatures off — tunnel escape hatch)"
-TELEPHONY_PUBLIC_URL="$TELEPHONY_PUBLIC_URL" TWILIO_VERIFY_SIGNATURES=false \
-  npm run --silent dev -- -p "$WEB_PORT" >/tmp/sau292-web.log 2>&1 & pids+=($!)
-sleep 6
-
-echo "[4/5] tunnel → web"
+echo "[3/5] tunnel → web (opened first: the webhook must know the URL Twilio signs)"
 cloudflared tunnel --url "http://localhost:$WEB_PORT" --no-autoupdate >/tmp/sau292-cf-web.log 2>&1 & pids+=($!)
 WEB_HTTPS=$(wait_for_tunnel /tmp/sau292-cf-web.log) || { echo "FATAL: web tunnel failed"; exit 1; }
 WEBHOOK_URL="${WEB_HTTPS}${WEBHOOK_PATH}"
+
+echo "[4/5] next dev :$WEB_PORT (X-Twilio-Signature verified against $WEBHOOK_URL)"
+TELEPHONY_PUBLIC_URL="$TELEPHONY_PUBLIC_URL" TELEPHONY_PUBLIC_WEBHOOK_URL="$WEBHOOK_URL" \
+  TWILIO_VERIFY_SIGNATURES=true \
+  npm run --silent dev -- -p "$WEB_PORT" >/tmp/sau292-web.log 2>&1 & pids+=($!)
+sleep 6
 
 echo "[5/5] point number Voice webhook → $WEBHOOK_URL"
 curl -s -u "$SID:$TWILIO_AUTH_TOKEN" -X POST \

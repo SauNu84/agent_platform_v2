@@ -52,6 +52,21 @@ call itself runs as `{owner, clinic}`. No RLS policy was added or widened, and
   for CISO review. That review is not a merge gate, but it is required before any tunnel opens
   (SAU-533).
 
+### 4. Bridge stream auth: the Twilio auth token is the HMAC key (SAU-541, CISO-approved 2026-10-12)
+The webhook signs `v1\nslug\nto\nexp` (HMAC-SHA256, 120s TTL) into `<Stream><Parameter>`s.
+The bridge verifies that before admission, and each signature is single-use. A signature is minted
+**only if the webhook request itself passed `X-Twilio-Signature` verification**. With
+`TWILIO_VERIFY_SIGNATURES=false`, the webhook emits unsigned params, so it is never a signing
+oracle. Nothing reachable through a tunnel or host runs with verification off.
+
+- **Why the token is acceptable:** there is no new secret and no wider exposure, because the bridge and
+  web share env. It is domain-separated from Twilio's own HMAC-SHA1 signature.
+- **Trigger:** **when the bridge is deployed as a separate host or container from web, give it a dedicated
+  `BRIDGE_STREAM_SECRET`** (or an HKDF subkey provisioned to the bridge only). An internet-facing
+  bridge must not hold the Twilio account master credential.
+- **Trigger:** **when the bridge runs as more than one process, move the single-use signature
+  set** (`SeenStreamSignatures`, in-memory) **to a shared store.**
+
 ## Consequences
 - The clinic path runs mini (grade `standard`) without touching `VOICE_ENGINE_PAID`. Web users
   are unaffected.
