@@ -7,7 +7,7 @@
  * browser to the payment provider's hosted page.
  */
 import { useState } from 'react';
-import { type Plan, type PlanId, type BillingCycle, formatPrice } from '@/services/billing/plans';
+import { type Plan, type PlanId, type BillingCycle, ANNUAL_DISCOUNT, formatPrice } from '@/services/billing/plans';
 
 export default function BillingClient({
   plans,
@@ -91,7 +91,7 @@ export default function BillingClient({
                 className={cycle === 'annual' ? 'on' : ''}
                 onClick={() => setCycle('annual')}
               >
-                Annual <span className="billing-save">save 17%</span>
+                Annual <span className="billing-save">save {Math.round(ANNUAL_DISCOUNT * 100)}%</span>
               </button>
             </div>
 

@@ -7,15 +7,17 @@
  * monthly cap is `30 free + includedMinutes`.
  *
  * Pricing source: the A* price sheet ratified on SAU-534 (CEO ratification +
- * CPO paid-engine ruling = gpt-realtime-2.1-mini), solved on the COGS measured
- * in the SAU-519 same-day bench. Allowances are solved so every paid plan holds
- * the SAU-198 70% gross-margin floor at the ANNUAL rate — the binding case, since
- * annual is ~17% cheaper and reaches checkout via `amountForCycle()`. That floor
- * is enforced by tests/plans-margin.test.ts: re-pricing or changing an allowance
- * without re-solving it fails the build, not just this comment.
+ * CPO paid-engine ruling = gpt-realtime-2.1-mini), re-cut by the CRO on SAU-534 to
+ * 73/182 at a 10% annual discount once payment processing was counted as COGS.
+ * Allowances are solved so every paid plan holds the SAU-198 70% gross-margin floor
+ * at full cap, on either cycle, under every candidate processor (SAU-556) — the
+ * binding case is Standard annual on Dodo. That floor is enforced by
+ * tests/plans-margin.test.ts: re-pricing or changing an allowance without
+ * re-solving it fails the build, not just this comment.
  *
- * Annual pricing is ~17% off the monthly run-rate (the "save 17%" toggle), expressed
- * as a per-month-equivalent so both cycles render in the same column.
+ * Annual pricing is ANNUAL_DISCOUNT off the monthly run-rate (the "save N%" toggle
+ * reads the same constant), expressed as a per-month-equivalent so both cycles
+ * render in the same column.
  */
 export type PlanId = 'free' | 'standard' | 'premium';
 export type BillingCycle = 'monthly' | 'annual';
@@ -26,7 +28,7 @@ export interface Plan {
   tagline: string;
   /** Monthly price in cents (the headline rate). 0 = free. */
   priceMonthlyCents: number;
-  /** Per-month-equivalent price in cents when billed annually (~17% off). */
+  /** Per-month-equivalent price in cents when billed annually (ANNUAL_DISCOUNT off). */
   priceAnnualMonthlyCents: number;
   /** Voice-minute allowance this plan grants. */
   includedMinutes: number;
@@ -77,8 +79,11 @@ const withMinutesFeature = (plan: Plan): Plan => ({
   features: [`${plan.includedMinutes} practice minutes / month`, ...plan.features],
 });
 
-/** ~17% annual discount, rounded to the nearest cent. */
-const annual = (monthlyCents: number): number => Math.round(monthlyCents * 0.83);
+/** Annual-billing discount off the monthly rate (SAU-534: 10%). The toggle copy reads this. */
+export const ANNUAL_DISCOUNT = 0.1;
+
+/** Per-month-equivalent annual price, rounded to the nearest cent. */
+const annual = (monthlyCents: number): number => Math.round(monthlyCents * (1 - ANNUAL_DISCOUNT));
 
 /** Plan specs; `features` here omits the allowance line, which is derived. */
 const PLAN_SPECS: Plan[] = [
@@ -99,7 +104,7 @@ const PLAN_SPECS: Plan[] = [
     tagline: 'For regular practitioners who want more reps.',
     priceMonthlyCents: 1900,
     priceAnnualMonthlyCents: annual(1900),
-    includedMinutes: 87,
+    includedMinutes: 73,
     features: [
       'Every scenario category',
       'Session analytics & scoring',
@@ -114,7 +119,7 @@ const PLAN_SPECS: Plan[] = [
     tagline: 'Unlimited-feeling practice for power users and teams.',
     priceMonthlyCents: 3900,
     priceAnnualMonthlyCents: annual(3900),
-    includedMinutes: 211,
+    includedMinutes: 182,
     features: [
       `Top up extra minutes anytime (${TOP_UP_BLOCK_MINUTES}-min blocks)`,
       'Advanced analytics & history export',

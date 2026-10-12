@@ -7,7 +7,7 @@ import { getMeterState, DEFAULT_FREE_MINUTES } from '@/services/meter';
 
 const ORIGIN = 'http://localhost:3000';
 
-test('plan catalog: free + two paid tiers, annual is ~17% cheaper than monthly', () => {
+test('plan catalog: free + two paid tiers, annual is cheaper than monthly', () => {
   assert.deepEqual(PLANS.map((p) => p.id), ['free', 'standard', 'premium']);
   const standard = getPlan('standard')!;
   assert.equal(standard.paid, true);
