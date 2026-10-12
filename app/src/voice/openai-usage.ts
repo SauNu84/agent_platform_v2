@@ -82,12 +82,13 @@ export class UsageLedger {
   /** Record one `response.done.response`; returns false when it was a re-delivery. */
   add(response: { id?: unknown; usage?: unknown } | undefined): boolean {
     const id = typeof response?.id === 'string' ? response.id : undefined;
-    if (id) {
-      if (this.seen.has(id)) { this.duplicates++; return false; }
-      this.seen.add(id);
-    }
+    if (id && this.seen.has(id)) { this.duplicates++; return false; }
     const u = parseUsage(response?.usage);
-    if (u) this.perTurn.push(u);
+    if (!u) return true;
+    // Claim the id only once usage is in hand, so a usage-less first delivery
+    // cannot shadow a later delivery that does carry usage.
+    if (id) this.seen.add(id);
+    this.perTurn.push(u);
     return true;
   }
 }

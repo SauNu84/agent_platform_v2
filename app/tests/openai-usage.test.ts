@@ -35,3 +35,12 @@ test('SAU-555: id-less deliveries are still counted; usage-less ones add nothing
   assert.equal(l.perTurn.length, 2);
   assert.equal(l.duplicates, 0);
 });
+
+test('SAU-555: a usage-less delivery does not shadow a later one with usage', () => {
+  const l = new UsageLedger();
+  l.add({ id: 'resp_y' });
+  l.add({ id: 'resp_y', usage: usage(7, 9) });
+  l.add({ id: 'resp_y', usage: usage(7, 9) });
+  assert.equal(l.perTurn.length, 1);
+  assert.equal(l.duplicates, 1);
+});
